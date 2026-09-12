@@ -31,6 +31,21 @@ from typing import Any
 
 import pytest
 
+from fixtures import sharadar_provider as syn
+from kalpamani.data.contracts.vocabulary import AcquisitionMode
+from kalpamani.data.ingest.bronze import RetrievalMetadata
+from kalpamani.data.ingest.publication import (
+    acquisition_claim_key,
+    bronze_acquisition_key,
+    bronze_payload_key,
+)
+from kalpamani.data.ingest.sharadar.datasets import PROVIDER
+from kalpamani.data.objectstore import physical_key
+from kalpamani.data.qualify.sharadar.locator import locator_key_segments
+from kalpamani.data.qualify.sharadar.plan import EMPIRICAL_DATASETS
+from kalpamani.data.qualify.sharadar.publication import qualification_payload_key
+from kalpamani.data.qualify.sharadar.report import report_key_segments
+
 pytestmark = pytest.mark.unit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -285,7 +300,10 @@ def _rule_stage_gating(model: Model) -> list[str]:
                 continue
             if count == "local.production_count_b":
                 found.append(f"{kind}.{label}: only assignments may be gated on stage b")
-            gated = count == "local.production_count_a" or (
+            gated = count in (
+                "local.production_count_a",
+                "local.production_secrets_endpoint_count",
+            ) or (
                 "local.production_stage_a" in for_each
                 or "local.production_interface_endpoints" in for_each
             )
@@ -354,12 +372,15 @@ def _rule_bucket_policy(model: Model) -> list[str]:
             "/gold/*",
             "/manifests/*",
             "/bronze/sharadar/_indexes/*",
-            "/bronze/_acquisition_claims/*",
+            "/bronze/_production_claims/*",
         ):
             if not _mentions(scope, prefix):
                 found.append(f"{sid} must cover {prefix}")
         if any(r.endswith("/bronze/sharadar/*") for r in scope):
             found.append(f"{sid} must enumerate the production prefixes, not bronze/sharadar/*")
+        for foreign in QUALIFICATION_AND_GENERAL_BRONZE_PREFIXES:
+            if any(r.endswith(foreign) for r in scope):
+                found.append(f"{sid} reaches an earlier package's namespace: {foreign}")
     return found
 
 
@@ -421,10 +442,28 @@ def _rule_data_plane(model: Model) -> list[str]:
     if "secretsmanager:*" not in _denied(build):
         found.append("build must deny secretsmanager:*")
     if not any(
-        _mentions(s.resources, "/bronze/_acquisition_claims/*") and "s3:GetObject" in s.actions
+        _mentions(s.resources, "/bronze/_production_claims/*") and "s3:GetObject" in s.actions
         for s in _denies(build)
     ):
         found.append("build must deny claim reads")
+    for label, doc in (("acquisition", acq), ("build", build)):
+        foreign = [
+            s
+            for s in _denies(doc)
+            if "s3:*" in s.actions and _mentions(s.resources, "/bronze/_acquisition_claims/*")
+        ]
+        if not foreign or not all(
+            _mentions(foreign[0].resources, x)
+            for x in QUALIFICATION_AND_GENERAL_BRONZE_PREFIXES
+            if x != "/qualification/*" and "/qualification/*" not in x
+        ):
+            found.append(f"{label}: every earlier Bronze namespace must be denied for every action")
+        for s in _allows(doc):
+            for foreign_prefix in QUALIFICATION_AND_GENERAL_BRONZE_PREFIXES:
+                if any(r.endswith(foreign_prefix) for r in s.resources):
+                    found.append(
+                        f"{label} {s.sid}: grants an earlier package's namespace {foreign_prefix}"
+                    )
     if not any(
         _mentions(s.resources, "/bronze/*") and "s3:PutObject" in s.actions for s in _denies(build)
     ):
@@ -685,8 +724,25 @@ def _rule_bootstrap(model: Model) -> list[str]:
         ):
             found.append("key administration must be scoped to the apply principal pattern")
         if "Human" in s.sid or "Launcher" in s.sid:
-            if not _has_condition(s, "StringLike", "aws:PrincipalArn"):
-                found.append(f"key policy {s.sid} must match the generated-role prefix")
+            # Finding 5: ArnLike, the operator AWS documents for generated-role prefixes,
+            # over the region-aware path local -- never a hard-coded `*/` path segment.
+            if not _has_condition(s, "ArnLike", "aws:PrincipalArn"):
+                found.append(
+                    f"key policy {s.sid} must match the generated-role prefix with ArnLike"
+                )
+            prefixes = [
+                c.values
+                for c in s.conditions
+                if c.variable == "aws:PrincipalArn" and c.test == "ArnLike"
+            ]
+            if not prefixes or not any(
+                v.startswith("${local.production_sso_role_path}") and v.endswith("_*")
+                for v in prefixes[0]
+            ):
+                found.append(
+                    f"key policy {s.sid} must build its principal pattern from the "
+                    "region-aware local and end in the rotating suffix wildcard"
+                )
             if tuple(s.actions) != ("kms:GenerateDataKey",):
                 found.append(f"key policy {s.sid} must grant GenerateDataKey only")
         if "Task" in s.sid and tuple(s.actions) != ("kms:Decrypt",):
@@ -837,10 +893,12 @@ def _rule_network(model: Model, sources: dict[str, str]) -> list[str]:
     ):
         found.append("interface endpoints must be behind the toggle local")
     endpoints = QI.string_list(model.raw_locals.get("production_interface_endpoints", ""))
-    if set(endpoints) != {"ecr.api", "ecr.dkr", "logs", "ssm", "sts", "secretsmanager"}:
+    if set(endpoints) != {"ecr.api", "ecr.dkr", "logs", "ssm", "sts"}:
         found.append(
-            f"interface endpoints must be exactly the six ADR-0036 names, found {sorted(endpoints)}"
+            "shared interface endpoints must be exactly the five ADR-0036 names without "
+            f"Secrets Manager, found {sorted(endpoints)}"
         )
+    found.extend(_rule_secrets_endpoint(model))
     for var in ("production_endpoints_enabled",):
         block = model.variables.get(var)
         if block is None or block.attributes.get("default", "").strip() != "false":
@@ -851,6 +909,114 @@ def _rule_network(model: Model, sources: dict[str, str]) -> list[str]:
     ):
         found.append("production_provider_origin_cidrs must refuse 0.0.0.0/0")
     return found
+
+
+#: Every physical prefix an EARLIER package writes (traced from the merged key
+#: builders; see the synthetic-key evidence below). No production grant may name one,
+#: and no bucket-policy statement may govern one.
+QUALIFICATION_AND_GENERAL_BRONZE_PREFIXES = (
+    "/bronze/_acquisition_claims/*",
+    "/bronze/sharadar/tickers/objects/sha256/*",
+    "/bronze/sharadar/stocks/objects/sha256/*",
+    "/bronze/sharadar/actions/objects/sha256/*",
+    "/bronze/sharadar/tickers/acquisitions/*",
+    "/bronze/sharadar/stocks/acquisitions/*",
+    "/bronze/sharadar/actions/acquisitions/*",
+    "/bronze/sharadar/tickers/qualification/*",
+    "/bronze/sharadar/stocks/qualification/*",
+    "/bronze/sharadar/actions/qualification/*",
+    "/qualification/*",
+)
+
+
+def _rule_secrets_endpoint(model: Model) -> list[str]:
+    """Finding 2: Secrets Manager is reachable by the acquisition task alone."""
+    found: list[str] = []
+    endpoint = model.resources.get(("aws_vpc_endpoint", "production_secretsmanager"))
+    if endpoint is None:
+        return ["the Secrets Manager endpoint must be its own resource"]
+    if (
+        endpoint.attributes.get("security_group_ids", "").strip()
+        != "[aws_security_group.production_secrets_endpoint[0].id]"
+    ):
+        found.append("the Secrets Manager endpoint must sit on its own security group")
+    if "production_secrets_endpoint.json" not in endpoint.attributes.get("policy", ""):
+        found.append("the Secrets Manager endpoint must carry the custom endpoint policy")
+    ingress = [
+        model.resources[k]
+        for k in model.resources
+        if k[0] == "aws_vpc_security_group_ingress_rule"
+        and model.resources[k]
+        .attributes.get("security_group_id", "")
+        .startswith("aws_security_group.production_secrets_endpoint")
+    ]
+    if (
+        len(ingress) != 1
+        or ingress[0].attributes.get("referenced_security_group_id", "").strip()
+        != "aws_security_group.production_acquisition[0].id"
+    ):
+        found.append(
+            "the Secrets Manager endpoint group must admit the acquisition task group "
+            "and nothing else"
+        )
+    for rule_key, block in model.resources.items():
+        if rule_key[0] != "aws_vpc_security_group_egress_rule":
+            continue
+        if block.attributes.get("referenced_security_group_id", "").startswith(
+            "aws_security_group.production_secrets_endpoint"
+        ) and not block.attributes.get("security_group_id", "").startswith(
+            "aws_security_group.production_acquisition"
+        ):
+            found.append(
+                f"{rule_key[1]}: only the acquisition group may have egress "
+                "to the Secrets Manager endpoint"
+            )
+    if not any(
+        k[0] == "aws_vpc_security_group_egress_rule"
+        and model.resources[k]
+        .attributes.get("security_group_id", "")
+        .startswith("aws_security_group.production_acquisition")
+        and model.resources[k]
+        .attributes.get("referenced_security_group_id", "")
+        .startswith("aws_security_group.production_secrets_endpoint")
+        for k in model.resources
+    ):
+        found.append(
+            "the acquisition group must have an egress rule to the Secrets Manager endpoint"
+        )
+    policy = model.documents.get("production_secrets_endpoint", ())
+    if len(policy) != 1:
+        found.append("the Secrets Manager endpoint policy must have exactly one statement")
+    else:
+        st = policy[0]
+        if st.effect != "Allow" or tuple(st.actions) != ("secretsmanager:GetSecretValue",):
+            found.append("the endpoint policy must allow exactly secretsmanager:GetSecretValue")
+        if st.principals != (
+            ("AWS", ()),
+        ) or "aws_iam_role.production_acquire_task[0].arn" not in _principal_raw(
+            model, "production_secrets_endpoint"
+        ):
+            found.append(
+                "the endpoint policy must name the acquisition task role as its only principal"
+            )
+        if "var.production_acquisition_secret_arn" not in st.raw_resources or st.resources:
+            found.append("the endpoint policy must name exactly the production secret variable")
+        if st.principals and st.principals[0][0] == "*":
+            found.append("the endpoint policy must not admit every principal")
+    return found
+
+
+def _principal_raw(model: Model, document: str) -> str:
+    for block in model.blocks:
+        if block.type == "data" and block.labels[:2] == ("aws_iam_policy_document", document):
+            text = []
+            for stmt in block.children("statement") + [
+                c for d in block.children("dynamic") for c in d.children("content")
+            ]:
+                for pr in stmt.children("principals"):
+                    text.append(pr.attributes.get("identifiers", ""))
+            return " ".join(text)
+    return ""
 
 
 def violations(sources: dict[str, str]) -> list[str]:
@@ -901,15 +1067,14 @@ class TestTheImplementation:
     def test_no_committed_production_file_carries_a_live_literal(
         self, sources: dict[str, str]
     ) -> None:
-        """The key policy names generated-role PREFIX patterns, never a live suffix."""
+        """The key policy and the region local name generated-role PREFIX patterns, never a
+        live suffix: no `AWSReservedSSO_<name>_<16 hex>` shape appears anywhere."""
+        live_suffix = re.compile(r"AWSReservedSSO_[A-Za-z0-9]+_[0-9a-f]{16}\b")
         for name in PRODUCTION_FILES:
             found = QI.literal_violations(sources[name])
-            if name == "production_bindings.tf":
-                assert found == ["a generated role name"], found
-                for match in re.findall(r'AWSReservedSSO_[^"]*', sources[name]):
-                    assert match.startswith("AWSReservedSSO_${local.") and match.endswith("_*"), (
-                        match
-                    )
+            if name in ("production_bindings.tf", "production_variables.tf"):
+                assert found in ([], ["a generated role name"]), found
+                assert live_suffix.search(sources[name]) is None, name
                 continue
             assert found == [], name
 
@@ -1007,6 +1172,247 @@ def _locals_source(label: str) -> str:
         .split(f"{label} = {{", 1)[1]
         .split("\n  }", 1)[0]
     )
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 evidence: real qualification and general-Bronze keys vs production scope
+# ---------------------------------------------------------------------------
+
+
+def _arn_pattern_matches(pattern: str, physical: str) -> bool:
+    """IAM resource-ARN glob: `*` matches any run of characters, `/` included."""
+    if not pattern.startswith(LICENSED + "/"):
+        return False
+    tail = pattern[len(LICENSED) + 1 :]
+    regex = "^" + re.escape(tail).replace("\\*", ".*") + "$"
+    return re.match(regex, physical) is not None
+
+
+def _retrieval(dataset: str, run_id: str) -> RetrievalMetadata:
+    return RetrievalMetadata(
+        provider=PROVIDER,
+        dataset=dataset,
+        requested_range="2021-08-28/2026-08-27",
+        retrieved_at=syn.RETRIEVED_AT,
+        source_schema_version=syn.SOURCE_SCHEMA_VERSION,
+        ingestion_run_id=run_id,
+        acquisition_mode=AcquisitionMode.QUALIFICATION,
+    )
+
+
+def _earlier_package_keys() -> dict[str, str]:
+    """Physical keys the merged key builders produce for earlier packages, on synthetic inputs."""
+    payload = b"synthetic-bytes-not-vendor-data"
+    digest = "a" * 64
+    keys: dict[str, str] = {}
+    for dataset in EMPIRICAL_DATASETS:
+        retrieval = _retrieval(dataset, "synthetic-run-0001")
+        keys[f"adr-0017 general bronze payload ({dataset})"] = physical_key(
+            bronze_payload_key(retrieval=retrieval, payload=payload)
+        )
+        keys[f"qualification / adr-0017 record ({dataset})"] = physical_key(
+            bronze_acquisition_key(retrieval=retrieval, payload_digest=digest, record=b"{}")
+        )
+        keys[f"adr-0020 qualification payload ({dataset})"] = physical_key(
+            qualification_payload_key(
+                dataset=dataset,
+                execution_id="synthetic-run-0001",
+                request_ordinal=1,
+                content_sha256=digest,
+            )
+        )
+    keys["qualification / adr-0017 claim"] = physical_key(
+        acquisition_claim_key(payload_digest=digest, run_id="synthetic-run-0001", claim=b"{}")
+    )
+    keys["qualification locator"] = "/".join(locator_key_segments("synthetic-run-0001"))
+    keys["qualification report"] = "/".join(
+        report_key_segments(
+            run_a_execution_id="synthetic-run-0001",
+            run_b_execution_id="synthetic-run-0002",
+            assessment_id="synthetic-assess-0001",
+        )
+    )
+    return keys
+
+
+class TestQualificationArtifactsStayOutsideProduction:
+    """Finding 1: the earlier packages' real key shapes meet no production grant and no
+    production bucket-policy statement, and every one of them is explicitly denied."""
+
+    def test_the_earlier_keys_are_the_traced_layouts(self) -> None:
+        keys = _earlier_package_keys()
+        assert keys["qualification / adr-0017 claim"].startswith("bronze/_acquisition_claims/")
+        assert keys["qualification / adr-0017 record (stocks)"].startswith(
+            "bronze/sharadar/stocks/acquisitions/"
+        )
+        assert keys["adr-0017 general bronze payload (stocks)"].startswith(
+            "bronze/sharadar/stocks/objects/sha256/"
+        )
+        assert keys["adr-0020 qualification payload (stocks)"].startswith(
+            "bronze/sharadar/stocks/qualification/"
+        )
+        assert keys["qualification locator"].startswith("qualification/sharadar/locators/")
+        assert keys["qualification report"].startswith("qualification/sharadar/reports/")
+
+    @pytest.mark.parametrize("document", ["production_acquisition", "production_build"])
+    def test_no_production_grant_reaches_an_earlier_key(self, model: Model, document: str) -> None:
+        grants = [r for s in _allows(model.documents[document]) for r in s.resources]
+        assert grants
+        for label, key in _earlier_package_keys().items():
+            hits = [g for g in grants if _arn_pattern_matches(g, key)]
+            assert hits == [], f"{document} grants {label} ({key}) through {hits}"
+
+    @pytest.mark.parametrize("document", ["production_acquisition", "production_build"])
+    def test_every_earlier_key_is_explicitly_denied_for_every_action(
+        self, model: Model, document: str
+    ) -> None:
+        denies = [
+            r
+            for s in _denies(model.documents[document])
+            if "s3:*" in s.actions
+            for r in s.resources
+        ]
+        for label, key in _earlier_package_keys().items():
+            assert any(_arn_pattern_matches(d, key) for d in denies), (
+                f"{document} does not deny {label} ({key})"
+            )
+
+    def test_no_bucket_policy_statement_governs_an_earlier_key(self, model: Model) -> None:
+        scope = [
+            r
+            for s in model.documents["licensed_bucket"]
+            if s.sid.startswith("Production")
+            for r in s.resources
+        ]
+        assert scope
+        for label, key in _earlier_package_keys().items():
+            hits = [r for r in scope if _arn_pattern_matches(r, key)]
+            assert hits == [], (
+                f"the production bucket policy governs {label} ({key}) through {hits}"
+            )
+
+    def test_the_production_namespaces_are_still_governed(self, model: Model) -> None:
+        """The reverse: a production-shaped key IS in scope, so the scope is not vacuous."""
+        scope = [
+            r
+            for s in model.documents["licensed_bucket"]
+            if s.sid.startswith("Production")
+            for r in s.resources
+        ]
+        for production_key in (
+            "bronze/sharadar/stocks/production/objects/sha256/" + "b" * 64,
+            "bronze/sharadar/stocks/production/acquisitions/synthetic/01.json",
+            "bronze/_production_claims/synthetic.json",
+            "bronze/sharadar/_indexes/synthetic.json",
+            "silver/x",
+            "_verification/synthetic/positive",
+        ):
+            assert any(_arn_pattern_matches(r, production_key) for r in scope), production_key
+
+    def test_the_qualification_policies_still_grant_the_qualification_keys(self) -> None:
+        """Sanity control on the matcher: the qualification policy does reach its own keys."""
+        real = QI.analyse((INFRA / "qualification_policies.tf").read_text(encoding="utf-8"))
+        writes = [
+            r
+            for s in real.documents["qualification_acquisition"]
+            if s.effect == "Allow"
+            for r in s.resources
+        ]
+        keys = _earlier_package_keys()
+        assert any(_arn_pattern_matches(w, keys["qualification / adr-0017 claim"]) for w in writes)
+        assert any(
+            _arn_pattern_matches(w, keys["adr-0020 qualification payload (stocks)"]) for w in writes
+        )
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 evidence: the attachment guard is an exact mapping
+# ---------------------------------------------------------------------------
+
+
+class TestAttachmentGuardIsExact:
+    def test_the_real_tree_has_exactly_the_four_approved_attachments(
+        self, sources: dict[str, str]
+    ) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        assert GUARD.role_policy_attachment_violations(all_tf) == []
+        assert len(GUARD.ADR_0036_APPROVED_ATTACHMENTS) == 4
+
+    def test_a_production_labelled_attachment_to_the_foundation_role_is_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        all_tf["production_principals.tf"] += (
+            '\nresource "aws_iam_role_policy_attachment" "production_foundation_widening" {\n'
+            "  count      = local.production_count_a\n"
+            "  role       = aws_iam_role.task.name\n"
+            "  policy_arn = aws_iam_policy.production_acquisition[0].arn\n}\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any("production_foundation_widening" in f for f in found), found
+
+    def test_swapped_actor_policies_are_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        text = all_tf["production_principals.tf"]
+        text = text.replace(
+            "policy_arn = aws_iam_policy.production_acquisition[0].arn",
+            "policy_arn = aws_iam_policy.__swap__[0].arn",
+        )
+        text = text.replace(
+            "policy_arn = aws_iam_policy.production_build[0].arn",
+            "policy_arn = aws_iam_policy.production_acquisition[0].arn",
+        )
+        text = text.replace(
+            "policy_arn = aws_iam_policy.__swap__[0].arn",
+            "policy_arn = aws_iam_policy.production_build[0].arn",
+        )
+        all_tf["production_principals.tf"] = text
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any("production_build to production_acquire_task" in f for f in found), found
+        assert any("production_acquisition to production_build_task" in f for f in found), found
+
+    def test_an_extra_attachment_in_another_file_is_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        all_tf["iam.tf"] += (
+            '\nresource "aws_iam_role_policy_attachment" "production_acquire_task_extra" {\n'
+            "  count      = local.production_count_a\n"
+            "  role       = aws_iam_role.production_acquire_task[0].name\n"
+            "  policy_arn = aws_iam_policy.production_acquisition[0].arn\n}\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any(
+            "iam.tf:aws_iam_role_policy_attachment.production_acquire_task_extra" in f
+            for f in found
+        ), found
+
+    def test_a_duplicated_approved_attachment_is_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        all_tf["production_principals.tf"] += (
+            '\nresource "aws_iam_role_policy_attachment" "production_acquire_task_again" {\n'
+            "  count      = local.production_count_a\n"
+            "  role       = aws_iam_role.production_acquire_task[0].name\n"
+            "  policy_arn = aws_iam_policy.production_acquisition[0].arn\n}\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any("declared 2 times" in f for f in found), found
+
+    def test_a_deleted_approved_attachment_is_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        text = all_tf["production_principals.tf"]
+        start = text.index(
+            'resource "aws_iam_role_policy_attachment" "production_build_task_bootstrap"'
+        )
+        end = text.index("\n}\n", start) + 3
+        all_tf["production_principals.tf"] = text[:start] + text[end:]
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any("declared 0 times" in f for f in found), found
+
+    def test_a_qualification_labelled_attachment_is_still_refused(self) -> None:
+        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
+        all_tf["qualification_principals.tf"] += (
+            '\nresource "aws_iam_role_policy_attachment" "qualification_acquisition_attach" {\n'
+            "  role       = aws_iam_role.task.name\n"
+            "  policy_arn = aws_iam_policy.qualification_acquisition.arn\n}\n"
+        )
+        assert GUARD.role_policy_attachment_violations(all_tf)
 
 
 # ---------------------------------------------------------------------------
@@ -1170,6 +1576,77 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
         'sid    = "WriteTaskLogsAndMore"',
         "the execution role must be unchanged",
     ),
+    # Finding 1: a production grant widened onto a qualification record prefix.
+    (
+        "production_policies.tf",
+        '"${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/production/acquisitions/*",',
+        '"${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/acquisitions/*",',
+        "grants an earlier package's namespace",
+    ),
+    # Finding 1: the bucket-policy scope widened to the whole provider prefix.
+    (
+        "storage.tf",
+        "    local.production_output_objects,\n"
+        '    ["${aws_s3_bucket.licensed.arn}/_verification/*"],',
+        "    local.production_output_objects,\n"
+        '    ["${aws_s3_bucket.licensed.arn}/_verification/*", '
+        '"${aws_s3_bucket.licensed.arn}/bronze/sharadar/*"],',
+        "must enumerate the production prefixes",
+    ),
+    # Finding 2: the build group given egress to the Secrets Manager endpoint.
+    (
+        "production_network.tf",
+        """resource "aws_vpc_security_group_egress_rule" "production_build_endpoints" {
+  count = local.production_count_a
+
+  security_group_id            = aws_security_group.production_build[0].id
+  description                  = "HTTPS to the interface endpoints."
+  referenced_security_group_id = aws_security_group.production_endpoints[0].id""",
+        """resource "aws_vpc_security_group_egress_rule" "production_build_endpoints" {
+  count = local.production_count_a
+
+  security_group_id            = aws_security_group.production_build[0].id
+  description                  = "HTTPS to the interface endpoints."
+  referenced_security_group_id = aws_security_group.production_secrets_endpoint[0].id""",
+        "only the acquisition group may have egress to the Secrets Manager endpoint",
+    ),
+    # Finding 2: the endpoint policy broadened to every Secrets Manager action.
+    (
+        "production_network.tf",
+        """      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [var.production_acquisition_secret_arn]""",
+        """      actions   = ["secretsmanager:*"]
+      resources = [var.production_acquisition_secret_arn]""",
+        "must allow exactly secretsmanager:GetSecretValue",
+    ),
+    # Finding 2: the endpoint policy broadened to every principal.
+    (
+        "production_network.tf",
+        """      principals {
+        type        = "AWS"
+        identifiers = [aws_iam_role.production_acquire_task[0].arn]
+      }
+
+      actions   = ["secretsmanager:GetSecretValue"]""",
+        """      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      actions   = ["secretsmanager:GetSecretValue"]""",
+        "must name the acquisition task role as its only principal",
+    ),
+    # Finding 2: the build group admitted at the endpoint's security group.
+    (
+        "production_network.tf",
+        '  description                  = "HTTPS from the acquisition task security group, '
+        'and from nothing else."\n'
+        "  referenced_security_group_id = aws_security_group.production_acquisition[0].id",
+        '  description                  = "HTTPS from the acquisition task security group, '
+        'and from nothing else."\n'
+        "  referenced_security_group_id = aws_security_group.production_build[0].id",
+        "admit the acquisition task group and nothing else",
+    ),
     (
         "production_principals.tf",
         'production_acquire_launcher_set       = "KalpaManiAcquireLauncher"   # 24',
@@ -1196,15 +1673,13 @@ def test_an_empty_configuration_fails(sources: dict[str, str]) -> None:
     assert violations(empty), "a suite that passes on nothing checks nothing"
 
 
-def test_the_repository_wide_role_guard_admits_only_production_attachments() -> None:
-    """The qualification guard is narrowed, not removed: qualification labels may not attach."""
-    text = (
-        Path(__file__).with_name("test_qualification_infrastructure.py").read_text(encoding="utf-8")
-    )
-    assert 'label.startswith("qualification_")' in text
-    assert (
-        "production_"
-        in text.split("test_no_iam_role_or_attachment_is_declared_anywhere_under_infra", 1)[1][
-            :2500
-        ]
-    )
+def test_the_repository_wide_role_guards_use_the_exact_attachment_mapping() -> None:
+    """Finding 3: every guard judges attachments by the audit's exact (file, role, policy)
+    table -- no guard exempts an attachment by its label."""
+    for name in ("test_qualification_infrastructure.py", "test_adr_0018_governance.py"):
+        text = Path(__file__).with_name(name).read_text(encoding="utf-8")
+        assert "role_policy_attachment_violations" in text, name
+        assert 'startswith("production_")' not in text, name
+    audit = (PROJECT_ROOT / "scripts" / "phase3_docs_audit.py").read_text(encoding="utf-8")
+    assert "ADR_0036_APPROVED_ATTACHMENTS" in audit
+    assert 'name.startswith("production_")' not in audit

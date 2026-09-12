@@ -247,12 +247,12 @@ data "aws_iam_policy_document" "licensed_bucket" {
 }
 
 locals {
-  # The production prefixes the three statements above govern. Enumerated rather
-  # than `bronze/sharadar/*`, so the qualification payload prefixes underneath it
-  # stay out of scope as ADR-0036 s.2.7 requires. Records and claims are prefixes
-  # the qualification package also writes to -- conditionally, so these statements
-  # refuse nothing it does -- and that overlap is recorded for review rather than
-  # hidden by a narrower list.
+  # The production prefixes the three statements above govern: the disjoint
+  # production namespaces of ADR-0037 (`.../production/...`, `_production_claims`),
+  # the locator index, the outputs and the R-3 verification prefix. Enumerated,
+  # never `bronze/sharadar/*` -- so no qualification payload, record or claim, and
+  # none of ADR-0017's objects, is under a production statement; a test builds the
+  # real qualification keys and proves it.
   production_immutable_write_scope = concat(
     local.production_payload_objects,
     local.production_record_objects,

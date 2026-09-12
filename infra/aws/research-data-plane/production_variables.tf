@@ -218,6 +218,36 @@ variable "production_provider_origin_cidrs" {
   }
 }
 
+variable "identity_center_region" {
+  description = <<-EOT
+    The AWS Region the governed IAM Identity Center instance is hosted in -- NOT
+    the workload region `aws_region`, which may differ. It selects the shape of
+    every generated permission-set role ARN this configuration matches in a key
+    policy: AWS documents that when Identity Center is hosted in us-east-1 the
+    role ARN carries NO region path element
+    (`role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_<name>_<suffix>`), and in
+    every other Region it carries one
+    (`role/aws-reserved/sso.amazonaws.com/<region>/AWSReservedSSO_<name>_<suffix>`).
+    The pattern is derived from this value, so neither shape is guessed.
+
+    NULL BY DEFAULT and required for any stage other than `none`. A Region name
+    is not an identifier, but which Region hosts the instance is an environment
+    binding and is supplied at apply time with the other bindings.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.identity_center_region == null || can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]$", var.identity_center_region))
+    error_message = "identity_center_region must be an AWS Region name such as us-east-1 or eu-west-2."
+  }
+
+  validation {
+    condition     = var.production_stage == "none" || var.identity_center_region != null
+    error_message = "production_stage a or b requires identity_center_region: the generated-role ARN shape depends on it."
+  }
+}
+
 variable "production_endpoints_enabled" {
   description = <<-EOT
     Whether the six interface VPC endpoints (ecr.api, ecr.dkr, logs, ssm, sts,
@@ -269,4 +299,28 @@ locals {
   # are separated by permission set and profile, never by group.
   production_target_account_id = coalesce(var.production_target_account_id, var.qualification_target_account_id)
   production_operator_group_id = var.qualification_operator_group_id
+
+  # Account consistency (a BLOCKING precondition, enforced by
+  # production_principals.tf on the guard resource and on every assignment):
+  # the account the provider actually acts in, the production target the
+  # bindings, parameter ARNs and assignments name, and the qualification target
+  # must be one account. `allowed_account_ids` constrains only the first;
+  # a target inside that list but different from the caller would otherwise be
+  # written into bindings and assignments for an account the credentials never
+  # act in. Evaluated only where a stage-a resource exists, so stage `none`
+  # stays inert.
+  production_account_consistent = (
+    local.production_target_account_id == data.aws_caller_identity.current.account_id
+    && local.production_target_account_id == var.qualification_target_account_id
+  )
+
+  # The generated permission-set role ARN path (ADR-0036 s.2.5; AWS Identity
+  # Center documentation): regionless when the instance is hosted in us-east-1,
+  # regional otherwise. Empty when the region is unset (stage none), where no
+  # key policy is declared.
+  production_sso_role_path = (
+    var.identity_center_region == null || var.identity_center_region == "us-east-1"
+    ? "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_"
+    : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/${var.identity_center_region}/AWSReservedSSO_"
+  )
 }

@@ -88,6 +88,7 @@ production_stage = "none"
 # production_target_account_id           = "REPLACE-WITH-12-DIGIT-AWS-ACCOUNT-ID"   # defaults to qualification_target_account_id
 # production_acquisition_secret_arn      = "REPLACE-WITH-THE-ONE-PRODUCTION-SECRET-ARN"
 # production_apply_principal_arn_pattern = "REPLACE-WITH-THE-APPLY-PRINCIPAL-ARN-PATTERN"
+# identity_center_region                 = "REPLACE-WITH-THE-IDENTITY-CENTER-REGION"   # the instance's Region, not aws_region
 # production_image_digests               = { acquisition = "sha256:REPLACE", build = "sha256:REPLACE" }
 # production_binding_provenance          = { implementation_commit = "REPLACE-40-HEX", implementation_tree = "REPLACE-40-HEX", environment_binding_sha256 = "REPLACE-64-HEX" }
 # production_provider_origin_cidrs       = ["REPLACE-WITH-RESOLVED-PROVIDER-CIDR/32"]

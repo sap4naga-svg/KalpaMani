@@ -16,8 +16,18 @@
 # an exact `kms:EncryptionContext:PARAMETER_ARN`, so the key is usable only through
 # Parameter Store and only for the parameter a statement names. Identity Center
 # generated roles rotate their suffix, so the human and launcher statements match
-# the account principal under an `aws:PrincipalArn` prefix pattern rather than a
-# pinned ARN -- ADR-0021's stance, unchanged.
+# the account principal under an `aws:PrincipalArn` prefix pattern with `ArnLike`
+# -- the operator AWS documents for exactly this case -- rather than a pinned ARN;
+# ADR-0021's stance, unchanged. The pattern's PATH is derived from
+# `identity_center_region` (production_variables.tf): AWS documents that an
+# instance hosted in us-east-1 produces role ARNs with NO region path element and
+# every other Region produces one, so the shape is computed, never assumed.
+#
+# AWS also recommends keeping an IAM-created backup administrator in a key policy
+# that references generated roles; the apply-principal statement below is that
+# administrator, and confirming its pattern binds the real apply principal is the
+# administrator-binding verification of the application gate (KMS's lockout
+# safety check refuses a policy that would exclude the caller).
 #
 # THE TWO BINDING PARAMETERS ARE MATERIALIZED BY THIS CONFIGURATION, under the
 # application authorization (ADR-0036 s.2.5 "Parameter ownership"). Their content
@@ -124,9 +134,9 @@ data "aws_iam_policy_document" "production_task_bindings_key" {
     resources = ["*"]
 
     condition {
-      test     = "StringLike"
+      test     = "ArnLike"
       variable = "aws:PrincipalArn"
-      values   = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_${local.production_acquisition_permission_set}_*"]
+      values   = ["${local.production_sso_role_path}${local.production_acquisition_permission_set}_*"]
     }
 
     condition {
@@ -155,9 +165,9 @@ data "aws_iam_policy_document" "production_task_bindings_key" {
     resources = ["*"]
 
     condition {
-      test     = "StringLike"
+      test     = "ArnLike"
       variable = "aws:PrincipalArn"
-      values   = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_${local.production_build_permission_set}_*"]
+      values   = ["${local.production_sso_role_path}${local.production_build_permission_set}_*"]
     }
 
     condition {
@@ -186,9 +196,9 @@ data "aws_iam_policy_document" "production_task_bindings_key" {
     resources = ["*"]
 
     condition {
-      test     = "StringLike"
+      test     = "ArnLike"
       variable = "aws:PrincipalArn"
-      values   = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_${local.production_acquire_launcher_set}_*"]
+      values   = ["${local.production_sso_role_path}${local.production_acquire_launcher_set}_*"]
     }
 
     condition {
@@ -217,9 +227,9 @@ data "aws_iam_policy_document" "production_task_bindings_key" {
     resources = ["*"]
 
     condition {
-      test     = "StringLike"
+      test     = "ArnLike"
       variable = "aws:PrincipalArn"
-      values   = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_${local.production_build_launcher_set}_*"]
+      values   = ["${local.production_sso_role_path}${local.production_build_launcher_set}_*"]
     }
 
     condition {

@@ -41,30 +41,62 @@ locals {
   # qualification policies scope, compared against the plan constant by a test.
   production_datasets = ["tickers", "stocks", "actions"]
 
-  # Physical prefixes inside the licensed bucket (ADR-0036 s.2.2 -- s.2.4).
+  # Physical prefixes inside the licensed bucket -- ADR-0036 s.2.2 -- s.2.4 as
+  # amended by ADR-0037 (disjoint production namespaces, effective on merge).
   #
-  #   payloads   bronze/sharadar/<dataset>/objects/sha256/<digest>
-  #   records    bronze/sharadar/<dataset>/acquisitions/<...>
+  #   payloads   bronze/sharadar/<dataset>/production/objects/sha256/<digest>
+  #   records    bronze/sharadar/<dataset>/production/acquisitions/<...>
   #   locator    bronze/sharadar/_indexes/<run-id>.json
-  #   claims     bronze/_acquisition_claims/<...>
+  #   claims     bronze/_production_claims/<...>
   #   outputs    silver/*, gold/*, manifests/*
   #
-  # `bronze/sharadar/<dataset>/qualification/*` and `qualification/*` are the
-  # qualification package's, and appear here ONLY in deny statements.
+  # NONE of these is a prefix any earlier package writes. The traced layouts of
+  # the objects already in the bucket, and the code that names them, are:
+  #
+  #   ADR-0009/0011 general Bronze bridge (publication.py; used by ADR-0017 attempt two)
+  #     bronze/sharadar/<dataset>/objects/sha256/<digest>
+  #     bronze/sharadar/<dataset>/acquisitions/<digest>/<run-id>.json
+  #     bronze/_acquisition_claims/<digest>/<run-id>.json
+  #   ADR-0018/0020 qualification (qualify/sharadar/publication.py, locator.py, report.py)
+  #     bronze/sharadar/<dataset>/qualification/<execution>/requests/<NN>/sha256/<digest>
+  #     bronze/sharadar/<dataset>/acquisitions/<digest>/<run-id>.json   (records, shared bridge)
+  #     bronze/_acquisition_claims/<digest>/<run-id>.json               (claims, shared bridge)
+  #     qualification/sharadar/locators/<execution-id>.json
+  #     qualification/sharadar/reports/<run-a>/<run-b>/<assessment>.json
+  #
+  # The `production/` path segment and the `_production_claims` namespace are what
+  # keep the two apart: a production grant reaches no qualification or ADR-0017
+  # object, and the bucket-policy statements of storage.tf govern no prefix any
+  # earlier package writes. Every earlier namespace appears below ONLY in the
+  # `production_foreign_bronze_objects` deny list; a test builds real
+  # qualification keys with the merged key builders and proves none of them
+  # matches a production grant or the bucket-policy scope.
   production_payload_objects = [
-    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/tickers/objects/sha256/*",
-    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/objects/sha256/*",
-    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/actions/objects/sha256/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/tickers/production/objects/sha256/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/production/objects/sha256/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/actions/production/objects/sha256/*",
   ]
 
   production_record_objects = [
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/tickers/production/acquisitions/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/production/acquisitions/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/actions/production/acquisitions/*",
+  ]
+
+  production_index_objects = "${aws_s3_bucket.licensed.arn}/bronze/sharadar/_indexes/*"
+  production_claim_objects = "${aws_s3_bucket.licensed.arn}/bronze/_production_claims/*"
+
+  # Every Bronze namespace an EARLIER package writes, denied to both production
+  # actors for every action. Listed by the layouts traced above, not by guess.
+  production_foreign_bronze_objects = [
+    "${aws_s3_bucket.licensed.arn}/bronze/_acquisition_claims/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/tickers/objects/sha256/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/objects/sha256/*",
+    "${aws_s3_bucket.licensed.arn}/bronze/sharadar/actions/objects/sha256/*",
     "${aws_s3_bucket.licensed.arn}/bronze/sharadar/tickers/acquisitions/*",
     "${aws_s3_bucket.licensed.arn}/bronze/sharadar/stocks/acquisitions/*",
     "${aws_s3_bucket.licensed.arn}/bronze/sharadar/actions/acquisitions/*",
   ]
-
-  production_index_objects = "${aws_s3_bucket.licensed.arn}/bronze/sharadar/_indexes/*"
-  production_claim_objects = "${aws_s3_bucket.licensed.arn}/bronze/_acquisition_claims/*"
 
   production_output_objects = [
     "${aws_s3_bucket.licensed.arn}/silver/*",
@@ -253,6 +285,15 @@ data "aws_iam_policy_document" "production_acquisition" {
     resources = local.production_qualification_objects
   }
 
+  # The general Bronze bridge's namespaces -- qualification records and claims,
+  # and ADR-0017's three objects -- are not production's either (ADR-0037).
+  statement {
+    sid       = "AcquisitionNeverTouchesEarlierBronzeNamespaces"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = local.production_foreign_bronze_objects
+  }
+
   # One secret, by exact ARN, and every other Secrets Manager capability denied --
   # including GetSecretValue on any other secret, which is what keeps the
   # qualification credential a different resource in more than name.
@@ -416,6 +457,13 @@ data "aws_iam_policy_document" "production_build" {
     effect    = "Deny"
     actions   = ["s3:*"]
     resources = local.production_qualification_objects
+  }
+
+  statement {
+    sid       = "BuildNeverTouchesEarlierBronzeNamespaces"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = local.production_foreign_bronze_objects
   }
 
   # No secret of any kind. The wildcard is on a DENY and grants nothing.

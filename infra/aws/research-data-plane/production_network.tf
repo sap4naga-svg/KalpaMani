@@ -16,7 +16,9 @@
 #   endpoints          one S3 gateway endpoint (no hourly charge) whose policy admits
 #                      the licensed bucket and the ECR layer bucket only; six
 #                      interface endpoints (hourly-billed) behind a toggle, so they
-#                      exist only during authorized run windows.
+#                      exist only during authorized run windows -- five shared by both
+#                      actors, and Secrets Manager alone behind an acquisition-only
+#                      security group and a one-principal endpoint policy.
 #
 # The address allowlist is an ADDRESS restriction, not a hostname restriction
 # (ADR-0036 s.2.8): a security group cannot see TLS SNI. The hostname pin is the
@@ -31,14 +33,19 @@ locals {
   # deterministic. `cidrsubnet(var.vpc_cidr, 8, 250)` is `<vpc>.250.0/24`.
   production_build_subnet_index = 250
 
+  # The five interface endpoints BOTH actors may reach. Secrets Manager is not
+  # among them: it is declared separately below, behind its own security group
+  # that admits the acquisition task group only, and behind an endpoint policy
+  # that admits one principal, one action and one secret.
   production_interface_endpoints = var.production_endpoints_enabled && local.production_stage_a ? toset([
     "ecr.api",
     "ecr.dkr",
     "logs",
     "ssm",
     "sts",
-    "secretsmanager",
   ]) : toset([])
+
+  production_secrets_endpoint_count = var.production_endpoints_enabled && local.production_stage_a ? 1 : 0
 
   # Egress to AWS services goes through the endpoints; DNS goes to the VPC
   # resolver, which lives inside the VPC CIDR (network.tf explains why).
@@ -189,6 +196,85 @@ resource "aws_vpc_endpoint" "production_interface" {
 }
 
 # ---------------------------------------------------------------------------
+# Secrets Manager endpoint -- acquisition only, at the network AND the policy layer
+# ---------------------------------------------------------------------------
+#
+# ADR-0036 s.2.8: Secrets Manager is an acquisition-only dependency, "denied and
+# unreachable" for the build task. The build actor's IAM deny (production_build:
+# `secretsmanager:*`) is one layer; this endpoint is the network layer and the
+# resource-policy layer of the same boundary:
+#
+#   security group   admits 443 from the ACQUISITION task group only -- the build
+#                    group has no egress rule to it, and it has no ingress from it
+#   endpoint policy  Allow exactly one principal (the acquisition task role), one
+#                    action (GetSecretValue) and one resource (the production
+#                    secret). A Deny for everything else is implicit; an endpoint
+#                    policy is an allowlist.
+#
+# Neither layer replaces the identity policies: the acquisition role still holds
+# only its one GetSecretValue, and the build role still holds `Deny secretsmanager:*`.
+
+resource "aws_security_group" "production_secrets_endpoint" {
+  count = local.production_count_a
+
+  name        = "${var.name_prefix}-production-secrets-endpoint"
+  description = "Secrets Manager interface endpoint for the ADR-0036 acquisition task. Admits 443 from the acquisition task security group only."
+  vpc_id      = aws_vpc.research.id
+
+  tags = {
+    Name    = "${var.name_prefix}-production-secrets-endpoint"
+    Purpose = "production-acquisition"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "production_secrets_endpoint_from_acquisition" {
+  count = local.production_count_a
+
+  security_group_id            = aws_security_group.production_secrets_endpoint[0].id
+  description                  = "HTTPS from the acquisition task security group, and from nothing else."
+  referenced_security_group_id = aws_security_group.production_acquisition[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+}
+
+data "aws_iam_policy_document" "production_secrets_endpoint" {
+  dynamic "statement" {
+    for_each = local.production_stage_a && var.production_acquisition_secret_arn != "" ? [1] : []
+
+    content {
+      sid    = "AcquisitionTaskRetrievesTheOneProductionSecret"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = [aws_iam_role.production_acquire_task[0].arn]
+      }
+
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [var.production_acquisition_secret_arn]
+    }
+  }
+}
+
+resource "aws_vpc_endpoint" "production_secretsmanager" {
+  count = local.production_secrets_endpoint_count
+
+  vpc_id              = aws_vpc.research.id
+  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = [aws_subnet.production_build[0].id]
+  security_group_ids  = [aws_security_group.production_secrets_endpoint[0].id]
+  policy              = data.aws_iam_policy_document.production_secrets_endpoint.json
+
+  tags = {
+    Name    = "${var.name_prefix}-production-secretsmanager"
+    Purpose = "production-acquisition"
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Build task security group -- S3 prefix list, the endpoints, DNS; nothing else
 # ---------------------------------------------------------------------------
 
@@ -288,6 +374,17 @@ resource "aws_vpc_security_group_egress_rule" "production_acquisition_endpoints"
   security_group_id            = aws_security_group.production_acquisition[0].id
   description                  = "HTTPS to the interface endpoints."
   referenced_security_group_id = aws_security_group.production_endpoints[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "production_acquisition_secrets_endpoint" {
+  count = local.production_count_a
+
+  security_group_id            = aws_security_group.production_acquisition[0].id
+  description                  = "HTTPS to the Secrets Manager endpoint. The build group has no such rule."
+  referenced_security_group_id = aws_security_group.production_secrets_endpoint[0].id
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443

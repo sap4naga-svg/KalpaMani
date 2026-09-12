@@ -4307,6 +4307,82 @@ def _subject_shaped_literals(path: Path) -> list[str]:
     return found
 
 
+#: The ONLY ``aws_iam_role_policy_attachment`` resources this repository may declare,
+#: as exact ``(file, role, policy)`` triples: ADR-0036 s.2.1 attaches each production
+#: task role's data-plane policy and its task-bootstrap policy, in
+#: ``production_principals.tf``, and nothing else. A name-based exemption (anything
+#: labelled ``production_``) was replaced by this table because a label proves
+#: nothing about what is attached to what: an attachment of the acquisition policy
+#: to the build role, of a production policy to the foundation task role, or of
+#: anything at all in another file, is a violation however it is labelled.
+ADR_0036_APPROVED_ATTACHMENTS: Final[frozenset[tuple[str, str, str]]] = frozenset(
+    {
+        ("production_principals.tf", "production_acquire_task", "production_acquisition"),
+        (
+            "production_principals.tf",
+            "production_acquire_task",
+            "production_acquire_task_bootstrap",
+        ),
+        ("production_principals.tf", "production_build_task", "production_build"),
+        ("production_principals.tf", "production_build_task", "production_build_task_bootstrap"),
+    }
+)
+
+_ROLE_POLICY_ATTACHMENT_BLOCK: Final = re.compile(
+    r'resource\s+"aws_iam_role_policy_attachment"\s+"([^"]+)"\s*\{(.*?)\n\}', re.DOTALL
+)
+
+
+def role_policy_attachment_violations(sources: Mapping[str, str]) -> list[str]:
+    """Every ``aws_iam_role_policy_attachment`` that is not an approved triple.
+
+    Pure over ``sources`` (file name -> HCL), so the same rule runs against the
+    tracked tree and against deliberately mutated copies. Each attachment must
+    reference a stage-gated ``aws_iam_role.<role>[0].name`` and a stage-gated
+    ``aws_iam_policy.<policy>[0].arn`` by resource reference -- a literal ARN or an
+    ungated reference is refused -- and the ``(file, role, policy)`` triple must be
+    in :data:`ADR_0036_APPROVED_ATTACHMENTS`, exactly once. A missing or duplicated
+    approved triple is reported too, so deleting the declaration cannot pass.
+    """
+    seen: dict[tuple[str, str, str], int] = {}
+    found: list[str] = []
+    for filename in sorted(sources):
+        hcl = strip_hcl_comments(sources[filename])
+        for label, body in _ROLE_POLICY_ATTACHMENT_BLOCK.findall(hcl):
+            role = re.search(r"\brole\s*=\s*aws_iam_role\.([A-Za-z0-9_]+)\[0\]\.name\b", body)
+            policy = re.search(
+                r"\bpolicy_arn\s*=\s*aws_iam_policy\.([A-Za-z0-9_]+)\[0\]\.arn\b", body
+            )
+            if role is None or policy is None:
+                found.append(
+                    f"{filename}:aws_iam_role_policy_attachment.{label} does not attach a "
+                    "stage-gated aws_iam_policy to a stage-gated aws_iam_role by reference"
+                )
+                continue
+            triple = (filename, role.group(1), policy.group(1))
+            if triple not in ADR_0036_APPROVED_ATTACHMENTS:
+                found.append(
+                    f"{filename}:aws_iam_role_policy_attachment.{label} attaches "
+                    f"{policy.group(1)} to {role.group(1)}, which is not an approved "
+                    "ADR-0036 attachment"
+                )
+            seen[triple] = seen.get(triple, 0) + 1
+    for triple in sorted(ADR_0036_APPROVED_ATTACHMENTS):
+        count = seen.get(triple, 0)
+        if count != 1:
+            found.append(
+                f"approved attachment {triple} is declared {count} times; expected exactly once"
+            )
+    return found
+
+
+def _infra_sources() -> dict[str, str]:
+    infra = REPO_ROOT / "infra"
+    if not infra.is_dir():
+        return {}
+    return {path.name: read(path) for path in sorted(infra.rglob("*.tf"))}
+
+
 def _qualification_role_declarations() -> list[str]:
     """Every Terraform file declaring an IAM ROLE or attachment for either designed actor.
 
@@ -4336,15 +4412,14 @@ def _qualification_role_declarations() -> list[str]:
         for resource_type, name in identity.findall(hcl):
             if "qualification_acquisition" in name or "qualification_assessment" in name:
                 offenders.append(f"{path.name}:{resource_type}.{name}")
-            elif resource_type.endswith("attachment") and not (
-                resource_type == "aws_iam_role_policy_attachment" and name.startswith("production_")
+            elif (
+                resource_type.endswith("attachment")
+                and resource_type != "aws_iam_role_policy_attachment"
             ):
-                # ADR-0036 (accepted, PR #93) attaches its two customer-managed policies
-                # to each production task role by design; those attachments are labelled
-                # `production_` and are held by tests/unit/test_production_infrastructure.py.
-                # Every other attachment, and every qualification-labelled identity, is
-                # still a violation here.
                 offenders.append(f"{path.name}:{resource_type}.{name}")
+    # Role-policy attachments are judged by exact (file, role, policy) triple, not
+    # by label: ADR-0036's four approved attachments and nothing else.
+    offenders.extend(role_policy_attachment_violations(_infra_sources()))
     return offenders
 
 
@@ -15268,29 +15343,39 @@ def main() -> int:
                 why,
             )
 
-        # An inbound rule is permitted on exactly one security group: the ADR-0036
-        # interface-endpoint group, which must admit 443 from the two production task
-        # groups for an interface endpoint to answer at all. No task security group --
-        # the foundation's or either production actor's -- may carry an ingress rule,
-        # and no ingress rule may name a CIDR. Asked precisely on the parsed HCL rather
-        # than as a blanket token, because the blanket form could not tell an endpoint
-        # from a listener.
+        # An inbound rule is permitted on exactly two security groups: the ADR-0036
+        # interface-endpoint group (443 from the two production task groups) and the
+        # Secrets Manager endpoint group (443 from the acquisition task group alone),
+        # because an interface endpoint must admit its clients to answer at all. No
+        # task security group -- the foundation's or either production actor's -- may
+        # carry an ingress rule, and no ingress rule may name a CIDR. Asked precisely on
+        # the parsed HCL rather than as a blanket token, because the blanket form could
+        # not tell an endpoint from a listener.
         ingress_rules = re.findall(
             r'resource\s+"aws_vpc_security_group_ingress_rule"\s+"([^"]+)"\s*\{(.*?)\n\}',
             hcl_only,
             re.DOTALL,
         )
         f.check(
-            "every Terraform ingress rule targets the ADR-0036 endpoint security group and no CIDR",
+            "every Terraform ingress rule targets an ADR-0036 endpoint security group and no CIDR",
             all(
                 re.search(
-                    r"security_group_id\s*=\s*aws_security_group\.production_endpoints\[0\]\.id",
+                    r"security_group_id\s*=\s*aws_security_group\."
+                    r"(production_endpoints|production_secrets_endpoint)\[0\]\.id",
                     body,
                 )
                 and "referenced_security_group_id" in body
                 and "cidr_ipv4" not in body
                 and "cidr_ipv6" not in body
                 for _, body in ingress_rules
+            )
+            and all(
+                re.search(
+                    r"referenced_security_group_id\s*=\s*aws_security_group\.production_acquisition\[0\]\.id",
+                    body,
+                )
+                for _, body in ingress_rules
+                if "production_secrets_endpoint[0].id" in body
             ),
             "the task security groups admit nothing; only the interface-endpoint group answers, "
             "and only to the tasks",

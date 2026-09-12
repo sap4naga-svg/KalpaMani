@@ -575,15 +575,15 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
             )
             for resource_type, name in identity.findall(hcl):
                 # ADR-0036 (accepted, PR #93) attaches its two customer-managed policies
-                # to each PRODUCTION task role by design; those attachments are labelled
-                # `production_` and are held by test_production_infrastructure.py. This
-                # guard is about the two ADR-0018 qualification actors, and every other
-                # attachment is still refused here.
-                production_attachment = (
+                # to each PRODUCTION task role by design. Those four attachments are
+                # admitted by EXACT (file, role, policy) triple through the audit's
+                # `role_policy_attachment_violations` below -- never by label. Every
+                # other attachment kind is refused here, and so is any identity for the
+                # two ADR-0018 qualification actors.
+                assert (
                     resource_type == "aws_iam_role_policy_attachment"
-                    and name.startswith("production_")
-                )
-                assert production_attachment or not resource_type.endswith("attachment"), (
+                    or not resource_type.endswith("attachment")
+                ), (
                     f"{path.name} declares {resource_type}.{name}. Attaching a permission "
                     "set to a principal is infrastructure mutation, which is a separate gate."
                 )
@@ -592,6 +592,8 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
                         f"{path.name} declares {resource_type}.{name}. Designing a role is "
                         "not creating one, and infrastructure mutation is a separate gate."
                     )
+        sources = {path.name: path.read_text(encoding="utf-8") for path in infra.rglob("*.tf")}
+        assert GUARD.role_policy_attachment_violations(sources) == []
 
     def test_the_offline_permission_set_candidate_exists_and_creates_no_identity(self) -> None:
         """The reverse-drift half. Deleting the candidate must fail too.

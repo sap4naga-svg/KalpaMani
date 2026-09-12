@@ -696,9 +696,11 @@ class TestTheCandidate:
 
         Narrowed, not removed, when ADR-0036 was accepted: the production task
         roles carry `aws_iam_role_policy_attachment` resources by design (ADR-0036
-        s.2.1), labelled `production_` and checked by their own module. A
-        qualification-labelled role or attachment, or an attachment of any other
-        kind, is still a violation here.
+        s.2.1). Those are admitted by EXACT (file, role, policy) triple through the
+        audit's `role_policy_attachment_violations` -- never by label -- so a
+        production policy on the foundation role, swapped actor policies, or an
+        attachment in any other file is still a violation here, and so is any
+        qualification-labelled role or attachment.
         """
         offenders: list[str] = []
         for path in sorted(INFRA.glob("*.tf")):
@@ -715,10 +717,7 @@ class TestTheCandidate:
                     "aws_iam_group_policy_attachment",
                 ):
                     offenders.append(f"{path.name}: {block.labels}")
-                if block.labels[0] == "aws_iam_role_policy_attachment" and not all(
-                    label.startswith("production_") for label in block.labels[1:]
-                ):
-                    offenders.append(f"{path.name}: {block.labels}")
+        offenders.extend(GUARD.role_policy_attachment_violations(_sources()))
         assert offenders == [], f"an identity or attachment appeared: {offenders}"
 
     def test_no_trust_policy_is_declared_for_either_permission_set(self) -> None:
@@ -1420,6 +1419,7 @@ class TestTheSecretBindingIsIsolated:
             "aws_region",
             "bucket_suffix",
             "identity_center_instance_arn",
+            "identity_center_region",
             "log_retention_days",
             "multipart_abort_days",
             "name_prefix",

@@ -408,6 +408,18 @@ Terraform unless `production_r3_verification_digest` names the owner's R-3 verif
 the server-side conditional-write refusal ADR-0036 s.2.7 makes the prerequisite of any assignment.
 Terraform checks that a statement was made, not that it is true; that is the owner's, under the ADR.
 
+Production Bronze lives under **namespaces no earlier package writes** —
+`bronze/sharadar/<dataset>/production/…` and `bronze/_production_claims/…` — per
+[ADR-0037](../../../docs/decisions/ADR-0037-disjoint-production-bronze-namespaces.md) (proposed,
+effective with this declaration on merge): the traced key builders show ADR-0036's original prefixes
+were the general Bronze bridge's, shared with every qualification record and claim. Every earlier
+namespace is a `Deny` in both production policies, and the bucket-policy scope is enumerated. The
+Secrets Manager endpoint is its own resource behind an acquisition-only security group and a
+one-principal endpoint policy. A `terraform_data` **precondition** blocks any stage-a plan whose
+production target account differs from the provider's actual account or from the qualification
+target; the key policy's generated-role patterns are `ArnLike` over a path derived from
+`identity_center_region` (regionless for us-east-1, regional otherwise, as AWS documents).
+
 What the files preserve by construction, and what `tests/unit/test_production_infrastructure.py`
 holds with mutation controls: the data-plane policies carry no `ssm`/`kms` statement of either
 effect, so no shared deny can block a bootstrap allow; each task role reads exactly its three
@@ -419,8 +431,10 @@ group, from the two task groups. The foundation's own task role is used by neith
 passable.
 
 **Validated offline in a task-owned external copy** — `terraform fmt -check`, `terraform init
--backend=false` and `terraform validate` under the committed lock's `hashicorp/aws` v6.62.0, with the
-repository directory left uninitialized. `plan` and `apply` were not run and are not authorized; the
+-backend=false`, `terraform validate` and `terraform test` (mock provider; `tests/terraform/production.tftest.hcl`,
+run with `-test-directory` from the copy) under the committed lock's `hashicorp/aws` v6.62.0, with the
+repository directory left uninitialized. The mock-provider tests prove the configuration's own logic —
+stage gating, the account precondition, the R-3 digest gate, both role-ARN shapes — and nothing about AWS. `plan` and `apply` were not run and are not authorized; the
 interface endpoints (hourly) and the KMS key (monthly) are recurring spend under CLAUDE.md §4.21 that
 needs its own written authorization before any apply.
 
