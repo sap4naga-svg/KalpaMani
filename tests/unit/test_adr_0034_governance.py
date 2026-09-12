@@ -170,15 +170,20 @@ def test_the_adr_carries_no_measurement_or_subject() -> None:
         assert word not in ADR_FLAT.lower(), word
 
 
-# -- the status documents carry the decision as PROPOSED, not as in force -------
+# -- the status documents carry the decision as in force, and G1 as decided in part -------
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_pr_92(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "ADR-0034" in text
-    assert re.search(r"ADR-0034[^\n]{0,400}PROPOSED", text) is not None
+    assert (
+        re.search(r"ADR-0034[^\n]{0,400}ACCEPTED / IN FORCE[^\n]{0,80}PR #92 merged", text)
+        is not None
+    )
     assert "partial" in text.lower()
+    assert "DECIDED IN PART" in text
+    assert "OPEN for every other domain" in text
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
