@@ -20,10 +20,13 @@ from kalpamani.data.production.sharadar.parameters import ParameterFailure
 class RunnerOutcome(StrEnum):
     """The task-side sequence's one verdict. Closed.
 
-    ``HALTED_PROCESSING_NOT_IMPLEMENTED`` is the honest terminal state of this
-    cycle: the release barrier passed and **no acquisition or build processing
-    exists to run**, so the runner halts with zero data-plane operations rather
-    than claiming any.
+    ``RELEASED`` is the bootstrap's hand-off: every prerequisite and the release
+    barrier passed, zero data-plane operations have occurred, and the actor's
+    processing may begin -- the acquisition path continues into
+    :mod:`~kalpamani.data.production.sharadar.processing`. ``HALTED_PROCESSING_NOT_IMPLEMENTED``
+    is the honest terminal state of the **build** path, whose processing does not
+    exist: it halts after the barrier with zero data-plane operations rather than
+    claiming any.
     """
 
     REFUSED_ENVIRONMENT = "REFUSED_ENVIRONMENT"
@@ -34,6 +37,7 @@ class RunnerOutcome(StrEnum):
     REFUSED_NO_RELEASE = "REFUSED_NO_RELEASE"
     REFUSED_RELEASE_MISMATCH = "REFUSED_RELEASE_MISMATCH"
     REFUSED_RELEASE_READ = "REFUSED_RELEASE_READ"
+    RELEASED = "RELEASED"
     HALTED_PROCESSING_NOT_IMPLEMENTED = "HALTED_PROCESSING_NOT_IMPLEMENTED"
 
 
@@ -141,6 +145,7 @@ RUNNER_SENTENCES: Final[dict[RunnerOutcome, str]] = {
     RunnerOutcome.REFUSED_RELEASE_READ: (
         "production runner refused: the placement release could not be read"
     ),
+    RunnerOutcome.RELEASED: "production runner: release verified; processing may begin",
     RunnerOutcome.HALTED_PROCESSING_NOT_IMPLEMENTED: (
         "production runner halted: release verified; processing is not implemented"
     ),

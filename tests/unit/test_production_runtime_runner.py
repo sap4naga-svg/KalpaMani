@@ -1,6 +1,8 @@
 """Behavioural tests: the task-side and human-side bootstrap sequences, end to end on fakes.
 
-The success path halts honestly at ``HALTED_PROCESSING_NOT_IMPLEMENTED``; every
+The acquisition success path hands off at ``RELEASED`` with the binding, the admitted
+input and the plan compiled from its slice; the build path halts honestly at
+``HALTED_PROCESSING_NOT_IMPLEMENTED``; every
 refusal stage is reached by name; the binding-before-identity order is proved by
 counting; and no data-plane operation exists on any path.
 """
@@ -37,11 +39,16 @@ from fixtures.production_runtime import (
     launcher_identity_arn,
     metadata_document,
     revision_arn,
+    slice_document,
     task_identity_arn,
 )
 from kalpamani.data.production.sharadar import outcomes as po
 from kalpamani.data.production.sharadar import runner as prun
 from kalpamani.data.production.sharadar.barrier import MAX_RELEASE_READS, BarrierOutcome
+from kalpamani.data.production.sharadar.identities import (
+    LedgerSpentIdentities,
+    UnavailableSpentIdentities,
+)
 from kalpamani.data.production.sharadar.inputs import input_digest
 from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
 from kalpamani.data.production.sharadar.release import ReleaseDefect, build_release_document
@@ -111,8 +118,7 @@ class _Task:
             "actor": self.actor,
             "compiled": compiled_task(self.actor),
             "adapters": self.adapters(),
-            "expected_plan_digest": PLAN_DIGEST,
-            "is_spent": lambda _: False,
+            "registry": LedgerSpentIdentities([]),
         }
         defaults.update(kwargs)
         return prun.run_task_bootstrap(**defaults)
@@ -120,14 +126,21 @@ class _Task:
 
 class TestTheTaskSequence:
     @pytest.mark.parametrize("actor", (ACQ, BLD), ids=lambda a: a.value)
-    def test_the_success_path_halts_honestly_after_the_barrier(
+    def test_the_success_path_hands_off_at_released_with_what_processing_needs(
         self, actor: ProductionActor
     ) -> None:
         task = _Task(actor)
         report = task.run()
-        assert report.outcome is po.RunnerOutcome.HALTED_PROCESSING_NOT_IMPLEMENTED
-        assert report.stage is prun.RunnerStage.PROCESSING
+        assert report.outcome is po.RunnerOutcome.RELEASED
+        assert report.stage is prun.RunnerStage.RELEASE_BARRIER
         assert report.barrier is not None and report.barrier.outcome is BarrierOutcome.RELEASED
+        assert report.binding is not None and report.binding.actor is actor
+        assert report.admitted_input is not None
+        if actor is ACQ:
+            assert report.plan is not None and report.plan.digest == PLAN_DIGEST
+            assert report.plan.request_count == 6
+        else:
+            assert report.plan is None
         counts = report.counts
         assert counts.parameter_reads == 3 and counts.identity_calls == 1
         assert counts.s3_operations == counts.secret_retrievals == counts.provider_requests == 0
@@ -142,6 +155,26 @@ class TestTheTaskSequence:
         )
         for canary in CANARIES:
             assert canary not in rendered
+
+    def test_the_build_task_halts_honestly_after_the_barrier(self) -> None:
+        task = _Task(BLD)
+        report = prun.run_build_task(
+            compiled=compiled_task(BLD),
+            adapters=task.adapters(),
+            registry=LedgerSpentIdentities([]),
+        )
+        assert report.outcome is po.RunnerOutcome.HALTED_PROCESSING_NOT_IMPLEMENTED
+        assert report.stage is prun.RunnerStage.PROCESSING
+        assert report.counts.data_plane_operations == 0 and report.binding is None
+        refused = _Task(BLD, release=False)
+        assert (
+            prun.run_build_task(
+                compiled=compiled_task(BLD),
+                adapters=refused.adapters(),
+                registry=LedgerSpentIdentities([]),
+            ).outcome
+            is po.RunnerOutcome.REFUSED_NO_RELEASE
+        )
 
     def test_a_private_environment_variable_refuses_before_any_read(self) -> None:
         task = _Task()
@@ -167,18 +200,23 @@ class TestTheTaskSequence:
         assert task.run().outcome is po.RunnerOutcome.REFUSED_BINDING
 
     @pytest.mark.parametrize(
-        "kwargs",
+        ("kwargs", "input_overrides"),
         [
-            {"expected_plan_digest": OTHER_PLAN_DIGEST},
-            {"expected_plan_digest": None},
-            {"is_spent": lambda _: True},
+            ({}, {"plan_digest": OTHER_PLAN_DIGEST}),
+            ({}, {"slice": slice_document(request_count=5)}),
+            ({"registry": LedgerSpentIdentities([RUN_ID])}, {}),
+            ({"registry": UnavailableSpentIdentities()}, {}),
         ],
-        ids=["plan-digest", "no-compiled-plan", "spent"],
+        ids=["plan-digest", "not-compilable", "spent", "status-unavailable"],
     )
     def test_an_input_the_contract_refuses_stops_before_the_self_check(
-        self, kwargs: dict[str, Any]
+        self, kwargs: dict[str, Any], input_overrides: dict[str, Any]
     ) -> None:
         task = _Task()
+        if input_overrides:
+            task.ssm.values[constants_for(ACQ).input_parameter] = encode(
+                acquisition_input_document(**input_overrides)
+            )
         report = task.run(**kwargs)
         assert (
             report.outcome is po.RunnerOutcome.REFUSED_INPUT
@@ -346,6 +384,13 @@ class TestTheTaskSequence:
                 outcome=po.RunnerOutcome.HALTED_PROCESSING_NOT_IMPLEMENTED,
                 stage=prun.RunnerStage.PROCESSING,
                 counts=po.OperationCounts(s3_operations=1),
+                barrier=None,
+            )
+        with pytest.raises(ValueError, match="released"):
+            prun.RunnerReport(
+                outcome=po.RunnerOutcome.RELEASED,
+                stage=prun.RunnerStage.RELEASE_BARRIER,
+                counts=po.OperationCounts(),
                 barrier=None,
             )
 

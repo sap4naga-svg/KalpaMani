@@ -8,7 +8,6 @@ produce exactly what they produced before this cycle.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -85,18 +84,20 @@ class TestProductionBuilders:
     def test_the_four_layouts_are_the_adr_0037_ones(self) -> None:
         payload = pk.production_payload_key(dataset="actions", payload=PAYLOAD)
         record = pk.production_acquisition_key(
-            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, record=RECORDS[0]
+            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, ordinal=3, record=RECORDS[0]
         )
-        claim = pk.production_claim_key(payload_digest=DIGEST, run_id=RUN_ID, claim=b"{}")
+        claim = pk.production_claim_key(
+            payload_digest=DIGEST, run_id=RUN_ID, ordinal=3, claim=b"{}"
+        )
         locator = pk.run_locator_key(run_id=RUN_ID, payload=b"{}")
         assert (
             payload.logical_key
             == f"licensed/bronze/sharadar/actions/production/objects/sha256/{DIGEST}"
         )
         assert record.logical_key == (
-            f"licensed/bronze/sharadar/actions/production/acquisitions/{DIGEST}/{RUN_ID}.json"
+            f"licensed/bronze/sharadar/actions/production/acquisitions/{DIGEST}/{RUN_ID}.03.json"
         )
-        assert claim.logical_key == f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.json"
+        assert claim.logical_key == f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.03.json"
         assert locator.logical_key == f"licensed/bronze/sharadar/_indexes/{RUN_ID}.json"
         assert pk.run_locator_logical_key(RUN_ID) == locator.logical_key
 
@@ -111,7 +112,7 @@ class TestProductionBuilders:
         with pytest.raises(pk.ProductionKeyError):
             pk.run_locator_key_segments(run_id)  # type: ignore[arg-type]
         with pytest.raises(pk.ProductionKeyError):
-            pk.production_claim_key(payload_digest=DIGEST, run_id=run_id, claim=b"{}")  # type: ignore[arg-type]
+            pk.production_claim_key(payload_digest=DIGEST, run_id=run_id, ordinal=0, claim=b"{}")  # type: ignore[arg-type]
 
     def test_a_digest_outside_the_grammar_is_refused(self) -> None:
         for digest in ("ABC", "0" * 63, "g" * 64):
@@ -172,10 +173,10 @@ def _production_keys() -> dict[str, str]:
             dataset="actions", payload=PAYLOAD
         ).logical_key,
         "production record": pk.production_acquisition_key(
-            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, record=RECORDS[0]
+            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, ordinal=0, record=RECORDS[0]
         ).logical_key,
         "production claim": pk.production_claim_key(
-            payload_digest=DIGEST, run_id=RUN_ID, claim=b"{}"
+            payload_digest=DIGEST, run_id=RUN_ID, ordinal=0, claim=b"{}"
         ).logical_key,
         "production locator": pk.run_locator_logical_key(RUN_ID),
     }
@@ -301,9 +302,13 @@ class TestLocatorClauses:
         document = locator_document()
         document["entries"].reverse()
         locator = _validate(document)
-        assert [entry.ordinal for entry in locator.entries] == [0, 1]
-        assert locator.object_count == 4
-        assert len(locator.exact_references()) == 4
+        assert [entry.ordinal for entry in locator.entries] == [0, 1, 2, 3, 4, 5]
+        assert locator.object_count == 12
+        assert len(locator.exact_references()) == 12
+        # Identical bytes across distinct requests of one dataset (tickers pages 0 and 2):
+        # one payload name, distinct record names.
+        assert locator.entries[2].payload.logical_key == locator.entries[4].payload.logical_key
+        assert locator.entries[2].record.logical_key != locator.entries[4].record.logical_key
         for canary in CANARIES:
             assert canary not in repr(locator)
 
@@ -339,7 +344,7 @@ class TestLocatorClauses:
         [
             f"licensed/bronze/sharadar/actions/objects/sha256/{DIGEST}",
             f"licensed/bronze/_acquisition_claims/{DIGEST}/{RUN_ID}.json",
-            f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.json",
+            f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.00.json",
             f"licensed/bronze/sharadar/_indexes/{RUN_ID}.json",
             f"licensed/bronze/sharadar/actions/qualification/x/requests/00/sha256/{DIGEST}",
             f"licensed/qualification/sharadar/locators/{RUN_ID}.json",
@@ -363,7 +368,16 @@ class TestLocatorClauses:
         document = locator_document()
         entry = document["entries"][0]
         entry["record_key"] = entry["record_key"].replace(
-            f"/{RUN_ID}.json", f"/{OTHER_RUN_ID}.json"
+            f"/{RUN_ID}.00.json", f"/{OTHER_RUN_ID}.00.json"
+        )
+        assert _refused(document) is pl.RunLocatorDefect.PREFIX_NOT_ALLOWED
+
+    def test_a_record_key_carrying_another_requests_ordinal_is_refused(self) -> None:
+        """The record leaf binds this entry's ordinal, so two requests cannot share a record."""
+        document = locator_document()
+        entry = document["entries"][0]
+        entry["record_key"] = entry["record_key"].replace(
+            f"/{RUN_ID}.00.json", f"/{RUN_ID}.02.json"
         )
         assert _refused(document) is pl.RunLocatorDefect.PREFIX_NOT_ALLOWED
 
@@ -392,7 +406,9 @@ class TestLocatorClauses:
 
     def test_a_missing_or_duplicated_ordinal_is_refused(self) -> None:
         document = locator_document()
-        document["entries"][1]["ordinal"] = 0
+        # Entries 0 and 2 carry identical payloads; swapping their ordinals keeps every
+        # key consistent with its own leaf and leaves the ordinal set inconsistent.
+        document["entries"][2] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
         assert _refused(document) is pl.RunLocatorDefect.ORDINAL_INCONSISTENT
 
     def test_a_request_count_disagreeing_with_the_slice_is_refused(self) -> None:
@@ -447,26 +463,20 @@ class TestLocatorClauses:
 class TestTheReader:
     def _store(self) -> tuple[FakeS3Get, pl.ProductionLocatorReader]:
         document = locator_document()
-        s3 = FakeS3Get(
-            objects={
-                f"bronze/sharadar/_indexes/{RUN_ID}.json": encode(document),
-                json.loads(json.dumps(document["entries"][0]["payload_key"]))[
-                    len("licensed/") :
-                ]: PAYLOADS[0],
-                document["entries"][0]["record_key"][len("licensed/") :]: RECORDS[0],
-                document["entries"][1]["payload_key"][len("licensed/") :]: PAYLOADS[1],
-                document["entries"][1]["record_key"][len("licensed/") :]: RECORDS[1],
-            }
-        )
+        objects = {f"bronze/sharadar/_indexes/{RUN_ID}.json": encode(document)}
+        for index, entry in enumerate(document["entries"]):
+            objects[entry["payload_key"][len("licensed/") :]] = PAYLOADS[index % 2]
+            objects[entry["record_key"][len("licensed/") :]] = RECORDS[index % 2]
+        s3 = FakeS3Get(objects=objects)
         return s3, pl.ProductionLocatorReader(client=s3, licensed_bucket=BUCKET)
 
     def test_the_locator_is_read_by_name_and_every_object_by_exact_reference(self) -> None:
         s3, reader = self._store()
         locator = reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
         objects = list(reader.iter_locator_objects(locator))
-        assert [entry.ordinal for entry, _, _ in objects] == [0, 1]
-        assert [payload for _, payload, _ in objects] == list(PAYLOADS)
-        assert [record for _, _, record in objects] == list(RECORDS)
+        assert [entry.ordinal for entry, _, _ in objects] == [0, 1, 2, 3, 4, 5]
+        assert [payload for _, payload, _ in objects] == [PAYLOADS[i % 2] for i in range(6)]
+        assert [record for _, _, record in objects] == [RECORDS[i % 2] for i in range(6)]
         # One by-name read plus two per entry: the count the ADR requires.
         assert reader.get_object_count == 1 + locator.object_count == len(s3.calls)
         assert all(call["Bucket"] == BUCKET for call in s3.calls)

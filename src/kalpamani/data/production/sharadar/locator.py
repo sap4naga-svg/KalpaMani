@@ -14,8 +14,9 @@ refusal, and a refused locator reads nothing further:
    ``plan_digest`` and ``slice`` equal the build input's ledger row for that run.
 2. **Prefix allowlist** -- every key lies under the ADR-0037 production payload or
    record prefix of a dataset the slice declares, and every record key ends in
-   this locator's own run identity. No claim, index, qualification, general-Bronze,
-   Silver, Gold or manifest key is admissible, whatever IAM would permit.
+   this locator's own run identity and the entry's own ordinal. No claim, index,
+   qualification, general-Bronze, Silver, Gold or manifest key is admissible,
+   whatever IAM would permit.
 3. **Request scope** -- the completed-request count equals the slice's request
    count; each ordinal appears exactly once; every payload key rebuilds exactly
    from the recorded dataset and digest; byte counts are within the slice's
@@ -56,6 +57,7 @@ from kalpamani.data.production.sharadar.keys import (
     ProductionKeyError,
     production_acquisition_key_for_digest,
     production_payload_key_for_digest,
+    request_ordinal_segment,
     run_locator_key_segments,
     run_locator_logical_key,
 )
@@ -105,6 +107,7 @@ ENTRY_FIELDS: Final[frozenset[str]] = frozenset(
         "payload_key",
         "payload_sha256",
         "payload_bytes",
+        "payload_disposition",
         "record_key",
         "record_sha256",
         "record_bytes",
@@ -119,6 +122,25 @@ class Completeness(StrEnum):
 
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
+
+
+class PayloadDisposition(StrEnum):
+    """What one conditional payload write did to its content-addressed name.
+
+    ``WRITTEN``
+        This run's conditional ``PutObject`` created the object.
+    ``ALREADY_PRESENT``
+        The conditional write found the content-addressed name occupied. ADR-0035
+        §3.1 treats identical bytes as an idempotent no-op on the payload; the
+        acquisition actor reads nothing (ADR-0019), so what occupies the name is
+        recorded as *undetermined by this run* and is proven -- or refused -- by the
+        build actor's ``read_exact``, which verifies the digest before any byte is
+        used. The claim and the record for the request are still written by this
+        run, under names that carry the request ordinal.
+    """
+
+    WRITTEN = "WRITTEN"
+    ALREADY_PRESENT = "ALREADY_PRESENT"
 
 
 class RunLocatorDefect(StrEnum):
@@ -192,6 +214,7 @@ class RunLocatorEntry:
     ordinal: int
     dataset: str
     payload: ExactObjectReference
+    payload_disposition: PayloadDisposition
     record: ExactObjectReference
     window: str
     page_offset: int
@@ -240,7 +263,7 @@ class ValidatedRunLocator:
         return tuple(references)
 
 
-def _allowed_prefix(key: str, *, dataset: str, run_id: str, kind: str) -> None:
+def _allowed_prefix(key: str, *, dataset: str, run_id: str, ordinal: str, kind: str) -> None:
     """Clause 2 for one key: under the production prefix of this dataset, and no other."""
     base = f"{_LICENSED}/{BRONZE_NAMESPACE}/{PROVIDER}/{dataset}/{PRODUCTION_SEGMENT}/"
     if kind == "payload":
@@ -249,7 +272,7 @@ def _allowed_prefix(key: str, *, dataset: str, run_id: str, kind: str) -> None:
             raise _refuse(RunLocatorDefect.PREFIX_NOT_ALLOWED) from None
         return
     prefix = f"{base}{ACQUISITIONS_SEGMENT}/"
-    if not key.startswith(prefix) or not key.endswith(f"/{run_id}.json"):
+    if not key.startswith(prefix) or not key.endswith(f"/{run_id}.{ordinal}.json"):
         raise _refuse(RunLocatorDefect.PREFIX_NOT_ALLOWED) from None
 
 
@@ -261,6 +284,7 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
     payload_key = exact_str(raw["payload_key"])
     payload_digest = hex_digest(raw["payload_sha256"])
     payload_bytes = exact_int(raw["payload_bytes"])
+    disposition = exact_str(raw["payload_disposition"])
     record_key = exact_str(raw["record_key"])
     record_digest = hex_digest(raw["record_sha256"])
     record_bytes = exact_int(raw["record_bytes"])
@@ -271,6 +295,8 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
         or payload_key is None
         or payload_digest is None
         or payload_bytes is None
+        or disposition is None
+        or disposition not in {member.value for member in PayloadDisposition}
         or record_key is None
         or record_digest is None
         or record_bytes is None
@@ -287,8 +313,16 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
     # Clause 2: the prefix allowlist, before any exact reconstruction.
     if dataset not in covered.datasets:
         raise _refuse(RunLocatorDefect.DATASET_NOT_IN_SLICE) from None
-    _allowed_prefix(payload_key, dataset=dataset, run_id=run_id, kind="payload")
-    _allowed_prefix(record_key, dataset=dataset, run_id=run_id, kind="record")
+    try:
+        ordinal_segment = request_ordinal_segment(ordinal)
+    except ProductionKeyError:
+        raise _refuse(RunLocatorDefect.ENTRY_MALFORMED) from None
+    _allowed_prefix(
+        payload_key, dataset=dataset, run_id=run_id, ordinal=ordinal_segment, kind="payload"
+    )
+    _allowed_prefix(
+        record_key, dataset=dataset, run_id=run_id, ordinal=ordinal_segment, kind="record"
+    )
     if dict(covered.windows)[dataset] != window:
         raise _refuse(RunLocatorDefect.SLICE_MISMATCH) from None
 
@@ -302,6 +336,7 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
             dataset=dataset,
             payload_digest=payload_digest,
             run_id=run_id,
+            ordinal=ordinal,
             content_sha256=record_digest,
         ).logical_key
     except ProductionKeyError:
@@ -324,6 +359,7 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
         ordinal=ordinal,
         dataset=dataset,
         payload=payload,
+        payload_disposition=PayloadDisposition(disposition),
         record=record,
         window=window,
         page_offset=page_offset,
@@ -395,6 +431,9 @@ def validate_run_locator(
         covered = parse_slice(document["slice"])
     except Exception:
         raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
+
+    if mode != covered.acquisition_mode:
+        raise _refuse(RunLocatorDefect.MODE_UNEXPECTED) from None
 
     # Clause 1: identity binding.
     if declared_run != run_id:
@@ -546,6 +585,7 @@ __all__ = [
     "REQUEST_FIELDS",
     "Completeness",
     "GetOnlyS3Client",
+    "PayloadDisposition",
     "ProductionLocatorReader",
     "RunLocatorDefect",
     "RunLocatorEntry",

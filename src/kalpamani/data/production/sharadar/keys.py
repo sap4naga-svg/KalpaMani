@@ -8,10 +8,21 @@ only spelling of them:
 
 ```text
 payloads   licensed/bronze/sharadar/<dataset>/production/objects/sha256/<digest>
-records    licensed/bronze/sharadar/<dataset>/production/acquisitions/<digest>/<run-id>.json
+records    licensed/bronze/sharadar/<dataset>/production/acquisitions/<digest>/<run-id>.<NN>.json
 locator    licensed/bronze/sharadar/_indexes/<run-id>.json
-claims     licensed/bronze/_production_claims/<digest>/<run-id>.json
+claims     licensed/bronze/_production_claims/<digest>/<run-id>.<NN>.json
 ```
+
+**The record and claim names bind the request ordinal ``<NN>``** as well as the
+digest and the run identity. Two requests of one run may legitimately return
+byte-identical payloads -- a header-only final page, an unchanged cross-section --
+and the payload namespace is content-addressed on purpose (ADR-0035 §3.1: identical
+bytes are an idempotent no-op on the payload). Without the ordinal, the second
+request's claim and record would land on the first request's names and either
+collide or, worse, be mistaken for it: distinct request provenance would collapse
+into one object. With it, every request has its own claim and its own record
+whatever its bytes, and a reused run identity meets an occupied claim name on its
+very first write.
 
 **The general Bronze bridge and the qualification builders are unchanged.**
 ``publication.bronze_payload_key``, ``bronze_acquisition_key`` and
@@ -20,10 +31,11 @@ its own; none of them can spell a production key, and none of these can spell
 theirs -- a test builds all of them on the same synthetic inputs and proves the
 four namespaces pairwise disjoint.
 
-The record key's inner shape -- ``<payload-digest>/<run-id>.json`` -- is the
+The record key's inner shape -- ``<payload-digest>/<run-id>.<NN>.json`` -- is the
 general Bronze record shape carried under the ``production/`` segment, which is
-the one ADR-0037 leaves as ``<...>``; the locator's prefix-allowlist clause binds
-the ``<run-id>`` leaf to the locator's own run identity.
+the one ADR-0037 leaves as ``<...>``, with the ordinal appended for the reason
+above; the locator's prefix-allowlist clause binds the ``<run-id>`` and the ``<NN>``
+of every record key to the locator's own run identity and the entry's own ordinal.
 """
 
 from __future__ import annotations
@@ -54,6 +66,11 @@ RUN_ID_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 #: A SHA-256 digest, lowercase hex.
 _DIGEST: Final = re.compile(r"^[0-9a-f]{64}$")
+
+#: Request ordinals are zero-padded to two digits: the per-run ceiling is 96, so
+#: ``00``--``95`` covers every slice and lexical order equals numeric order.
+ORDINAL_WIDTH: Final = 2
+MAX_ORDINAL: Final = 99
 
 #: The datasets a production key may name: the provider's closed vocabulary.
 PRODUCTION_DATASETS: Final[frozenset[str]] = frozenset(member.value for member in SharadarDataset)
@@ -89,6 +106,13 @@ def _digest(digest: object) -> str:
     if type(digest) is not str or not _DIGEST.match(digest):
         raise ProductionKeyError() from None
     return digest
+
+
+def request_ordinal_segment(ordinal: object) -> str:
+    """The zero-padded ordinal segment. ``bool`` is refused with everything else."""
+    if type(ordinal) is not int or not 0 <= ordinal <= MAX_ORDINAL:
+        raise ProductionKeyError() from None
+    return f"{ordinal:0{ORDINAL_WIDTH}d}"
 
 
 def _key(segments: tuple[str, ...], content_sha256: str) -> ObjectKey:
@@ -138,21 +162,22 @@ def production_payload_key_for_digest(*, dataset: str, content_sha256: str) -> O
 
 
 def production_acquisition_key(
-    *, dataset: str, payload_digest: str, run_id: str, record: bytes
+    *, dataset: str, payload_digest: str, run_id: str, ordinal: int, record: bytes
 ) -> ObjectKey:
-    """The production acquisition-record key, named by ``(digest, run id)``."""
+    """The production acquisition-record key, named by ``(digest, run id, ordinal)``."""
     if type(record) is not bytes:
         raise ProductionKeyError() from None
     return production_acquisition_key_for_digest(
         dataset=dataset,
         payload_digest=payload_digest,
         run_id=run_id,
+        ordinal=ordinal,
         content_sha256=sha256_hex(record),
     )
 
 
 def production_acquisition_key_for_digest(
-    *, dataset: str, payload_digest: str, run_id: str, content_sha256: str
+    *, dataset: str, payload_digest: str, run_id: str, ordinal: int, content_sha256: str
 ) -> ObjectKey:
     """The production record key a recorded digest names. **No bytes are needed.**"""
     return _key(
@@ -163,17 +188,20 @@ def production_acquisition_key_for_digest(
             PRODUCTION_SEGMENT,
             ACQUISITIONS_SEGMENT,
             _digest(payload_digest),
-            f"{_run_id(run_id)}{_JSON_SUFFIX}",
+            f"{_run_id(run_id)}.{request_ordinal_segment(ordinal)}{_JSON_SUFFIX}",
         ),
         _digest(content_sha256),
     )
 
 
-def production_claim_key(*, payload_digest: str, run_id: str, claim: bytes) -> ObjectKey:
+def production_claim_key(
+    *, payload_digest: str, run_id: str, ordinal: int, claim: bytes
+) -> ObjectKey:
     """The production acquisition-identity claim key, under ``_production_claims``.
 
     Global across datasets exactly as the general claim is global across providers:
-    the claim binds ``(digest, run id)`` and nothing about where the payload lives.
+    the claim binds ``(digest, run id, ordinal)`` and nothing about where the
+    payload lives.
     """
     if type(claim) is not bytes:
         raise ProductionKeyError() from None
@@ -182,7 +210,7 @@ def production_claim_key(*, payload_digest: str, run_id: str, claim: bytes) -> O
             BRONZE_NAMESPACE,
             PRODUCTION_CLAIM_NAMESPACE,
             _digest(payload_digest),
-            f"{_run_id(run_id)}{_JSON_SUFFIX}",
+            f"{_run_id(run_id)}.{request_ordinal_segment(ordinal)}{_JSON_SUFFIX}",
         ),
         sha256_hex(claim),
     )
@@ -213,7 +241,9 @@ __all__ = [
     "ACQUISITIONS_SEGMENT",
     "DIGEST_SEGMENT",
     "INDEX_NAMESPACE",
+    "MAX_ORDINAL",
     "OBJECTS_SEGMENT",
+    "ORDINAL_WIDTH",
     "PRODUCTION_CLAIM_NAMESPACE",
     "PRODUCTION_DATASETS",
     "PRODUCTION_SEGMENT",
@@ -224,6 +254,7 @@ __all__ = [
     "production_claim_key",
     "production_payload_key",
     "production_payload_key_for_digest",
+    "request_ordinal_segment",
     "run_locator_key",
     "run_locator_key_segments",
     "run_locator_logical_key",
