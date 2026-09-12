@@ -216,6 +216,40 @@ def production_claim_key(
     )
 
 
+#: The segment under the claim namespace that holds run reservations. Not a
+#: digest -- a digest is 64 hex characters -- so it can never collide with a claim.
+RESERVATIONS_SEGMENT: Final = "runs"
+
+
+def run_reservation_key_segments(run_id: str) -> tuple[str, ...]:
+    """The run reservation's segments: ``bronze/_production_claims/runs/<run-id>.json``.
+
+    **Payload-independent by construction**: the name carries the run identity and
+    nothing derived from any response, so a second attempt under a spent identity
+    meets an occupied name however its bytes differ, before a credential is
+    retrieved or a provider asked. The reservation is the first conditional write
+    of a run and is never deleted (the write-only actor could not delete it), so a
+    reserved identity stays spent when later processing fails. Under the claim
+    namespace because a reservation *is* a claim -- of the run identity itself --
+    and because that namespace is the one the acquisition actor's accepted grant
+    already admits (ADR-0036 §2.2 as amended by ADR-0037); its inner shape is the
+    subject of the proposed ADR-0038.
+    """
+    return (
+        BRONZE_NAMESPACE,
+        PRODUCTION_CLAIM_NAMESPACE,
+        RESERVATIONS_SEGMENT,
+        f"{_run_id(run_id)}{_JSON_SUFFIX}",
+    )
+
+
+def run_reservation_key(*, run_id: str, payload: bytes) -> ObjectKey:
+    """The LICENSED key one run reservation is published under."""
+    if type(payload) is not bytes:
+        raise ProductionKeyError() from None
+    return _key(run_reservation_key_segments(run_id), sha256_hex(payload))
+
+
 def run_locator_key_segments(run_id: str) -> tuple[str, ...]:
     """The run locator's segments: ``bronze/sharadar/_indexes/<run-id>.json``.
 
@@ -247,6 +281,7 @@ __all__ = [
     "PRODUCTION_CLAIM_NAMESPACE",
     "PRODUCTION_DATASETS",
     "PRODUCTION_SEGMENT",
+    "RESERVATIONS_SEGMENT",
     "RUN_ID_RE",
     "ProductionKeyError",
     "production_acquisition_key",
@@ -258,4 +293,6 @@ __all__ = [
     "run_locator_key",
     "run_locator_key_segments",
     "run_locator_logical_key",
+    "run_reservation_key",
+    "run_reservation_key_segments",
 ]

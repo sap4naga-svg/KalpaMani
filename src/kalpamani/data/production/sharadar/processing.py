@@ -17,6 +17,17 @@ counting wrappers. No adapter here has ever been given a real client: the number
 this module reports are what synthetic fakes were asked, and **mocked results are
 not AWS verification**.
 
+**The run identity is reserved durably before anything else is spent.** The first
+conditional write of a run is a **payload-independent run reservation** at
+``bronze/_production_claims/runs/<run-id>.json`` (proposed ADR-0038), issued after
+the release barrier and **before** the credential is retrieved or a provider is
+asked. A 412 there is a *reservation conflict*: the identity is spent, whatever
+bytes a re-run would produce, and the run stops with zero provider requests and
+no locator of its own. An ambiguous result stops with the uncertainty preserved.
+The reservation is never deleted -- the actor cannot -- so a reserved identity
+stays spent when later processing fails. This is the durable guard the
+preliminary spent-identity check is not.
+
 **Write-only, conditional, exactly accounted** (ADR-0019, ADR-0036 §2.2, ADR-0037).
 Per completed request: one conditional ``PutObject`` for the claim, one for the
 payload, one for the acquisition record -- claim first, so a reused identity meets
@@ -73,6 +84,7 @@ from kalpamani.data.production.sharadar.keys import (
     production_claim_key,
     production_payload_key,
     run_locator_key,
+    run_reservation_key,
 )
 from kalpamani.data.production.sharadar.locator import (
     LOCATOR_SCHEMA_VERSION,
@@ -109,6 +121,10 @@ from kalpamani.data.qualify.sharadar.publication import (
 #: the plan, not of a payload: the acquisition path parses nothing.
 SOURCE_SCHEMA_VERSION: Final = "sharadar-csv-production-v1"
 
+#: The run reservation contract. Closed fields; no free text.
+RESERVATION_CONTRACT_ID: Final = "kalpamani-production-run-reservation/v1"
+RESERVATION_SCHEMA_VERSION: Final = 1
+
 #: The backend categories under which a conditional write's outcome is
 #: **definitively not done**. Everything else the backend can answer leaves the
 #: durable state unknown (a 409 never resolved the condition; an unverifiable
@@ -139,6 +155,9 @@ class ProductionProvider(Protocol):
 class ProcessingHalt(StrEnum):
     """Why an acquisition run stopped before every request completed. Closed."""
 
+    RESERVATION_CONFLICT = "RESERVATION_CONFLICT"
+    RESERVATION_REFUSED = "RESERVATION_REFUSED"
+    RESERVATION_STATE_UNKNOWN = "RESERVATION_STATE_UNKNOWN"
     CREDENTIAL_REFUSED = "CREDENTIAL_REFUSED"
     PROVIDER_FAILURE = "PROVIDER_FAILURE"
     RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
@@ -160,6 +179,7 @@ class AcquisitionStatus(StrEnum):
 
     COMPLETED = "COMPLETED"
     REFUSED_BOOTSTRAP = "REFUSED_BOOTSTRAP"
+    REFUSED_RESERVATION = "REFUSED_RESERVATION"
     REFUSED_CREDENTIAL = "REFUSED_CREDENTIAL"
     HALTED = "HALTED"
     LOCATOR_NOT_PUBLISHED = "LOCATOR_NOT_PUBLISHED"
@@ -224,6 +244,7 @@ class AcquisitionReport:
     status: AcquisitionStatus
     bootstrap: RunnerReport
     halt: ProcessingHalt | None
+    reservation: PayloadDisposition | None
     completed_requests: int
     planned_requests: int
     payloads_written: int
@@ -240,6 +261,15 @@ class AcquisitionReport:
             raise TypeError("halt must be an exact ProcessingHalt member or None")
         if self.completed_requests > self.planned_requests:
             raise ValueError("completed requests cannot exceed planned requests")
+        if self.reservation is not None and self.reservation is not PayloadDisposition.WRITTEN:
+            raise ValueError("a reservation is either written by this run or absent")
+        if self.reservation is None and (self.completed_requests or self.locator is not None):
+            raise ValueError("nothing is acquired or published without a reservation")
+        if self.locator is not None and (
+            self.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
+            and not self.publication_state_unknown
+        ):
+            raise ValueError("an uncertain locator publication is uncertain publication state")
         if self.payloads_written + self.payloads_already_present != self.completed_requests:
             raise ValueError("every completed request has exactly one payload disposition")
         completed = self.status is AcquisitionStatus.COMPLETED
@@ -444,6 +474,7 @@ def run_production_acquisition(
             status=AcquisitionStatus.REFUSED_BOOTSTRAP,
             bootstrap=report,
             halt=None,
+            reservation=None,
             completed_requests=0,
             planned_requests=0,
             payloads_written=0,
@@ -474,25 +505,6 @@ def run_production_acquisition(
             provider_requests=provider,
         )
 
-    # Step 7a: the one credential, through the accepted secrets boundary.
-    try:
-        credential = sharadar_credential_from_secret(
-            client=processing.secrets, secret_id=processing.secret_id
-        )
-    except Exception:
-        return AcquisitionReport(
-            status=AcquisitionStatus.REFUSED_CREDENTIAL,
-            bootstrap=report,
-            halt=ProcessingHalt.CREDENTIAL_REFUSED,
-            completed_requests=0,
-            planned_requests=plan.request_count,
-            payloads_written=0,
-            payloads_already_present=0,
-            publication_state_unknown=False,
-            locator=None,
-            counts=counts(secrets=1, provider=0, s3=0),
-        )
-
     # The deadline, the counting wrappers and the write-only publisher.
     deadline = AcquisitionDeadline(
         monotonic=processing.monotonic, deadline_seconds=plan.deadline_seconds
@@ -507,13 +519,76 @@ def run_production_acquisition(
         clock=processing.monotonic,
         sleeper=DeadlinePacedSleeper(deadline=deadline, sleeper=processing.sleeper),
     )
+    started_at = processing.clock()
+    # Armed here rather than immediately before the first provider request: the
+    # reservation is an S3 operation of this run and is admitted and counted like
+    # every other. Arming earlier is conservative -- it can only halt sooner.
+    deadline.arm()
+
+    # Step 7a: the durable run reservation -- the first write, before the credential.
+    reservation_document = {
+        "schema_version": RESERVATION_SCHEMA_VERSION,
+        "contract_id": RESERVATION_CONTRACT_ID,
+        "run_id": admitted.run_identity,
+        "plan_digest": plan.digest,
+        "acquisition_mode": plan.acquisition_mode.value,
+        "reserved_at": started_at.isoformat(),
+    }
+    reservation_bytes = canonical_bytes(reservation_document)
+    try:
+        _conditional_write(
+            publisher,
+            key=run_reservation_key(run_id=admitted.run_identity, payload=reservation_bytes),
+            payload=reservation_bytes,
+            content_addressed=False,
+        )
+    except _HaltError as stopped:
+        halt_by_kind = {
+            ProcessingHalt.PUBLICATION_CONFLICT: ProcessingHalt.RESERVATION_CONFLICT,
+            ProcessingHalt.PUBLICATION_REFUSED: ProcessingHalt.RESERVATION_REFUSED,
+            ProcessingHalt.PUBLICATION_STATE_UNKNOWN: ProcessingHalt.RESERVATION_STATE_UNKNOWN,
+            ProcessingHalt.DEADLINE_EXHAUSTED: ProcessingHalt.DEADLINE_EXHAUSTED,
+        }
+        # A losing or uncertain reservation acquires nothing and publishes nothing
+        # -- no locator under an identity that may be another run's.
+        return AcquisitionReport(
+            status=AcquisitionStatus.REFUSED_RESERVATION,
+            bootstrap=report,
+            halt=halt_by_kind[stopped.halt],
+            reservation=None,
+            completed_requests=0,
+            planned_requests=plan.request_count,
+            payloads_written=0,
+            payloads_already_present=0,
+            publication_state_unknown=stopped.state_unknown,
+            locator=None,
+            counts=counts(secrets=0, provider=0, s3=counting_s3.put_object_count),
+        )
+
+    # Step 7b: the one credential, through the accepted secrets boundary.
+    try:
+        credential = sharadar_credential_from_secret(
+            client=processing.secrets, secret_id=processing.secret_id
+        )
+    except Exception:
+        return AcquisitionReport(
+            status=AcquisitionStatus.REFUSED_CREDENTIAL,
+            bootstrap=report,
+            halt=ProcessingHalt.CREDENTIAL_REFUSED,
+            reservation=PayloadDisposition.WRITTEN,
+            completed_requests=0,
+            planned_requests=plan.request_count,
+            payloads_written=0,
+            payloads_already_present=0,
+            publication_state_unknown=False,
+            locator=None,
+            counts=counts(secrets=1, provider=0, s3=counting_s3.put_object_count),
+        )
 
     completed: list[CompletedRequest] = []
     halt: ProcessingHalt | None = None
     state_unknown = False
     run_bytes = 0
-    started_at = processing.clock()
-    deadline.arm()
     try:
         for request in plan.requests:
             try:
@@ -602,10 +677,15 @@ def run_production_acquisition(
     else:
         status = AcquisitionStatus.LOCATOR_NOT_PUBLISHED
 
+    # Uncertainty is never cleared by a later success and never hidden behind an
+    # earlier halt: an ambiguous locator publication is uncertain publication state
+    # in the final report whatever determined the overall status.
+    locator_uncertain = publication.status is LocatorPublicationStatus.STATE_UNKNOWN
     return AcquisitionReport(
         status=status,
         bootstrap=report,
         halt=halt,
+        reservation=PayloadDisposition.WRITTEN,
         completed_requests=len(entries),
         planned_requests=plan.request_count,
         payloads_written=sum(
@@ -614,13 +694,17 @@ def run_production_acquisition(
         payloads_already_present=sum(
             1 for item in entries if item.payload_disposition is PayloadDisposition.ALREADY_PRESENT
         ),
-        publication_state_unknown=state_unknown or document["publication_state_unknown"],
+        publication_state_unknown=(
+            state_unknown or document["publication_state_unknown"] or locator_uncertain
+        ),
         locator=publication,
         counts=counts(secrets=1, provider=provider.request_count, s3=counting_s3.put_object_count),
     )
 
 
 __all__ = [
+    "RESERVATION_CONTRACT_ID",
+    "RESERVATION_SCHEMA_VERSION",
     "SOURCE_SCHEMA_VERSION",
     "AcquisitionReport",
     "AcquisitionStatus",

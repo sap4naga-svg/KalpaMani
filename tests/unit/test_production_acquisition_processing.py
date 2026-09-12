@@ -249,10 +249,10 @@ class FakeS3Put:
         key = kwargs["Key"]
         self.calls.append(key)
         assert kwargs["IfNoneMatch"] == "*" and kwargs["ServerSideEncryption"] == "AES256"
-        if self.fail_after_calls is not None and len(self.calls) > self.fail_after_calls:
-            raise FakeClientError(self.fail_code)
         if key in self.fail_on:
             raise FakeClientError(self.fail_on[key])
+        if self.fail_after_calls is not None and len(self.calls) > self.fail_after_calls:
+            raise FakeClientError(self.fail_code)
         if key in self.objects:
             raise FakeClientError("PreconditionFailed")
         self.objects[key] = kwargs["Body"]
@@ -291,6 +291,7 @@ class Scenario:
         self.s3 = FakeS3Put()
         self.registry: Any = LedgerSpentIdentities([])
         self.secret_id = SECRET_ID
+        self._s3_calls_before = 0
 
     def bootstrap(self) -> RunnerAdapters:
         return RunnerAdapters(
@@ -323,7 +324,18 @@ class Scenario:
         )
 
     def data_plane_calls(self) -> tuple[int, int, int]:
-        return self.secrets.calls, len(self.provider.calls), len(self.s3.calls)
+        """Calls this scenario's adapters were asked for. On a shared store, S3 calls are
+        counted from the point this scenario adopted it (``adopt_store``)."""
+        return (
+            self.secrets.calls,
+            len(self.provider.calls),
+            len(self.s3.calls) - self._s3_calls_before,
+        )
+
+    def adopt_store(self, store: FakeS3Put) -> None:
+        """Share another scenario's store, counting only the calls made from now on."""
+        self.s3 = store
+        self._s3_calls_before = len(store.calls)
 
 
 def _assert_counts_match(scenario: Scenario, report: pp.AcquisitionReport) -> None:
@@ -351,8 +363,9 @@ class TestEndToEnd:
         )
         # Exactly the plan's requests, in canonical order, once each.
         assert [c[0] for c in scenario.provider.calls] == [0, 1, 2, 3, 4, 5]
-        # 3 conditional writes per request + 1 locator = 19; provider 6; secret 1.
-        assert report.counts.provider_requests == 6 and report.counts.s3_operations == 19
+        # 1 reservation + 3 conditional writes per request + 1 locator = 20; provider 6; secret 1.
+        assert report.counts.provider_requests == 6 and report.counts.s3_operations == 20
+        assert report.reservation is PayloadDisposition.WRITTEN
         assert report.counts.secret_retrievals == 1
         _assert_counts_match(scenario, report)
         # Pacing at the compiled interval, on the injected clock, before every request.
@@ -364,7 +377,7 @@ class TestEndToEnd:
         scenario = Scenario()
         scenario.run()
         keys = sorted(scenario.s3.objects)
-        assert len(keys) == 19
+        assert len(keys) == 20
         for key in keys:
             assert (
                 key.startswith("bronze/sharadar/actions/production/")
@@ -374,7 +387,11 @@ class TestEndToEnd:
             ), key
         assert sum(1 for k in keys if "/production/objects/sha256/" in k) == 6
         assert sum(1 for k in keys if "/production/acquisitions/" in k) == 6
-        assert sum(1 for k in keys if k.startswith("bronze/_production_claims/")) == 6
+        assert (
+            sum(1 for k in keys if k.startswith("bronze/_production_claims/") and "/runs/" not in k)
+            == 6
+        )
+        assert f"bronze/_production_claims/runs/{RUN_ID}.json" in keys
         # Nothing under any earlier namespace.
         assert not any("/objects/sha256/" in k and "/production/" not in k for k in keys)
         assert not any(k.startswith("bronze/_acquisition_claims/") for k in keys)
@@ -428,7 +445,9 @@ class TestEndToEnd:
         assert report.status is pp.AcquisitionStatus.COMPLETED
         keys = sorted(scenario.s3.objects)
         payloads = [k for k in keys if "/objects/sha256/" in k]
-        claims = [k for k in keys if k.startswith("bronze/_production_claims/")]
+        claims = [
+            k for k in keys if k.startswith("bronze/_production_claims/") and "/runs/" not in k
+        ]
         records = [k for k in keys if "/acquisitions/" in k]
         # One content-addressed payload per dataset; six distinct claims; six distinct records.
         assert len(payloads) == 2 and len(claims) == 6 and len(records) == 6
@@ -445,8 +464,9 @@ class TestEndToEnd:
             "ALREADY_PRESENT",
             "ALREADY_PRESENT",
         ]
-        # 6 claims + 6 payload attempts + 6 records + 1 locator, every attempt counted.
-        assert report.counts.s3_operations == 19 == len(scenario.s3.calls)
+        # 1 reservation + 6 claims + 6 payload attempts + 6 records + 1 locator; every
+        # attempt counted.
+        assert report.counts.s3_operations == 20 == len(scenario.s3.calls)
 
 
 class TestRefusalsBeforeAnyDataPlaneCall:
@@ -536,7 +556,9 @@ class TestRefusalsBeforeAnyDataPlaneCall:
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.REFUSED_CREDENTIAL
         assert report.halt is pp.ProcessingHalt.CREDENTIAL_REFUSED
-        assert scenario.data_plane_calls() == (1, 0, 0) and report.locator is None
+        # The reservation was written before the credential was asked for; nothing else was.
+        assert scenario.data_plane_calls() == (1, 0, 1) and report.locator is None
+        assert report.reservation is PayloadDisposition.WRITTEN
         _assert_counts_match(scenario, report)
 
 
@@ -555,7 +577,7 @@ class TestHalts:
         assert report.completed_requests == 2 and report.planned_requests == 6
         # The failed request was issued and counted; nothing after it was.
         assert report.counts.provider_requests == 3 == len(scenario.provider.calls)
-        assert report.counts.s3_operations == 2 * 3 + 1
+        assert report.counts.s3_operations == 1 + 2 * 3 + 1
         locator = self._partial_locator(scenario)
         assert locator["completeness"] == "PARTIAL" and locator["completed_requests"] == 2
         assert (
@@ -590,25 +612,27 @@ class TestHalts:
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.HALTED
         assert report.halt is pp.ProcessingHalt.RESPONSE_TOO_LARGE
-        assert report.completed_requests == 1 and report.counts.s3_operations == 3 + 1
+        assert report.completed_requests == 1 and report.counts.s3_operations == 1 + 3 + 1
 
     def test_a_conditional_write_conflict_on_a_claim_halts_as_a_conflict(self) -> None:
+        """A claim name occupied by something other than this run's reservation guard."""
         scenario = Scenario()
-        first = scenario.run()
-        assert first.status is pp.AcquisitionStatus.COMPLETED
-        # A second run under the same (spent) identity, against the same store: the very
-        # first claim name is occupied, and the run halts with nothing else written.
-        second = Scenario()
-        second.s3 = scenario.s3
-        report = second.run()
+        scenario.run()
+        claim_key = next(
+            k
+            for k in scenario.s3.objects
+            if k.startswith("bronze/_production_claims/")
+            and "/runs/" not in k
+            and k.endswith(".00.json")
+        )
+        fresh = Scenario()
+        fresh.s3.objects[claim_key] = b"occupant"
+        report = fresh.run()
         assert report.status is pp.AcquisitionStatus.HALTED
         assert report.halt is pp.ProcessingHalt.PUBLICATION_CONFLICT
         assert report.completed_requests == 0 and report.publication_state_unknown is False
-        assert report.counts.s3_operations == 1 + 1  # the claim attempt, then the locator attempt
-        assert (
-            report.locator is not None
-            and report.locator.status is LocatorPublicationStatus.NAME_OCCUPIED
-        )
+        # reservation, the claim attempt, then the PARTIAL locator attempt.
+        assert report.counts.s3_operations == 3
 
     def test_a_record_conflict_is_a_conflict_not_a_disposition(self) -> None:
         scenario = Scenario()
@@ -636,7 +660,7 @@ class TestHalts:
         self, code: str, halt: pp.ProcessingHalt, unknown: bool, locator_attempts: int
     ) -> None:
         scenario = Scenario()
-        scenario.s3.fail_after_calls = 4  # the second request's payload write
+        scenario.s3.fail_after_calls = 5  # the second request's payload write
         scenario.s3.fail_code = code
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.HALTED and report.halt is halt
@@ -646,7 +670,7 @@ class TestHalts:
         # then follows the accepted locator policy: transient results may be retried
         # up to three attempts, definitive and unclassified ones never.
         assert report.locator is not None and report.locator.attempts == locator_attempts
-        assert len(scenario.s3.calls) == 5 + locator_attempts
+        assert len(scenario.s3.calls) == 6 + locator_attempts
         _assert_counts_match(scenario, report)
         # Every later S3 call still fails, so the locator is never PUBLISHED.
         assert report.locator.status is not LocatorPublicationStatus.PUBLISHED
@@ -658,7 +682,8 @@ class TestHalts:
         assert report.status is pp.AcquisitionStatus.LOCATOR_NOT_PUBLISHED
         assert report.completed_requests == 6 and report.halt is None
         assert report.locator is not None and report.locator.attempts == 1
-        assert report.counts.s3_operations == 19
+        assert report.counts.s3_operations == 20
+        assert report.publication_state_unknown is False  # a refusal is a known state
 
     def test_locator_publication_uncertainty_is_reported_as_uncertainty(self) -> None:
         scenario = Scenario()
@@ -668,7 +693,9 @@ class TestHalts:
         assert report.locator is not None
         assert report.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
         # An unclassified result is never retried (accepted locator policy).
-        assert report.locator.attempts == 1 and report.counts.s3_operations == 19
+        assert report.locator.attempts == 1 and report.counts.s3_operations == 20
+        # Finding 3: an ambiguous locator publication is uncertain publication state.
+        assert report.publication_state_unknown is True and report.halt is None
 
     def test_a_transient_locator_failure_is_retried_within_the_accepted_budget(self) -> None:
         scenario = Scenario()
@@ -678,7 +705,8 @@ class TestHalts:
         # the run does not complete. Bronze writes were never retried.
         assert report.status is pp.AcquisitionStatus.LOCATOR_NOT_PUBLISHED
         assert report.locator is not None and report.locator.attempts == 3
-        assert report.counts.s3_operations == 18 + 3 == len(scenario.s3.calls)
+        assert report.counts.s3_operations == 19 + 3 == len(scenario.s3.calls)
+        assert report.publication_state_unknown is False
 
     def test_an_occupied_locator_name_is_reported_and_never_adopted(self) -> None:
         scenario = Scenario()
@@ -701,6 +729,382 @@ class TestHalts:
         assert report.halt is pp.ProcessingHalt.DEADLINE_EXHAUSTED
         assert report.completed_requests < 6
         assert report.counts.provider_requests == len(scenario.provider.calls)
+
+
+class TestExactRequestValidation:
+    """Finding 1: multi-window plans complete end to end and validate request by request."""
+
+    def _row_for(self, slice_doc: dict[str, Any]) -> LedgerRow:
+        return LedgerRow(
+            run_identity=RUN_ID,
+            slice=parse_slice(slice_doc),
+            plan_digest=compiled_digest(slice_doc),
+            outcome="COMPLETED",
+            launched_at=NOW,
+            completed_at=NOW + timedelta(hours=1),
+        )
+
+    def _complete(self, slice_doc: dict[str, Any], count: int) -> tuple[Scenario, dict[str, Any]]:
+        scenario = Scenario(responses=[f"synthetic-{i}".encode() for i in range(count)])
+        constants = constants_for(ACQ)
+        scenario.input_bytes = encode(
+            acquisition_input_document(slice=slice_doc, plan_digest=compiled_digest(slice_doc))
+        )
+        scenario.ssm.values[constants.input_parameter] = scenario.input_bytes
+        scenario.ssm.values[constants.release_parameter] = build_release_document(
+            actor=ACQ,
+            task_arn=TASK_ARN,
+            task_definition_arn=revision_arn(ACQ),
+            identity=RUN_ID,
+            input_digest=input_digest(scenario.input_bytes),
+            network_interface_id=INTERFACE_ID,
+            subnet_id=SUBNET_ID,
+            verified_at=NOW - timedelta(seconds=10),
+        )
+        report = scenario.run()
+        assert report.status is pp.AcquisitionStatus.COMPLETED, report
+        assert report.completed_requests == count
+        locator = decode_run_locator(scenario.s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"])
+        return scenario, locator
+
+    def _reader(self, scenario: Scenario) -> ProductionLocatorReader:
+        class GetOnly:
+            def get_object(self, **kwargs: Any) -> Any:
+                class Body:
+                    def __init__(self, payload: bytes) -> None:
+                        self._p, self._o = payload, 0
+
+                    def read(self, size: int) -> bytes:
+                        chunk = self._p[self._o : self._o + size]
+                        self._o += len(chunk)
+                        return chunk
+
+                if kwargs["Key"] not in scenario.s3.objects:
+                    raise FakeClientError("NoSuchKey")
+                return {"Body": Body(scenario.s3.objects[kwargs["Key"]])}
+
+        return ProductionLocatorReader(client=GetOnly(), licensed_bucket=BUCKET)
+
+    def test_a_multi_day_stocks_acquisition_completes_and_the_build_reader_admits_it(self) -> None:
+        slice_doc = slice_document(
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+        )
+        scenario, locator = self._complete(slice_doc, 6)
+        windows = [e["request"]["window"] for e in locator["entries"]]
+        assert windows == [
+            "2025-09-01/2025-09-01",
+            "2025-09-01/2025-09-01",
+            "2025-09-02/2025-09-02",
+            "2025-09-02/2025-09-02",
+            "2025-09-03/2025-09-03",
+            "2025-09-03/2025-09-03",
+        ]
+        assert [e["request"]["page_offset"] for e in locator["entries"]] == [0, 10000] * 3
+        row = self._row_for(slice_doc)
+        validated = validate_run_locator(locator, run_id=RUN_ID, ledger_row=row)
+        assert [entry.window for entry in validated.entries] == windows
+        reader = self._reader(scenario)
+        read_back = reader.read_run_locator(run_id=RUN_ID, ledger_row=row)
+        assert len(list(reader.iter_locator_objects(read_back))) == 6
+        assert reader.get_object_count == 13
+
+    def test_a_multi_window_actions_acquisition_completes_and_the_build_reader_admits_it(
+        self,
+    ) -> None:
+        slice_doc = slice_document(
+            datasets=["actions"], windows={"actions": "1998-01-01/2000-06-30"}, request_count=6
+        )
+        scenario, locator = self._complete(slice_doc, 6)
+        windows = [e["request"]["window"] for e in locator["entries"]][::2]
+        assert windows == [
+            "1998-01-01/1999-01-01",
+            "1999-01-02/2000-01-02",
+            "2000-01-03/2000-06-30",
+        ]
+        row = self._row_for(slice_doc)
+        validate_run_locator(locator, run_id=RUN_ID, ledger_row=row)
+        reader = self._reader(scenario)
+        assert (
+            len(
+                list(
+                    reader.iter_locator_objects(
+                        reader.read_run_locator(run_id=RUN_ID, ledger_row=row)
+                    )
+                )
+            )
+            == 6
+        )
+
+    @pytest.mark.parametrize(
+        ("mutate", "defect"),
+        [
+            (
+                lambda d: d["entries"][3]["request"].__setitem__("window", "2025-09-01/2025-09-01"),
+                "REQUEST_COORDINATES_MISMATCH",
+            ),
+            (
+                lambda d: d["entries"][3]["request"].__setitem__("page_offset", 20000),
+                "REQUEST_COORDINATES_MISMATCH",
+            ),
+            (
+                lambda d: d["entries"][3]["request"].__setitem__("page_limit", 5000),
+                "REQUEST_COORDINATES_MISMATCH",
+            ),
+            (lambda d: d["entries"].__setitem__(3, dict(d["entries"][2])), "REQUEST_DUPLICATED"),
+            (
+                lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 5)),
+                "REQUEST_COUNT_MISMATCH",
+            ),
+        ],
+        ids=["window", "offset", "limit", "duplicate", "missing"],
+    )
+    def test_altered_or_missing_requests_are_refused_before_any_referenced_object_is_read(
+        self, mutate: Any, defect: str
+    ) -> None:
+        slice_doc = slice_document(
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+        )
+        scenario, locator = self._complete(slice_doc, 6)
+        mutate(locator)
+        scenario.s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"] = encode(locator)
+        reader = self._reader(scenario)
+        with pytest.raises(RunLocatorError) as info:
+            reader.read_run_locator(run_id=RUN_ID, ledger_row=self._row_for(slice_doc))
+        assert info.value.defect.value == defect
+        assert reader.get_object_count == 1  # the locator itself; nothing it names
+
+    def test_a_dataset_altered_in_an_entry_is_refused(self) -> None:
+        # The default slice: ordinal 0 is actions. Restate it as tickers with consistent keys.
+        scenario = Scenario()
+        scenario.run()
+        locator = decode_run_locator(scenario.s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"])
+        from fixtures.production_runtime import PAYLOADS, RECORDS, locator_entry
+
+        locator["entries"][0] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        row = LedgerRow(
+            run_identity=RUN_ID,
+            slice=parse_slice(slice_document()),
+            plan_digest=PLAN_DIGEST,
+            outcome="COMPLETED",
+            launched_at=NOW,
+            completed_at=NOW + timedelta(hours=1),
+        )
+        with pytest.raises(RunLocatorError) as info:
+            validate_run_locator(locator, run_id=RUN_ID, ledger_row=row)
+        assert info.value.defect.value == "REQUEST_COORDINATES_MISMATCH"
+
+
+class TestRunReservation:
+    """Finding 2: a payload-independent, durable, conditional run reservation."""
+
+    RESERVATION: Final = f"bronze/_production_claims/runs/{RUN_ID}.json"
+
+    def test_the_reservation_is_the_first_write_and_precedes_the_credential(self) -> None:
+        scenario = Scenario()
+        order: list[str] = []
+        original_get = scenario.secrets.get_secret_value
+        original_put = scenario.s3.put_object
+
+        def get_secret(**kwargs: Any) -> Any:
+            order.append("secret")
+            return original_get(**kwargs)
+
+        def put(**kwargs: Any) -> Any:
+            order.append("put:" + ("reservation" if "/runs/" in kwargs["Key"] else "other"))
+            return original_put(**kwargs)
+
+        scenario.secrets.get_secret_value = get_secret  # type: ignore[method-assign]
+        scenario.s3.put_object = put  # type: ignore[method-assign]
+        report = scenario.run()
+        assert report.status is pp.AcquisitionStatus.COMPLETED
+        assert order[:2] == ["put:reservation", "secret"]
+        assert scenario.s3.calls[0] == self.RESERVATION
+        document = decode_run_locator(scenario.s3.objects[self.RESERVATION])  # a closed JSON object
+        assert document["contract_id"] == pp.RESERVATION_CONTRACT_ID
+        assert document["run_id"] == RUN_ID and document["plan_digest"] == PLAN_DIGEST
+        assert set(document) == {
+            "schema_version",
+            "contract_id",
+            "run_id",
+            "plan_digest",
+            "acquisition_mode",
+            "reserved_at",
+        }
+
+    @pytest.mark.parametrize(
+        "responses",
+        [
+            [f"synthetic-payload-{i}".encode() for i in range(6)],  # identical payloads
+            [f"changed-payload-{i}".encode() for i in range(6)],  # changed payloads
+        ],
+        ids=["identical", "changed"],
+    )
+    def test_a_spent_identity_is_refused_at_the_reservation_before_any_provider_request(
+        self, responses: list[bytes]
+    ) -> None:
+        first = Scenario()
+        assert first.run().status is pp.AcquisitionStatus.COMPLETED
+        second = Scenario(responses=responses)
+        second.adopt_store(first.s3)
+        report = second.run()
+        assert report.status is pp.AcquisitionStatus.REFUSED_RESERVATION
+        assert report.halt is pp.ProcessingHalt.RESERVATION_CONFLICT
+        assert report.reservation is None and report.locator is None
+        assert second.data_plane_calls() == (0, 0, 1)
+        assert report.counts.s3_operations == 1 and report.publication_state_unknown is False
+        # The winning run's objects, locator included, are untouched.
+        assert first.s3.objects == {k: v for k, v in first.s3.objects.items()}
+        assert len(first.s3.objects) == 20
+
+    def test_a_changed_plan_under_the_same_identity_is_refused_at_the_reservation(self) -> None:
+        first = Scenario()
+        assert first.run().status is pp.AcquisitionStatus.COMPLETED
+        slice_doc = slice_document(
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+        )
+        second = Scenario()
+        constants = constants_for(ACQ)
+        second.input_bytes = encode(
+            acquisition_input_document(slice=slice_doc, plan_digest=compiled_digest(slice_doc))
+        )
+        second.ssm.values[constants.input_parameter] = second.input_bytes
+        second.ssm.values[constants.release_parameter] = build_release_document(
+            actor=ACQ,
+            task_arn=TASK_ARN,
+            task_definition_arn=revision_arn(ACQ),
+            identity=RUN_ID,
+            input_digest=input_digest(second.input_bytes),
+            network_interface_id=INTERFACE_ID,
+            subnet_id=SUBNET_ID,
+            verified_at=NOW - timedelta(seconds=10),
+        )
+        second.adopt_store(first.s3)
+        report = second.run()
+        assert report.status is pp.AcquisitionStatus.REFUSED_RESERVATION
+        assert report.halt is pp.ProcessingHalt.RESERVATION_CONFLICT
+        assert second.data_plane_calls() == (0, 0, 1)
+
+    def test_concurrent_contenders_exactly_one_wins_and_the_loser_publishes_nothing(self) -> None:
+        store = FakeS3Put()
+        winner, loser = Scenario(), Scenario(responses=[b"other-bytes"] * 6)
+        winner.adopt_store(store)
+        loser.adopt_store(store)
+        first = winner.run()
+        loser.adopt_store(store)  # count only the loser's own calls from here
+        second = loser.run()
+        assert first.status is pp.AcquisitionStatus.COMPLETED
+        assert second.status is pp.AcquisitionStatus.REFUSED_RESERVATION
+        assert loser.data_plane_calls() == (0, 0, 1)
+        locator = decode_run_locator(store.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"])
+        assert [e["payload_sha256"] for e in locator["entries"]] == [
+            __import__("hashlib").sha256(p).hexdigest() for p in winner.provider.responses
+        ]
+
+    @pytest.mark.parametrize(
+        ("code", "halt", "unknown"),
+        [
+            ("InternalError", pp.ProcessingHalt.RESERVATION_STATE_UNKNOWN, True),
+            ("ConditionalRequestConflict", pp.ProcessingHalt.RESERVATION_STATE_UNKNOWN, True),
+            ("SomethingUnrecognised", pp.ProcessingHalt.RESERVATION_STATE_UNKNOWN, True),
+            ("AccessDenied", pp.ProcessingHalt.RESERVATION_REFUSED, False),
+        ],
+    )
+    def test_an_ambiguous_or_refused_reservation_stops_with_uncertainty_preserved(
+        self, code: str, halt: pp.ProcessingHalt, unknown: bool
+    ) -> None:
+        scenario = Scenario()
+        scenario.s3.fail_on[self.RESERVATION] = code
+        report = scenario.run()
+        assert report.status is pp.AcquisitionStatus.REFUSED_RESERVATION and report.halt is halt
+        assert report.publication_state_unknown is unknown
+        assert report.reservation is None and report.locator is None
+        # One attempt, no retry, no provider request, no credential.
+        assert scenario.data_plane_calls() == (0, 0, 1)
+        _assert_counts_match(scenario, report)
+
+    def test_a_reserved_identity_stays_spent_when_later_processing_fails(self) -> None:
+        first = Scenario()
+        first.provider.fail_at = 2
+        report = first.run()
+        assert report.status is pp.AcquisitionStatus.HALTED
+        assert report.reservation is PayloadDisposition.WRITTEN
+        assert self.RESERVATION in first.s3.objects
+        retry = Scenario()
+        retry.adopt_store(first.s3)
+        again = retry.run()
+        assert again.status is pp.AcquisitionStatus.REFUSED_RESERVATION
+        assert again.halt is pp.ProcessingHalt.RESERVATION_CONFLICT
+        assert retry.data_plane_calls() == (0, 0, 1)
+
+    def test_the_reservation_name_is_payload_independent_and_inside_the_claim_grant(self) -> None:
+        from kalpamani.data.production.sharadar.keys import run_reservation_key
+
+        a = run_reservation_key(run_id=RUN_ID, payload=b"{}")
+        b = run_reservation_key(run_id=RUN_ID, payload=b'{"other":1}')
+        assert a.logical_key == b.logical_key == f"licensed/{self.RESERVATION}"
+        assert a.content_sha256 != b.content_sha256
+
+
+class TestFinalUncertainty:
+    """Finding 3: an ambiguous locator publication is uncertain publication state."""
+
+    LOCATOR: Final = f"bronze/sharadar/_indexes/{RUN_ID}.json"
+
+    def test_successful_bronze_then_ambiguous_locator(self) -> None:
+        scenario = Scenario()
+        scenario.s3.fail_on[self.LOCATOR] = "SomethingUnrecognised"
+        report = scenario.run()
+        assert report.status is pp.AcquisitionStatus.LOCATOR_STATE_UNKNOWN
+        assert report.halt is None and report.completed_requests == 6
+        assert (
+            report.locator is not None
+            and report.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
+        )
+        assert report.publication_state_unknown is True
+
+    @pytest.mark.parametrize("earlier", ["provider", "publication"])
+    def test_earlier_failure_then_ambiguous_locator_keeps_both(self, earlier: str) -> None:
+        scenario = Scenario()
+        if earlier == "provider":
+            scenario.provider.fail_at = 3
+        else:
+            scenario.s3.fail_after_calls = 5
+            scenario.s3.fail_code = "AccessDenied"
+        scenario.s3.fail_on[self.LOCATOR] = "SomethingUnrecognised"
+        report = scenario.run()
+        assert report.status is pp.AcquisitionStatus.HALTED
+        expected = (
+            pp.ProcessingHalt.PROVIDER_FAILURE
+            if earlier == "provider"
+            else pp.ProcessingHalt.PUBLICATION_REFUSED
+        )
+        assert report.halt is expected  # the primary halt is preserved
+        assert (
+            report.locator is not None
+            and report.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
+        )
+        assert report.publication_state_unknown is True  # and so is the locator's uncertainty
+
+    def test_known_locator_success_and_refusal_controls(self) -> None:
+        ok = Scenario().run()
+        assert ok.status is pp.AcquisitionStatus.COMPLETED and ok.publication_state_unknown is False
+        refused = Scenario()
+        refused.s3.fail_on[self.LOCATOR] = "AccessDenied"
+        report = refused.run()
+        assert report.status is pp.AcquisitionStatus.LOCATOR_NOT_PUBLISHED
+        assert report.publication_state_unknown is False
+        # An earlier unknown state is never cleared by a later known refusal.
+        halted = Scenario()
+        halted.s3.fail_after_calls = 5
+        halted.s3.fail_code = "InternalError"
+        halted.s3.fail_on[self.LOCATOR] = "AccessDenied"
+        result = halted.run()
+        assert result.halt is pp.ProcessingHalt.PUBLICATION_STATE_UNKNOWN
+        assert (
+            result.locator is not None
+            and result.locator.status is LocatorPublicationStatus.NOT_PUBLISHED
+        )
+        assert result.publication_state_unknown is True
 
 
 class TestCompatibility:
@@ -775,6 +1179,7 @@ class TestCompatibility:
                 status=pp.AcquisitionStatus.COMPLETED,
                 bootstrap=bootstrap,
                 halt=None,
+                reservation=PayloadDisposition.WRITTEN,
                 completed_requests=5,
                 planned_requests=6,
                 payloads_written=5,

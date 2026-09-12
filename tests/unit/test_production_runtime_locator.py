@@ -26,6 +26,7 @@ from fixtures.production_runtime import (
     ledger_row_document,
     locator_document,
     locator_entry,
+    slice_document,
 )
 from kalpamani.data.contracts.errors import UnsafePathComponentError
 from kalpamani.data.contracts.paths import RESERVED_SEGMENTS, path_segment
@@ -406,10 +407,63 @@ class TestLocatorClauses:
 
     def test_a_missing_or_duplicated_ordinal_is_refused(self) -> None:
         document = locator_document()
-        # Entries 0 and 2 carry identical payloads; swapping their ordinals keeps every
-        # key consistent with its own leaf and leaves the ordinal set inconsistent.
+        # Entry 2 restated as ordinal 0 with the tickers coordinates: its coordinates are
+        # not the compiled request at ordinal 0, which is the first clause to fire.
         document["entries"][2] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+        # Two entries that both are ordinal 0, coordinates and all: a duplicated request.
+        document = locator_document()
+        document["entries"][2] = dict(document["entries"][0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_DUPLICATED
+        # An ordinal outside the compiled plan.
+        document = locator_document()
+        document["entries"][5] = locator_entry(
+            6, "tickers", PAYLOADS[1], RECORDS[1], page_offset=30000
+        )
         assert _refused(document) is pl.RunLocatorDefect.ORDINAL_INCONSISTENT
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda e: e["request"].__setitem__("window", "2025-01-01/2025-06-30"),
+            lambda e: e["request"].__setitem__("page_offset", 555),
+            lambda e: e["request"].__setitem__("page_limit", 9999),
+            lambda e: e["request"].__setitem__("window", "SNAPSHOT"),
+        ],
+        ids=["window", "offset", "limit", "snapshot-for-windowed"],
+    )
+    def test_an_entry_whose_coordinates_are_not_the_compiled_requests_is_refused(
+        self, mutate: Any
+    ) -> None:
+        """Containment in the slice's date range is not enough: the entry must equal the
+        compiled request at its ordinal exactly."""
+        document = locator_document()
+        mutate(document["entries"][0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+
+    def test_a_dataset_swapped_between_entries_is_refused(self) -> None:
+        document = locator_document()
+        # Ordinal 0 is an actions request; restate it as a tickers request with keys
+        # consistent for tickers -- the coordinates no longer match the compiled plan.
+        document["entries"][0] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+
+    def test_a_ledger_row_whose_slice_the_plan_cannot_compile_is_refused(self) -> None:
+        row = _row()
+        broken = LedgerRow(
+            run_identity=row.run_identity,
+            slice=parse_slice(slice_document(request_count=5)),
+            plan_digest=row.plan_digest,
+            outcome=row.outcome,
+            launched_at=row.launched_at,
+            completed_at=row.completed_at,
+        )
+        document = locator_document()
+        document["slice"] = slice_document(request_count=5)
+        document["planned_requests"] = 5
+        document["completed_requests"] = 5
+        document["entries"] = document["entries"][:5]
+        assert _refused(document, row=broken) is pl.RunLocatorDefect.PLAN_NOT_COMPILABLE
 
     def test_a_request_count_disagreeing_with_the_slice_is_refused(self) -> None:
         document = locator_document()
@@ -418,10 +472,10 @@ class TestLocatorClauses:
         document["planned_requests"] = 1
         assert _refused(document) is pl.RunLocatorDefect.REQUEST_COUNT_MISMATCH
 
-    def test_a_window_disagreeing_with_the_slice_is_refused(self) -> None:
+    def test_a_window_disagreeing_with_the_compiled_request_is_refused(self) -> None:
         document = locator_document()
         document["entries"][0]["request"]["window"] = "1999-01-01/2026-09-11"
-        assert _refused(document) is pl.RunLocatorDefect.SLICE_MISMATCH
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
 
     # Clause 4: completeness.
     def test_a_partial_locator_grants_no_build(self) -> None:
@@ -509,6 +563,25 @@ class TestTheReader:
         with pytest.raises(LicensedReadError) as info:
             reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
         assert info.value.failure is ReadFailure.TOO_LARGE
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda d: d["entries"][0]["request"].__setitem__("page_offset", 555),
+            lambda d: d["entries"][0]["request"].__setitem__("window", "2025-01-01/2025-06-30"),
+            lambda d: d["entries"].__setitem__(2, dict(d["entries"][0])),
+            lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 5)),
+        ],
+        ids=["offset", "window", "duplicate", "missing-request"],
+    )
+    def test_the_reader_refuses_before_reading_any_referenced_object(self, mutate: Any) -> None:
+        s3, reader = self._store()
+        document = locator_document()
+        mutate(document)
+        s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"] = encode(document)
+        with pytest.raises(pl.RunLocatorError):
+            reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
+        assert len(s3.calls) == 1  # the by-name locator read, and nothing it names
 
     def test_a_refused_locator_reads_no_object(self) -> None:
         s3, reader = self._store()

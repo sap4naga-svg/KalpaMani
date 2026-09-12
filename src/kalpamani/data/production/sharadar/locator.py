@@ -17,10 +17,13 @@ refusal, and a refused locator reads nothing further:
    this locator's own run identity and the entry's own ordinal. No claim, index,
    qualification, general-Bronze, Silver, Gold or manifest key is admissible,
    whatever IAM would permit.
-3. **Request scope** -- the completed-request count equals the slice's request
-   count; each ordinal appears exactly once; every payload key rebuilds exactly
-   from the recorded dataset and digest; byte counts are within the slice's
-   response ceiling.
+3. **Request scope** -- the plan is **recompiled from the ledger row's slice and
+   mode** and its digest must equal the row's; every entry's dataset, window,
+   page offset and page limit must equal the compiled request at that ordinal
+   exactly (never merely lie inside the slice's date range); each ordinal appears
+   exactly once and no two entries share coordinates; the completed-request count
+   equals the plan's; every payload key rebuilds exactly from the recorded dataset
+   and digest; byte counts are within the plan's response ceiling.
 4. **Completeness** -- ``COMPLETE``, ``publication_state_unknown = false``, a known
    schema version, and a size within the ceiling (checked before decoding).
 
@@ -60,6 +63,11 @@ from kalpamani.data.production.sharadar.keys import (
     request_ordinal_segment,
     run_locator_key_segments,
     run_locator_logical_key,
+)
+from kalpamani.data.production.sharadar.plan import (
+    CompiledPlan,
+    ProductionPlanError,
+    compile_plan,
 )
 from kalpamani.data.qualify.sharadar.read import (
     MAX_READ_BYTES,
@@ -165,6 +173,9 @@ class RunLocatorDefect(StrEnum):
     DATASET_NOT_IN_SLICE = "DATASET_NOT_IN_SLICE"
     REQUEST_COUNT_MISMATCH = "REQUEST_COUNT_MISMATCH"
     ORDINAL_INCONSISTENT = "ORDINAL_INCONSISTENT"
+    PLAN_NOT_COMPILABLE = "PLAN_NOT_COMPILABLE"
+    REQUEST_COORDINATES_MISMATCH = "REQUEST_COORDINATES_MISMATCH"
+    REQUEST_DUPLICATED = "REQUEST_DUPLICATED"
     KEY_DIGEST_MISMATCH = "KEY_DIGEST_MISMATCH"
     BYTES_OVER_CEILING = "BYTES_OVER_CEILING"
     INCOMPLETE = "INCOMPLETE"
@@ -276,7 +287,7 @@ def _allowed_prefix(key: str, *, dataset: str, run_id: str, ordinal: str, kind: 
         raise _refuse(RunLocatorDefect.PREFIX_NOT_ALLOWED) from None
 
 
-def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
+def _entry(raw: object, *, covered: Slice, plan: CompiledPlan, run_id: str) -> RunLocatorEntry:
     if type(raw) is not dict or set(raw) != ENTRY_FIELDS:
         raise _refuse(RunLocatorDefect.ENTRY_MALFORMED) from None
     ordinal = exact_int(raw["ordinal"])
@@ -323,8 +334,19 @@ def _entry(raw: object, *, covered: Slice, run_id: str) -> RunLocatorEntry:
     _allowed_prefix(
         record_key, dataset=dataset, run_id=run_id, ordinal=ordinal_segment, kind="record"
     )
-    if dict(covered.windows)[dataset] != window:
-        raise _refuse(RunLocatorDefect.SLICE_MISMATCH) from None
+    # Clause 3, exactly: the entry's coordinates are the compiled request's at this
+    # ordinal -- dataset, window, page offset and page limit -- not merely a window
+    # inside the slice's date range.
+    if not 0 <= ordinal < plan.request_count:
+        raise _refuse(RunLocatorDefect.ORDINAL_INCONSISTENT) from None
+    compiled = plan.requests[ordinal]
+    if (dataset, window, page_offset, page_limit) != (
+        compiled.dataset,
+        compiled.window,
+        compiled.page_offset,
+        compiled.page_limit,
+    ):
+        raise _refuse(RunLocatorDefect.REQUEST_COORDINATES_MISMATCH) from None
 
     # Clause 3, per entry: the key embeds exactly the recorded digest, rebuilt
     # through the one production key builder rather than parsed out of the string.
@@ -443,9 +465,24 @@ def validate_run_locator(
     if covered.canonical() != ledger_row.slice.canonical():
         raise _refuse(RunLocatorDefect.SLICE_MISMATCH) from None
 
+    # The authorized plan, recompiled from the ledger row's own slice and mode and
+    # held to the row's digest. What the locator claims to have completed is then
+    # compared against this plan's requests, never against the slice's date range.
+    try:
+        plan = compile_plan(ledger_row.slice, acquisition_mode=AcquisitionMode(mode))
+    except (ProductionPlanError, ValueError):
+        raise _refuse(RunLocatorDefect.PLAN_NOT_COMPILABLE) from None
+    if plan.digest != ledger_row.plan_digest:
+        raise _refuse(RunLocatorDefect.PLAN_DIGEST_MISMATCH) from None
+
     # Clauses 2 and 3, per entry, then the counts.
-    parsed = tuple(_entry(raw, covered=covered, run_id=run_id) for raw in entries)
-    if not (planned == completed == covered.request_count == len(parsed)):
+    parsed = tuple(_entry(raw, covered=covered, plan=plan, run_id=run_id) for raw in entries)
+    coordinates = [
+        (entry.dataset, entry.window, entry.page_offset, entry.page_limit) for entry in parsed
+    ]
+    if len(set(coordinates)) != len(coordinates):
+        raise _refuse(RunLocatorDefect.REQUEST_DUPLICATED) from None
+    if not (planned == completed == plan.request_count == len(parsed)):
         raise _refuse(RunLocatorDefect.REQUEST_COUNT_MISMATCH) from None
     if sorted(entry.ordinal for entry in parsed) != list(range(len(parsed))):
         raise _refuse(RunLocatorDefect.ORDINAL_INCONSISTENT) from None
