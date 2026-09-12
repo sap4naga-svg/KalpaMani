@@ -47,7 +47,8 @@ COMPOSITION = PROVIDER_PACKAGE / "composition.py"
 #: itself, around its own write-only publisher. **ADR-0017's root is unchanged and
 #: is not called by it.**
 EMPIRICAL_ACQUISITION = SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py"
-#: The third construction site, proposed by ADR-0041: the production provider adapter
+#: The third construction site, named by ADR-0041 (accepted on the PR #98 merge): the
+#: production provider adapter
 #: builds the accepted client around an injected transport and a caller-supplied
 #: credential, one attempt, no pacing of its own. Named here so a fourth site fails.
 PRODUCTION_PROVIDER = SRC / "kalpamani" / "data" / "production" / "sharadar" / "provider.py"
@@ -263,7 +264,7 @@ def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests(
 def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
     """The client needs a credential and a transport, so building one *is* the
     composition root -- and ADR-0014 put it in one module, ADR-0019 in a second, and
-    ADR-0041 (proposed) names a third: the production provider adapter.
+    ADR-0041 (accepted on the PR #98 merge) names a third: the production provider adapter.
 
     The credential is still a parameter in all three. Constructing a client from an
     injected credential sends nothing; what would send something is a credential

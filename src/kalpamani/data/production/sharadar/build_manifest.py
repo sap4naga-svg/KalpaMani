@@ -289,6 +289,7 @@ def derive_run_id(
         "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
         "action_selection_version": ACTION_SELECTION_VERSION,
         "resolution_policy_version": resolved.policy_version,
+        "pagination_policy_version": silver.pagination.policy_version,
         "schema_digests": {
             dataset: list(silver.by_dataset(dataset).schema_digests)
             for dataset in ("tickers", "stocks", "actions")
@@ -352,6 +353,7 @@ def build_manifest_document(
             "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
             "action_selection_version": ACTION_SELECTION_VERSION,
             "resolution_policy_version": resolved.policy_version,
+            "pagination_policy_version": silver.pagination.policy_version,
             "calendar_version": configuration.calendar.version,
             "quality_plan_version": gold.quality.plan_version,
             "evidence_version": resolved.evidence_version,
@@ -362,6 +364,7 @@ def build_manifest_document(
         "as_of": configuration.as_of.isoformat(),
         "resolution_map": [count.document() for count in resolved.counts],
         "served": [count.document() for count in gold.served],
+        "pagination": silver.pagination.document(),
         "identity": {
             dataset: {
                 "duplicate_rows": silver.by_dataset(dataset).duplicate_rows,

@@ -24,10 +24,17 @@ instant beside the earlier one. Two different contents for one key inside one
 acquisition run are a structural conflict, and blocking. Acquisitions are consumed in
 retrieval order, so revision sequences are deterministic for a given input set.
 
+**Pagination is admitted per group before anything is consolidated.** Every
+(run, dataset, window) group of parsed pages must be the one supported shape -- a first
+page below its limit and header-only later pages -- measured on raw row counts; a full
+first page, a data-bearing later page, an empty page before data, or a page over its
+limit refuses the input (:mod:`~kalpamani.data.production.sharadar.pagination`).
+
 **A completed acquisition is completion of its request plan, not proof of market
 coverage.** The rows normalized here are the rows the vendor delivered to those
 requests; the census and completeness checks say how much of the calendar they cover,
-and nothing here claims more.
+and nothing here claims more -- and an admitted page shape establishes neither vendor
+completeness nor snapshot consistency.
 """
 
 from __future__ import annotations
@@ -40,6 +47,12 @@ from typing import Any, Final
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER, SharadarDataset
 from kalpamani.data.production.sharadar.build_inputs import AcquiredPage, VerifiedBuildInputs
+from kalpamani.data.production.sharadar.pagination import (
+    PaginationDefect,
+    PaginationError,
+    PaginationSummary,
+    admit_pagination,
+)
 from kalpamani.data.qualify.sharadar.parser import ParsedPage, ParseError, parse_payload
 
 #: The Silver normalization version. Part of every manifest and of the build ``run_id``.
@@ -83,6 +96,9 @@ class SilverDefect(StrEnum):
     PAYLOAD_UNPARSEABLE = "PAYLOAD_UNPARSEABLE"
     SCHEMA_UNSTABLE = "SCHEMA_UNSTABLE"
     DELIVERY_TRUNCATED = "DELIVERY_TRUNCATED"
+    PAGINATION_UNSUPPORTED = "PAGINATION_UNSUPPORTED"
+    PAGINATION_INCONSISTENT = "PAGINATION_INCONSISTENT"
+    PAGE_OVER_LIMIT = "PAGE_OVER_LIMIT"
     ROW_CONFLICT_IN_RUN = "ROW_CONFLICT_IN_RUN"
     IDENTITY_SNAPSHOT_MISSING = "IDENTITY_SNAPSHOT_MISSING"
     ROW_KEY_MALFORMED = "ROW_KEY_MALFORMED"
@@ -255,6 +271,7 @@ class SilverLayer:
     stocks: SilverDataset
     actions: SilverDataset
     schemas_version: str
+    pagination: PaginationSummary
 
     def by_dataset(self, dataset: str) -> SilverDataset:
         """The dataset by its vendor name."""
@@ -298,15 +315,27 @@ def _parse(page: AcquiredPage, *, schemas: AcceptedSchemas) -> ParsedPage:
     return parsed
 
 
-def _check_truncation(pages: list[tuple[AcquiredPage, ParsedPage]]) -> None:
-    """The final page of every window must not be at the page limit."""
-    by_window: dict[tuple[str, str, str], list[tuple[AcquiredPage, ParsedPage]]] = {}
-    for page, parsed in pages:
-        by_window.setdefault((page.run_id, page.dataset, page.window), []).append((page, parsed))
-    for group in by_window.values():
-        last_page, last_parsed = max(group, key=lambda item: item[0].page_offset)
-        if last_parsed.row_count >= last_page.page_limit:
-            raise _refuse(SilverDefect.DELIVERY_TRUNCATED)
+#: The pagination gate's closed members, mapped one to one onto this module's. Total;
+#: a test asserts it, so a member added to the gate cannot escape into an unmapped raise.
+_PAGINATION_DEFECTS: Final[dict[PaginationDefect, SilverDefect]] = {
+    PaginationDefect.PAGE_OVER_LIMIT: SilverDefect.PAGE_OVER_LIMIT,
+    PaginationDefect.PAGINATION_INCONSISTENT: SilverDefect.PAGINATION_INCONSISTENT,
+    PaginationDefect.DELIVERY_TRUNCATED: SilverDefect.DELIVERY_TRUNCATED,
+    PaginationDefect.PAGINATION_UNSUPPORTED: SilverDefect.PAGINATION_UNSUPPORTED,
+}
+
+
+def _admit_pages(pages: list[tuple[AcquiredPage, ParsedPage]]) -> PaginationSummary:
+    """The pagination gate: every (run, dataset, window) group in the supported shape.
+
+    Run after integrity, provenance and parsing, and **before** symbol mapping, revision
+    consolidation and any deduplication, on raw parsed row counts. A refused group
+    refuses the whole input.
+    """
+    try:
+        return admit_pagination(pages)
+    except PaginationError as error:
+        raise _refuse(_PAGINATION_DEFECTS[error.defect]) from None
 
 
 class _Versions:
@@ -564,7 +593,7 @@ def normalize(inputs: VerifiedBuildInputs, *, schemas: AcceptedSchemas) -> Silve
     }
     for page in inputs.pages():
         parsed_pages[page.dataset].append((page, _parse(page, schemas=schemas)))
-    _check_truncation([item for pages in parsed_pages.values() for item in pages])
+    pagination = _admit_pages([item for pages in parsed_pages.values() for item in pages])
     tickers_pages = parsed_pages[SharadarDataset.TICKERS.value]
     mapping = _snapshot_mapping(tickers_pages)
     return SilverLayer(
@@ -582,6 +611,7 @@ def normalize(inputs: VerifiedBuildInputs, *, schemas: AcceptedSchemas) -> Silve
             key_columns=("date", "action"),
         ),
         schemas_version=schemas.version,
+        pagination=pagination,
     )
 
 

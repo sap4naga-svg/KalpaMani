@@ -661,7 +661,7 @@ class TestNormalizationRefusals:
         report = _run_1_build(_store_with_run_1(responses))
         assert report.status is bp.BuildStatus.COMPLETED, report.defect
 
-    def test_a_final_page_at_the_limit_is_truncation(self) -> None:
+    def test_a_full_first_page_is_truncation_and_a_later_data_page_is_unsupported(self) -> None:
         responses = responses_for_run(1)
         filler: list[tuple[str, ...]] = [
             (
@@ -680,10 +680,17 @@ class TestNormalizationRefusals:
             )
             for i in range(10_000)
         ]
-        responses[("tickers", "SNAPSHOT", 30000)] = csv(TICKERS_HEADER, filler)
+        # A full page at the first offset is truncation uncertainty; a data-bearing page
+        # at a later offset is the unsupported multi-page delivery, whatever it holds.
+        responses[("tickers", "SNAPSHOT", 0)] = csv(TICKERS_HEADER, filler)
         report = _run_1_build(_store_with_run_1(responses))
         assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
         assert report.defect == sv.SilverDefect.DELIVERY_TRUNCATED.value
+        responses = responses_for_run(1)
+        responses[("tickers", "SNAPSHOT", 30000)] = csv(TICKERS_HEADER, filler)
+        report = _run_1_build(_store_with_run_1(responses))
+        assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
+        assert report.defect == sv.SilverDefect.PAGINATION_UNSUPPORTED.value
 
     def test_stocks_without_a_same_run_snapshot_cannot_be_identified(self) -> None:
         store = FakeS3Store()
