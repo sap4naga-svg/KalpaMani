@@ -40,6 +40,7 @@ PROPOSED_MEMBERS: Final = (
     ("UniverseExclusionReason", "UNRESOLVED_CORPORATE_ACTION"),
     ("UniverseExclusionReason", "ATTRIBUTE_UNAVAILABLE"),
     ("ProviderBoundDerivation", "VENDOR_DATE_UPPER_BOUND"),
+    ("ProviderBoundDerivation", "VERSION_EVIDENCE_UPPER_BOUND"),
 )
 
 EVALUATIVE_TOKENS: Final = (
@@ -165,6 +166,14 @@ def test_the_availability_rules_are_ordered_and_gated() -> None:
     # P-3 needs version-specific evidence; a schedule alone never dates a retrieved version.
     assert "version-specific evidence" in ADR_FLAT
     assert "do not establish that the version retrieved today is that version" in ADR_FLAT
+    # P-3: the bound comes from the evidence, never from a schedule; gated on expressibility.
+    assert "The bound is taken from the evidence itself, never from a schedule" in ADR_FLAT
+    assert (
+        "only when the evidence explicitly establishes that the matching version was available"
+        in ADR_FLAT
+    )
+    assert "conservative end of that date interval" in ADR_FLAT
+    assert "until then the row falls to P-2" in ADR_FLAT
     # Revisions never inherit availability.
     assert "A revision never inherits an earlier version's availability" in ADR_FLAT
 
@@ -190,6 +199,9 @@ def test_the_adversarial_acceptance_examples_exist_and_are_not_claimed_as_runtim
         "T-1",
         "T-2",
         "T-3",
+        "T-4",
+        "T-5",
+        "T-6",
         "D-1",
         "D-2",
         "D-3",
