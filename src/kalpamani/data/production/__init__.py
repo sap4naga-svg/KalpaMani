@@ -11,8 +11,11 @@ shape, the disjoint production key layout of ADR-0037 and the run locator.
 **Nothing in this package runs by itself.** Importing it constructs no client, reads
 no environment variable, opens no socket and resolves no credential. Every external
 service is an injected adapter, and the concrete adapters here have only ever been
-exercised against synthetic fakes. No production image, no entry point and no
-acquisition or build *processing* exists: the runner stops at a closed
+exercised against synthetic fakes. No production image and no entry point exists.
+The acquisition and research-build *processing* paths exist as offline code
+(:mod:`~kalpamani.data.production.sharadar.processing`,
+:mod:`~kalpamani.data.production.sharadar.build_processing`) that only synthetic
+fakes have ever driven; the bootstrap-only build runner still stops at a closed
 ``HALTED_PROCESSING_NOT_IMPLEMENTED`` after the release barrier, having performed
 zero S3, secret and provider operations.
 """

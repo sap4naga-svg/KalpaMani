@@ -15,8 +15,9 @@ and no operation past the gate is reachable without it.
 the barrier passes, :func:`run_task_bootstrap` returns ``RELEASED`` together with
 the validated binding, the admitted input and -- for the acquisition actor -- the
 plan compiled from that input's own slice. The acquisition path continues in
-:mod:`~kalpamani.data.production.sharadar.processing`; the build path has no
-processing and :func:`run_build_task` halts it at
+:mod:`~kalpamani.data.production.sharadar.processing` and the build path in
+:mod:`~kalpamani.data.production.sharadar.build_processing`; the bootstrap-only
+:func:`run_build_task` performs no processing and halts at
 ``HALTED_PROCESSING_NOT_IMPLEMENTED``. The counts this module reports for data-plane
 operations are zero because it performs none.
 
@@ -299,10 +300,12 @@ def run_build_task(
     adapters: RunnerAdapters,
     registry: SpentIdentityRegistry,
 ) -> RunnerReport:
-    """The build actor's task: the bootstrap, then the honest halt.
+    """The build actor's bootstrap-only task: the bootstrap, then the honest halt.
 
-    Build processing -- the locator read, the exact reads, Silver/Gold/manifest
-    publication -- does not exist in this repository. A released build task halts
+    This surface performs no processing. The build processing path -- the locator
+    read, the exact reads, Silver, Gold and manifest publication -- is
+    :func:`~kalpamani.data.production.sharadar.build_processing.run_production_build`,
+    which runs this bootstrap itself. A released build task on *this* surface halts
     at ``HALTED_PROCESSING_NOT_IMPLEMENTED`` with zero data-plane operations.
     """
     report = run_task_bootstrap(

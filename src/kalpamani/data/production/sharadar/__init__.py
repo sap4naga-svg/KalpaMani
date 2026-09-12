@@ -18,5 +18,12 @@ Module map, in the order a run consults them:
 - :mod:`barrier` -- the bounded release barrier;
 - :mod:`launcher` -- the launch tool's adapter-driven sequence;
 - :mod:`runner` -- the task-side and human-side bootstrap sequences;
-- :mod:`outcomes` -- the closed outcome vocabularies and integer counts.
+- :mod:`outcomes` -- the closed outcome vocabularies and integer counts;
+- :mod:`plan`, :mod:`identities`, :mod:`processing` -- the offline acquisition
+  processing path (ADR-0038 reservation, provider through an injected adapter,
+  ADR-0037 publication, the locator last);
+- :mod:`build_inputs`, :mod:`silver`, :mod:`sessions`, :mod:`availability`,
+  :mod:`universe`, :mod:`gold`, :mod:`build_manifest`, :mod:`build_processing` --
+  the offline research-build processing path (verified inputs, Silver, bounds,
+  membership, Gold and quality, the manifest last; proposed ADR-0039 / ADR-0040).
 """
