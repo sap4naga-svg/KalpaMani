@@ -34,6 +34,7 @@ governing, which can only be later.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
@@ -51,7 +52,7 @@ from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import RowVersion, SilverLayer
 
 #: The resolution policy version. Part of every manifest and of the build ``run_id``.
-RESOLUTION_POLICY_VERSION: Final = "sharadar-availability-v1"
+RESOLUTION_POLICY_VERSION: Final = "sharadar-availability-v2"
 
 #: The one profile this build resolves under. ``PUBLIC_PIT`` is ineligible for
 #: ``stocks`` (ADR-0010) and is not expressible here.
@@ -264,7 +265,11 @@ def resolve_row(
 ) -> tuple[ResolvedRow, bool]:
     """The bound of one row version, and whether gated evidence was ignored for it."""
     ignored = evidence.gated_for(row) > 0
-    delivery = evidence.per_version_delivery(row)
+    # Evidence is about content, and it bounds only the revision that first made
+    # that content current. A revision that *returns* to earlier content became
+    # current again at its own observation, and nothing about the content's earlier
+    # delivery says when it returned: a return is P-2 at its own instant.
+    delivery = None if row.is_return else evidence.per_version_delivery(row)
     if delivery is not None and delivery.instant is not None:
         rule = AvailabilityRule.P3_DELIVERY_WINDOW
         derivation = ProviderBoundDerivation.DELIVERY_WINDOW
@@ -297,6 +302,36 @@ def resolve_row(
         limitations=limitations,
     )
     return ResolvedRow(row=row, availability=availability), ignored
+
+
+#: The action-revision selection policy. Part of every manifest and of the build ``run_id``.
+ACTION_SELECTION_VERSION: Final = "sharadar-action-selection-v1"
+
+
+def select_current(
+    rows: Iterable[ResolvedRow], *, cutoff: datetime
+) -> dict[tuple[str, ...], ResolvedRow]:
+    """The one revision of each key current at ``cutoff``: the latest admissible transition.
+
+    **One rule, applied everywhere a revision is chosen** -- membership clauses,
+    the served Gold rows, the corporate-action facts an adjustment consumes. Among
+    the revisions of a key whose governing availability is ``<= cutoff``, the one
+    with the latest governing time (then the highest sequence) is current; every
+    earlier revision is superseded at that cutoff and never operative beside it.
+    Distinct keys are distinct events and are all returned. A key with no
+    admissible revision is absent.
+    """
+    by_key: dict[tuple[str, ...], list[ResolvedRow]] = {}
+    for row in rows:
+        if row.availability.governing_time <= cutoff:
+            by_key.setdefault(row.row.row_key, []).append(row)
+    return {
+        key: max(
+            candidates,
+            key=lambda row: (row.availability.governing_time, row.row.revision_sequence),
+        )
+        for key, candidates in by_key.items()
+    }
 
 
 def resolve(
@@ -344,6 +379,7 @@ def resolve(
 
 
 __all__ = [
+    "ACTION_SELECTION_VERSION",
     "EXPRESSIBLE_DERIVATIONS",
     "INFORMATION_ORIGIN",
     "RESOLUTION_POLICY_VERSION",
@@ -359,4 +395,5 @@ __all__ = [
     "VersionEvidence",
     "resolve",
     "resolve_row",
+    "select_current",
 ]

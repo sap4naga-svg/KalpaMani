@@ -37,7 +37,8 @@ leaving them as an implementation's private convention.
 licensed/silver/sharadar/<dataset>/objects/sha256/<digest>          dataset  in {tickers, stocks, actions}
 licensed/gold/sharadar/<artifact>/objects/sha256/<digest>           artifact in {adjusted-bars,
                                                                                 universe-membership,
-                                                                                corporate-actions}
+                                                                                corporate-actions,
+                                                                                eligibility-restrictions}
 licensed/manifests/sharadar/builds/<build-id>.json                  kalpamani-production-build-manifest/v1
 write     one conditional PutObject each, IfNoneMatch="*", SSE-S3, full-object SHA-256 -- exactly as every
           other production object; never overwritten, never deleted by the build actor
@@ -62,9 +63,10 @@ Consequences:
    convention, resolution policy, calendar, quality plan and evidence-set versions, the commit and the
    digest of the whole pinned configuration; the resolved profile and `as_of`; the per-dataset resolution
    and served maps; the census; the quality report; the limitation tokens; and the digest, byte count, row
-   count and disposition of every output. Its `run_id` is derived from all of that **except** the build
-   identity and the completion instant, so identical inputs under a pinned configuration yield an identical
-   `run_id`.
+   count and disposition of every output; and the adjusted-bar derivation and action-revision selection
+   versions, the eligibility restrictions, and the unresolved-contract record below. Its `run_id` is
+   derived from all of that **except** the build identity and the completion instant, so identical inputs
+   under a pinned configuration yield an identical `run_id`.
 4. **Partial and uncertain publication are preserved as exactly that.** A definitive backend refusal halts
    with the state known and no manifest; an ambiguous one halts with `publication_state_unknown` and no
    manifest; a manifest write whose outcome is ambiguous is `MANIFEST_STATE_UNKNOWN`, never success.
@@ -73,6 +75,43 @@ Consequences:
 6. **The namespaces are the accepted ones.** Every output lies inside a prefix ADR-0036 already grants for
    conditional `PutObject`; **no IAM statement, bucket-policy statement, Terraform declaration or deployed
    resource changes**, and the deletion runbook already names the prefixes.
+7. **A revision is a transition in the chronology of observations, not a distinct content.** A row key's
+   revisions begin whenever an observation delivers content different from the previous observation's;
+   unchanged deliveries extend the current revision and are counted; a return to earlier content is a
+   **new revision** current from its own observation (`A -> B -> A` selects A, B, A at the respective
+   cutoffs). Content identity and the content's first sighting are recorded beside the chronology and
+   never stand in for it: evidence about a content bounds the revision that first made it current, and a
+   returning revision is bounded by its own observation. Every revision records its observations, so a
+   document served at an earlier `as_of` carries only what was observed by then.
+8. **One revision of an action is operative at a cutoff.** Before any rule consumes an action, the current
+   revision of each action key is selected -- the latest admissible at that cutoff -- and superseded
+   revisions of the same key are never operative beside it. Distinct keys are distinct events. The
+   vendor's actions table carries **no event identity**, so a correction to a key field (date or action)
+   and a separate event cannot be told apart: a key absent from a later delivery whose request window
+   covered it is recorded as a **redelivery gap** on that key, never read as a deletion or a correction.
+   An adjusted bar that would consume a gapped split is **withheld** and counted; a membership clause
+   still consumes a gapped listing or delisting event (the exclusion is the conservative direction); the
+   manifest records the unresolved contract and the counts. Resolving it needs an accepted contract for
+   event identity or vendor semantics, which this ADR does not supply.
+9. **Adjusted bars carry complete lineage and a derived availability.** Every adjusted row names the exact
+   bar revision and every split revision it consumed (entity, dataset version, key, content digest,
+   sequence, ratio) and carries **two** availabilities kept apart: `source_governing_time`, the raw bar's,
+   and `derived_governing_time`, the latest governing time of every input actually consumed -- so a split
+   revision or correction available later than the bar can never yield a value labelled available before
+   it, and an action not consumed affects neither the value nor its availability. A verifier reconstructs
+   the value and the consumed set from the recorded lineage against the served revisions. The derivation
+   is versioned (`adjustment_derivation_version`) beside the action-selection policy
+   (`action_selection_version`), and both are in the manifest and the `run_id`.
+10. **Membership decisions are immutable; quality restrictions are a separate artifact.** A membership row
+    records the decision taken at its cutoff and every fact it consumed (bars, attribute revision, action
+    revisions) and is **never filtered, edited or removed by a later finding**. A security-scoped BLOCKING
+    finding raised by a later observation produces an **eligibility restriction** -- security, check,
+    severity, count, `restricted_from` (the earliest availability of the offending observations),
+    `sessions_affected` (decision sessions whose cutoff is at or after it) and what is withheld
+    (`adjusted-bars`) -- published beside the decisions in `gold-eligibility-restrictions` and listed in
+    the manifest's `restrictions` and `restricted_securities`. Downstream use of a restricted security is
+    prevented by the withheld artifact and the published restriction, not by rewriting history. A
+    build-scoped BLOCKING finding is different: it refuses publication altogether (`REFUSED_QUALITY`).
 
 ## 3. Effectiveness and execution gates
 
@@ -80,6 +119,9 @@ Consequences:
   request introducing it. The offline implementation that accompanies it (`build_manifest.py`,
   `build_processing.py`) writes these shapes to synthetic fakes only; that code existing is not this
   amendment being in force.
+- **Prerequisite, unchanged**: the split ratio is read from the vendor `value` field as the forward
+  factor; that reading is an assumption recorded beside the implementation and is not verified by this
+  ADR. No build against vendor data may treat it as established.
 - **Execution**: acceptance authorizes no build and no run. Every gate ADR-0036 leaves closed stays closed —
   Terraform application, R-3 and R-5 verification, image publication, task launch, the first bounded
   ingestion — and the exchange-calendar artifact the build consumes is **synthetic in this repository**: a

@@ -32,8 +32,8 @@ and nothing here claims more.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Final
 
@@ -43,7 +43,7 @@ from kalpamani.data.production.sharadar.build_inputs import AcquiredPage, Verifi
 from kalpamani.data.qualify.sharadar.parser import ParsedPage, ParseError, parse_payload
 
 #: The Silver normalization version. Part of every manifest and of the build ``run_id``.
-SILVER_NORMALIZATION_VERSION: Final = "sharadar-silver-v1"
+SILVER_NORMALIZATION_VERSION: Final = "sharadar-silver-v2"
 
 #: The identity namespace. A ``security_id`` is ``sharadar:<permaticker>`` and nothing else.
 SECURITY_ID_PREFIX: Final = PROVIDER + ":"
@@ -152,10 +152,31 @@ class Provenance:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RowVersion:
-    """One distinct content for one row key. **Private material**: never rendered.
+    """One revision of one row key: a **transition** in the chronology of observations.
 
-    ``system_first_seen_time`` is the retrieval instant of the **earliest acquisition
-    delivering these bytes**; a later revision of the same key has its own.
+    **Private material**: never rendered.
+
+    A revision begins when an observation delivers content different from the
+    content the previous observation of the same key delivered. Consecutive
+    observations of unchanged content extend the current revision's tenure and are
+    counted; they create no false change. A **return to earlier content is a new
+    revision** with its own sequence and its own instant, so ``A -> B -> A`` is three
+    revisions and the last of them is current after its own observation -- content
+    identity (``content_sha256``, ``content_first_seen_time``) is kept apart from
+    the chronology (``revision_sequence``, ``system_first_seen_time``).
+
+    ``system_first_seen_time`` is the retrieval instant of the observation that made
+    this revision current -- the P-2 bound for **this revision**; a returning
+    revision's bound is its own observation's instant, never the instant the same
+    content was first seen. ``content_first_seen_time`` is the earliest observation
+    of these bytes for this key, whichever revision delivered them.
+    ``observed_at`` holds every observation of the revision, so a document served at
+    an earlier ``as_of`` can be restricted to what was observed by then.
+    ``redelivery_gaps`` names later runs (with the instant each was seen) whose
+    request window covered the key and that did not deliver it -- the vendor's
+    actions table carries no event identity, so a correction to a key field and a
+    separate event cannot be told apart, and the gap is recorded rather than read
+    as a deletion.
     """
 
     dataset: str
@@ -167,7 +188,9 @@ class RowVersion:
     fields: dict[str, str | None]
     provenance: Provenance
     system_first_seen_time: datetime
-    seen_count: int
+    content_first_seen_time: datetime
+    observed_at: tuple[datetime, ...]
+    redelivery_gaps: tuple[tuple[str, datetime], ...] = ()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing: a subclass could render the fields."""
@@ -181,6 +204,30 @@ class RowVersion:
     def provider_last_updated_date(self) -> str | None:
         """The vendor's ``lastupdated`` stamp, carried as evidence and never as a bound."""
         return self.fields.get("lastupdated")
+
+    @property
+    def observation_count(self) -> int:
+        """How many observations this revision's tenure holds, in total."""
+        return len(self.observed_at)
+
+    @property
+    def last_observed_at(self) -> datetime:
+        """The latest observation of this revision, in total."""
+        return max(self.observed_at)
+
+    def observations_through(self, cutoff: datetime) -> tuple[datetime, ...]:
+        """The observations of this revision at or before ``cutoff`` -- what a build at
+        that instant could have held, and all a document served at it may record."""
+        return tuple(when for when in self.observed_at if when <= cutoff)
+
+    def gaps_through(self, cutoff: datetime) -> tuple[str, ...]:
+        """The covering runs seen at or before ``cutoff`` that did not deliver this key."""
+        return tuple(run_id for run_id, seen_at in self.redelivery_gaps if seen_at <= cutoff)
+
+    @property
+    def is_return(self) -> bool:
+        """Whether this revision returned to content an earlier revision of the key held."""
+        return self.content_first_seen_time < self.system_first_seen_time
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -263,7 +310,14 @@ def _check_truncation(pages: list[tuple[AcquiredPage, ParsedPage]]) -> None:
 
 
 class _Versions:
-    """Row versions per key, in acquisition order; conflicts within one run refused."""
+    """The observation chronology per key; revisions are its transitions.
+
+    Observations arrive in retrieval order. For each key the current content is
+    compared with the observation's content: unchanged extends the current
+    revision (counted, never a change); changed opens a new revision. Two different
+    contents inside one acquisition run are refused, whatever earlier runs
+    delivered.
+    """
 
     __slots__ = ("duplicates", "in_run", "versions")
 
@@ -284,31 +338,24 @@ class _Versions:
         parsed: ParsedPage,
     ) -> None:
         digest = _content_digest(fields)
-        # One run may deliver one content for one key. Two different contents
-        # inside one acquisition are a structural conflict, whatever earlier runs
-        # delivered, and the conflict is refused rather than ordered away.
         first = self.in_run.setdefault((row_key, page.run_id), digest)
         if first != digest:
             raise _refuse(SilverDefect.ROW_CONFLICT_IN_RUN)
         existing = self.versions.setdefault(row_key, [])
-        for index, version in enumerate(existing):
-            if version.content_sha256 == digest:
-                # Identical bytes seen again: the earliest first-seen stands, and
-                # the sighting is counted. Deterministic, and never an overwrite.
-                self.duplicates += 1
-                existing[index] = RowVersion(
-                    dataset=version.dataset,
-                    row_key=version.row_key,
-                    security_id=version.security_id,
-                    symbol=version.symbol,
-                    revision_sequence=version.revision_sequence,
-                    content_sha256=version.content_sha256,
-                    fields=version.fields,
-                    provenance=version.provenance,
-                    system_first_seen_time=min(version.system_first_seen_time, page.retrieved_at),
-                    seen_count=version.seen_count + 1,
-                )
-                return
+        if existing and existing[-1].content_sha256 == digest:
+            # Unchanged since the previous observation: the current revision's
+            # tenure extends and the sighting is counted. No transition, no change.
+            current = existing[-1]
+            self.duplicates += 1
+            existing[-1] = replace(current, observed_at=(*current.observed_at, page.retrieved_at))
+            return
+        # A transition: new content, or a return to content an earlier revision held.
+        # Content identity is looked up across every earlier revision; the revision's
+        # own instant is this observation's, never the content's first sighting.
+        content_first_seen = min(
+            [v.content_first_seen_time for v in existing if v.content_sha256 == digest]
+            + [page.retrieved_at]
+        )
         existing.append(
             RowVersion(
                 dataset=dataset,
@@ -327,7 +374,8 @@ class _Versions:
                     retrieved_at=page.retrieved_at,
                 ),
                 system_first_seen_time=page.retrieved_at,
-                seen_count=1,
+                content_first_seen_time=content_first_seen,
+                observed_at=(page.retrieved_at,),
             )
         )
 
@@ -336,6 +384,15 @@ class _Versions:
         for key in sorted(self.versions):
             rows.extend(self.versions[key])
         return tuple(rows)
+
+    def mark_redelivery_gaps(
+        self, gaps: dict[tuple[str, ...], tuple[tuple[str, datetime], ...]]
+    ) -> None:
+        """Record on every revision of a key the later covering runs that did not deliver it."""
+        for row_key, runs in gaps.items():
+            revisions = self.versions.get(row_key)
+            if revisions:
+                self.versions[row_key] = [replace(v, redelivery_gaps=runs) for v in revisions]
 
 
 def _snapshot_mapping(
@@ -386,6 +443,49 @@ def _normalize_tickers(pages: list[tuple[AcquiredPage, ParsedPage]]) -> SilverDa
     )
 
 
+def _window_dates(window: str) -> tuple[date, date] | None:
+    """The inclusive date window of one request, or ``None`` for the snapshot."""
+    try:
+        start, end = (date.fromisoformat(part) for part in window.split("/"))
+    except ValueError:
+        return None
+    return (start, end)
+
+
+def _redelivery_gaps(
+    versions: _Versions,
+    *,
+    coverage: dict[str, list[tuple[date, date]]],
+    delivered: dict[str, set[tuple[str, ...]]],
+    run_seen_at: dict[str, datetime],
+) -> dict[tuple[str, ...], tuple[tuple[str, datetime], ...]]:
+    """Per key, the later runs whose request windows covered its date and did not deliver it.
+
+    **Recorded, never read as a deletion.** The vendor's keyed tables carry no event
+    identity, so a key absent from a later covering delivery may be a correction to a
+    key field (the same event under a new key), a removal, or a delivery gap; nothing
+    accepted distinguishes them. The gap is carried on the key's revisions so a
+    consumer can represent the limitation conservatively.
+    """
+    gaps: dict[tuple[str, ...], tuple[tuple[str, datetime], ...]] = {}
+    for row_key, revisions in versions.versions.items():
+        try:
+            key_date = date.fromisoformat(row_key[1])
+        except (IndexError, ValueError):
+            continue
+        first_observed = min(v.system_first_seen_time for v in revisions)
+        missing = sorted(
+            (run_id, run_seen_at[run_id])
+            for run_id, windows in coverage.items()
+            if run_seen_at[run_id] > first_observed
+            and row_key not in delivered.get(run_id, set())
+            and any(start <= key_date <= end for start, end in windows)
+        )
+        if missing:
+            gaps[row_key] = tuple(missing)
+    return gaps
+
+
 def _normalize_keyed(
     dataset: SharadarDataset,
     pages: list[tuple[AcquiredPage, ParsedPage]],
@@ -398,11 +498,21 @@ def _normalize_keyed(
     unmapped: set[tuple[str, str]] = set()
     ambiguous: set[tuple[str, str]] = set()
     excluded = 0
+    coverage: dict[str, list[tuple[date, date]]] = {}
+    delivered: dict[str, set[tuple[str, ...]]] = {}
+    run_seen_at: dict[str, datetime] = {}
     for page, parsed in sorted(pages, key=lambda item: _order_key(item[0])):
         digests.add(parsed.schema_digest)
         if page.run_id not in mapping:
             raise _refuse(SilverDefect.IDENTITY_SNAPSHOT_MISSING)
         snapshot = mapping[page.run_id]
+        window = _window_dates(page.window)
+        if window is not None:
+            coverage.setdefault(page.run_id, []).append(window)
+        delivered.setdefault(page.run_id, set())
+        run_seen_at[page.run_id] = max(
+            run_seen_at.get(page.run_id, page.retrieved_at), page.retrieved_at
+        )
         for row in parsed.rows:
             fields = _fields(parsed, row)
             symbol = fields.get("ticker")
@@ -415,6 +525,7 @@ def _normalize_keyed(
                 continue
             security_id = security_id_for(next(iter(permatickers)))
             row_key = (security_id, *[str(fields[column]) for column in key_columns])
+            delivered[page.run_id].add(row_key)
             versions.observe(
                 dataset=dataset.value,
                 row_key=row_key,
@@ -424,6 +535,9 @@ def _normalize_keyed(
                 page=page,
                 parsed=parsed,
             )
+    versions.mark_redelivery_gaps(
+        _redelivery_gaps(versions, coverage=coverage, delivered=delivered, run_seen_at=run_seen_at)
+    )
     return SilverDataset(
         dataset=dataset.value,
         rows=versions.ordered(),

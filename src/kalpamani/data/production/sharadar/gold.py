@@ -41,6 +41,7 @@ from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.envelope import LineageRef
 from kalpamani.data.contracts.vocabulary import (
     AdjustmentConvention,
     AdjustmentPolicy,
@@ -53,8 +54,10 @@ from kalpamani.data.production.sharadar.availability import (
     EXPRESSIBLE_DERIVATIONS,
     ResolvedLayer,
     ResolvedRow,
+    select_current,
 )
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
+from kalpamani.data.production.sharadar.silver import SILVER_NORMALIZATION_VERSION
 from kalpamani.data.production.sharadar.universe import (
     ACTION_DELISTED,
     ACTION_SPINOFF,
@@ -70,6 +73,14 @@ ADJUSTMENT_CONVENTION: Final = AdjustmentConvention.FORWARD_BASE_NORMALIZED
 
 #: The accepted arithmetic's price quantum, matched exactly.
 PRICE_QUANTUM: Final = Decimal("0.000001")
+
+#: The adjusted-bar derivation version. Every adjusted row names it, and the manifest
+#: records it; a change to the lineage or the arithmetic is a new version.
+ADJUSTMENT_DERIVATION_VERSION: Final = "sharadar-adjusted-bars-v2"
+
+#: Lineage entity names, matching the accepted point-in-time entities.
+LINEAGE_ENTITY_BAR: Final = "price_bar"
+LINEAGE_ENTITY_ACTION: Final = "corporate_action"
 
 #: A close-to-close move beyond this ratio, without a split on the session, is flagged.
 DEFAULT_JUMP_RATIO: Final = Decimal("2")
@@ -110,6 +121,7 @@ class QualityCheck(StrEnum):
     IDENTITY_BAR_WITHIN_LISTING_BOUNDS = "IDENTITY_BAR_WITHIN_LISTING_BOUNDS"
     IDENTITY_TICKER_CHANGE_CONSISTENT = "IDENTITY_TICKER_CHANGE_CONSISTENT"
     IDENTITY_DELISTING_VS_LAST_BAR = "IDENTITY_DELISTING_VS_LAST_BAR"
+    IDENTITY_ACTION_NOT_REDELIVERED = "IDENTITY_ACTION_NOT_REDELIVERED"
     ADJUSTMENT_RECONCILIATION = "ADJUSTMENT_RECONCILIATION"
     ADJUSTMENT_SPINOFF_FLAGGED = "ADJUSTMENT_SPINOFF_FLAGGED"
     CENSUS_HISTORY_ADMISSIBILITY = "CENSUS_HISTORY_ADMISSIBILITY"
@@ -139,6 +151,7 @@ QUALITY_PLAN: Final[dict[QualityCheck, Severity]] = {
     QualityCheck.IDENTITY_BAR_WITHIN_LISTING_BOUNDS: Severity.WARNING,
     QualityCheck.IDENTITY_TICKER_CHANGE_CONSISTENT: Severity.WARNING,
     QualityCheck.IDENTITY_DELISTING_VS_LAST_BAR: Severity.WARNING,
+    QualityCheck.IDENTITY_ACTION_NOT_REDELIVERED: Severity.WARNING,
     QualityCheck.ADJUSTMENT_RECONCILIATION: Severity.WARNING,
     QualityCheck.ADJUSTMENT_SPINOFF_FLAGGED: Severity.BLOCKING,
     QualityCheck.CENSUS_HISTORY_ADMISSIBILITY: Severity.INFO,
@@ -181,12 +194,19 @@ class GoldError(Exception):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Finding:
-    """One quality finding: a check, its severity, a scope and a count. No value."""
+    """One quality finding: a check, its severity, a scope and a count. No value.
+
+    ``effective_from`` is the earliest governing availability of the observations
+    that raised a security-scoped BLOCKING finding -- the instant from which the
+    restriction it produces applies. Decisions fixed at cutoffs before it were taken
+    without those observations and are not rewritten by them.
+    """
 
     check: QualityCheck
     severity: Severity
     scope: str
     count: int
+    effective_from: datetime | None = None
 
     def __repr__(self) -> str:
         """Check, severity and count. **Never the scope**, which may be an identity."""
@@ -199,6 +219,42 @@ class Finding:
             "severity": self.severity.value,
             "scope": self.scope,
             "count": self.count,
+            "effective_from": (
+                None if self.effective_from is None else self.effective_from.isoformat()
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EligibilityRestriction:
+    """A security-scoped quality restriction, kept apart from the membership decisions.
+
+    A restriction says what may **not** be used downstream and from when; it never
+    edits a membership row. ``sessions_affected`` are the decision sessions whose
+    cutoff is at or after ``restricted_from`` -- sessions decided before the
+    offending observation existed are listed as unaffected by it, and their rows
+    stand exactly as decided.
+    """
+
+    security_id: str
+    check: QualityCheck
+    severity: Severity
+    count: int
+    restricted_from: datetime
+    sessions_affected: tuple[date, ...]
+    withheld: str
+
+    def document(self) -> dict[str, Any]:
+        """The closed restriction document."""
+        return {
+            "security_id": self.security_id,
+            "scope": "security",
+            "check": self.check.value,
+            "severity": self.severity.value,
+            "count": self.count,
+            "restricted_from": self.restricted_from.isoformat(),
+            "sessions_affected": [d.isoformat() for d in self.sessions_affected],
+            "withheld": self.withheld,
         }
 
 
@@ -210,7 +266,7 @@ class QualityReport:
     checks_run: tuple[QualityCheck, ...]
     checks_not_run: tuple[QualityCheck, ...]
     findings: tuple[Finding, ...]
-    blocked_securities: tuple[str, ...]
+    restricted_securities: tuple[str, ...]
     build_blocking: bool
 
     def __post_init__(self) -> None:
@@ -223,7 +279,7 @@ class QualityReport:
         """Counts only."""
         return (
             f"QualityReport(findings={len(self.findings)}, "
-            f"blocked={len(self.blocked_securities)}, build_blocking={self.build_blocking})"
+            f"restricted={len(self.restricted_securities)}, build_blocking={self.build_blocking})"
         )
 
     def document(self) -> dict[str, Any]:
@@ -233,7 +289,7 @@ class QualityReport:
             "checks_run": [check.value for check in self.checks_run],
             "checks_not_run": [check.value for check in self.checks_not_run],
             "findings": [finding.document() for finding in self.findings],
-            "blocked_securities": list(self.blocked_securities),
+            "restricted_securities": list(self.restricted_securities),
             "build_blocking": self.build_blocking,
         }
 
@@ -282,6 +338,8 @@ class GoldLayer:
     quality: QualityReport
     limitations: tuple[LimitationToken, ...]
     spinoff_excluded_securities: tuple[str, ...]
+    restrictions: tuple[EligibilityRestriction, ...]
+    adjusted_rows_withheld_for_unresolved_actions: int
     empty_reason: str | None
 
     def __repr__(self) -> str:
@@ -316,20 +374,17 @@ def _serve(layer: ResolvedLayer, *, as_of: datetime) -> _Served:
         by_key: dict[tuple[str, ...], list[ResolvedRow]] = {}
         for row in layer.by_dataset(dataset):
             by_key.setdefault(row.row.row_key, []).append(row)
-        chosen: dict[tuple[str, ...], ResolvedRow] = {}
-        admitted = superseded = excluded = 0
-        for key in sorted(by_key):
-            admissible = [row for row in by_key[key] if row.availability.governing_time <= as_of]
-            excluded += len(by_key[key]) - len(admissible)
-            if not admissible:
-                continue
-            latest = max(
-                admissible,
-                key=lambda row: (row.availability.governing_time, row.row.revision_sequence),
-            )
-            chosen[key] = latest
-            admitted += 1
-            superseded += len(admissible) - 1
+        chosen = select_current(layer.by_dataset(dataset), cutoff=as_of)
+        admitted = len(chosen)
+        excluded = sum(
+            1 for row in layer.by_dataset(dataset) if row.availability.governing_time > as_of
+        )
+        superseded = sum(
+            1
+            for key, candidates in by_key.items()
+            for row in candidates
+            if row.availability.governing_time <= as_of and row is not chosen.get(key)
+        )
         served[dataset] = chosen
         counts.append(
             ServedCounts(
@@ -408,13 +463,27 @@ class _Checks:
         self.run.update(checks)
 
     def finding(
-        self, check: QualityCheck, *, scope: str, count: int, blocks_scope: bool = True
+        self,
+        check: QualityCheck,
+        *,
+        scope: str,
+        count: int,
+        blocks_scope: bool = True,
+        effective_from: datetime | None = None,
     ) -> None:
         self.run.add(check)
         if count <= 0:
             return
         severity = QUALITY_PLAN[check]
-        self.findings.append(Finding(check=check, severity=severity, scope=scope, count=count))
+        self.findings.append(
+            Finding(
+                check=check,
+                severity=severity,
+                scope=scope,
+                count=count,
+                effective_from=effective_from,
+            )
+        )
         if severity is Severity.BLOCKING and blocks_scope:
             if scope == BUILD_SCOPE:
                 self.build_blocking = True
@@ -505,13 +574,26 @@ def _run_checks(
         security_bars = bars.get(security_id, [])
         security_actions = actions.get(security_id, [])
         # Temporal.
-        off_calendar = sum(1 for session, _ in security_bars if not calendar.is_session(session))
+        off_calendar = [bar for session, bar in security_bars if not calendar.is_session(session)]
         checks.finding(
-            QualityCheck.TEMPORAL_SESSION_ON_CALENDAR, scope=security_id, count=off_calendar
+            QualityCheck.TEMPORAL_SESSION_ON_CALENDAR,
+            scope=security_id,
+            count=len(off_calendar),
+            effective_from=_earliest_governing(off_calendar),
         )
-        after = sum(1 for session, _ in security_bars if session >= t_minus_1)
+        after = [bar for session, bar in security_bars if session >= t_minus_1]
         checks.finding(
-            QualityCheck.TEMPORAL_NO_SESSION_AFTER_T_MINUS_1, scope=security_id, count=after
+            QualityCheck.TEMPORAL_NO_SESSION_AFTER_T_MINUS_1,
+            scope=security_id,
+            count=len(after),
+            effective_from=_earliest_governing(after),
+        )
+        # Identity: action keys a later covering delivery did not repeat (recorded by
+        # normalization; the source has no event identity, so this is a limitation
+        # stated with its count, never a deletion inferred).
+        not_redelivered = sum(1 for row in security_actions if row.row.gaps_through(as_of))
+        checks.finding(
+            QualityCheck.IDENTITY_ACTION_NOT_REDELIVERED, scope=security_id, count=not_redelivered
         )
         # Market data.
         ohlc = volume_negative = 0
@@ -635,10 +717,188 @@ def _run_checks(
         checks_run=tuple(sorted(checks.run, key=lambda check: check.value)),
         checks_not_run=tuple(sorted(CHECKS_NOT_RUN, key=lambda check: check.value)),
         findings=tuple(sorted(checks.findings, key=lambda item: (item.check.value, item.scope))),
-        blocked_securities=tuple(sorted(checks.securities)),
+        restricted_securities=tuple(sorted(checks.securities)),
         build_blocking=checks.build_blocking,
     )
     return report, spinoff_from
+
+
+def _earliest_governing(rows: list[ResolvedRow]) -> datetime | None:
+    return min((row.availability.governing_time for row in rows), default=None)
+
+
+def _bar_lineage(bar: ResolvedRow) -> LineageRef:
+    return LineageRef.of(
+        entity=LINEAGE_ENTITY_BAR,
+        dataset_version=SILVER_NORMALIZATION_VERSION,
+        selector={
+            "security_id": bar.row.security_id,
+            "session_date": bar.row.row_key[1],
+            "content_sha256": bar.row.content_sha256,
+            "revision_sequence": str(bar.row.revision_sequence),
+        },
+    )
+
+
+def _action_lineage(action: ResolvedRow, ratio: Decimal) -> LineageRef:
+    return LineageRef.of(
+        entity=LINEAGE_ENTITY_ACTION,
+        dataset_version=SILVER_NORMALIZATION_VERSION,
+        selector={
+            "security_id": action.row.security_id,
+            "row_key": "/".join(action.row.row_key),
+            "content_sha256": action.row.content_sha256,
+            "revision_sequence": str(action.row.revision_sequence),
+            "ratio": str(ratio),
+        },
+    )
+
+
+def _lineage_document(ref: LineageRef) -> dict[str, Any]:
+    return {
+        "entity": ref.entity,
+        "dataset_version": ref.dataset_version,
+        "selector": {name: value for name, value in ref.selector},
+    }
+
+
+def consumed_splits(
+    actions: list[ResolvedRow], *, session: date
+) -> list[tuple[ResolvedRow, Decimal]]:
+    """The served split revisions an adjustment for ``session`` consumes, with their ratios.
+
+    Exactly the splits with an ex-date on or before the session; nothing else is
+    consumed, so nothing else can affect the value or its availability.
+    """
+    out: list[tuple[ResolvedRow, Decimal]] = []
+    for row in actions:
+        if row.row.fields.get("action") != ACTION_SPLIT:
+            continue
+        when = date_field(row.row.fields.get("date"))
+        ratio = decimal_field(row.row.fields.get("value"))
+        if when is None or ratio is None or ratio <= 0 or session < when:
+            continue
+        out.append((row, ratio))
+    return sorted(out, key=lambda item: (item[0].row.row_key, item[0].row.revision_sequence))
+
+
+def adjust_bar(
+    bar: ResolvedRow, actions: list[ResolvedRow], *, as_of: datetime
+) -> dict[str, Any] | None:
+    """One adjusted bar with complete lineage and derived availability, or ``None``.
+
+    The value is the bar's prices times the product of the consumed splits' ratios
+    (``SPLIT_ONLY``, ``FORWARD_BASE_NORMALIZED``). The row names every input revision
+    it consumed -- the bar and each split, by key, content digest and revision -- and
+    carries **two** availabilities kept apart: ``source_governing_time`` (the raw
+    bar's) and ``derived_governing_time`` (the latest of every consumed input). A
+    split correction that arrives later than the bar therefore moves the derived
+    time later, and can never yield a value labelled available before it.
+    """
+    session = date_field(bar.row.fields.get("date"))
+    if session is None:
+        return None
+    fields = bar.row.fields
+    o, h, lo, c = (decimal_field(fields.get(name)) for name in ("open", "high", "low", "close"))
+    v = decimal_field(fields.get("volume"))
+    if o is None or h is None or lo is None or c is None or v is None:
+        return None
+    consumed = consumed_splits(actions, session=session)
+    factor = Decimal(1)
+    for _, ratio in consumed:
+        factor *= ratio
+    derived = max(
+        [bar.availability.governing_time] + [row.availability.governing_time for row, _ in consumed]
+    )
+    return {
+        "security_id": bar.row.security_id,
+        "session_date": session.isoformat(),
+        "open": str(_price(o * factor)),
+        "high": str(_price(h * factor)),
+        "low": str(_price(lo * factor)),
+        "close": str(_price(c * factor)),
+        "volume": str((v / factor).quantize(Decimal(1), rounding=ROUND_HALF_EVEN)),
+        "factor": str(factor),
+        "derivation_version": ADJUSTMENT_DERIVATION_VERSION,
+        "adjustment_policy": ADJUSTMENT_POLICY.value,
+        "adjustment_convention": ADJUSTMENT_CONVENTION.value,
+        "source_content_sha256": bar.row.content_sha256,
+        "revision_sequence": bar.row.revision_sequence,
+        "source_governing_time": bar.availability.governing_time.isoformat(),
+        "derived_governing_time": derived.isoformat(),
+        "lineage": [_lineage_document(_bar_lineage(bar))]
+        + [_lineage_document(_action_lineage(row, ratio)) for row, ratio in consumed],
+        "unresolved_action_keys": sum(1 for row, _ in consumed if row.row.gaps_through(as_of)),
+    }
+
+
+class AdjustedRowDefect(StrEnum):
+    """Why an adjusted row's lineage did not reconstruct it. Closed."""
+
+    LINEAGE_UNRESOLVABLE = "LINEAGE_UNRESOLVABLE"
+    VALUE_MISMATCH = "VALUE_MISMATCH"
+    CONSUMED_SET_MISMATCH = "CONSUMED_SET_MISMATCH"
+    AVAILABILITY_MISMATCH = "AVAILABILITY_MISMATCH"
+
+
+def verify_adjusted_row(
+    document: dict[str, Any],
+    *,
+    bars: dict[tuple[str, ...], ResolvedRow],
+    actions: dict[tuple[str, ...], ResolvedRow],
+    as_of: datetime,
+) -> AdjustedRowDefect | None:
+    """Reconstruct an adjusted row from its recorded lineage against served revisions.
+
+    Every lineage reference must resolve to the exact served revision (key, content
+    digest, sequence); the factor and prices recomputed from those inputs must equal
+    the row's; the consumed set must be exactly the served splits with an ex-date on
+    or before the session; and the derived availability must be the latest input's.
+    Returns the first defect, or ``None`` when the row reconstructs.
+    """
+    refs = document.get("lineage", [])
+    if not refs or refs[0]["entity"] != LINEAGE_ENTITY_BAR:
+        return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
+    selector = refs[0]["selector"]
+    bar = bars.get((selector["security_id"], selector["session_date"]))
+    if (
+        bar is None
+        or bar.row.content_sha256 != selector["content_sha256"]
+        or str(bar.row.revision_sequence) != selector["revision_sequence"]
+    ):
+        return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
+    consumed: list[tuple[ResolvedRow, Decimal]] = []
+    for ref in refs[1:]:
+        sel = ref["selector"]
+        action = actions.get(tuple(sel["row_key"].split("/")))
+        if (
+            ref["entity"] != LINEAGE_ENTITY_ACTION
+            or action is None
+            or action.row.content_sha256 != sel["content_sha256"]
+            or str(action.row.revision_sequence) != sel["revision_sequence"]
+        ):
+            return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
+        consumed.append((action, Decimal(sel["ratio"])))
+    session = date.fromisoformat(document["session_date"])
+    expected = consumed_splits(
+        [row for row in actions.values() if row.row.security_id == bar.row.security_id],
+        session=session,
+    )
+    if [(r.row.row_key, r.row.revision_sequence, ratio) for r, ratio in consumed] != [
+        (r.row.row_key, r.row.revision_sequence, ratio) for r, ratio in expected
+    ]:
+        return AdjustedRowDefect.CONSUMED_SET_MISMATCH
+    rebuilt = adjust_bar(bar, [row for row, _ in expected], as_of=as_of)
+    if rebuilt is None or any(
+        rebuilt[name] != document.get(name)
+        for name in ("open", "high", "low", "close", "volume", "factor")
+    ):
+        return AdjustedRowDefect.VALUE_MISMATCH
+    if rebuilt["derived_governing_time"] != document.get("derived_governing_time") or rebuilt[
+        "source_governing_time"
+    ] != document.get("source_governing_time"):
+        return AdjustedRowDefect.AVAILABILITY_MISMATCH
+    return None
 
 
 def _artifact(name: str, rows: list[dict[str, Any]]) -> GoldArtifact:
@@ -646,7 +906,8 @@ def _artifact(name: str, rows: list[dict[str, Any]]) -> GoldArtifact:
     return GoldArtifact(name=name, content=content, sha256=sha256_hex(content), row_count=len(rows))
 
 
-def _silver_document(row: ResolvedRow) -> dict[str, Any]:
+def _silver_document(row: ResolvedRow, *, as_of: datetime) -> dict[str, Any]:
+    observed = row.row.observations_through(as_of)
     return {
         "row_key": list(row.row.row_key),
         "security_id": row.row.security_id,
@@ -655,7 +916,11 @@ def _silver_document(row: ResolvedRow) -> dict[str, Any]:
         "fields": {name: row.row.fields[name] for name in sorted(row.row.fields)},
         "provider_last_updated_date": row.row.provider_last_updated_date,
         "system_first_seen_time": row.row.system_first_seen_time.isoformat(),
-        "seen_count": row.row.seen_count,
+        "content_first_seen_time": row.row.content_first_seen_time.isoformat(),
+        "is_return": row.row.is_return,
+        "observation_count": len(observed),
+        "observed_at": [when.isoformat() for when in observed],
+        "redelivery_gaps": list(row.row.gaps_through(as_of)),
         "provenance": row.row.provenance.document(),
         "availability": row.availability.document(),
     }
@@ -696,13 +961,13 @@ def build_gold(
     )
     if report.build_blocking:
         raise GoldError(GoldDefect.REFUSED_QUALITY)
-    blocked = set(report.blocked_securities)
+    restricted = set(report.restricted_securities)
 
     # Silver artifacts: every served row version, per dataset, in key order.
     silver_artifacts = tuple(
         _artifact(
             f"silver-{dataset}",
-            [_silver_document(row) for _, row in sorted(served.rows[dataset].items())],
+            [_silver_document(row, as_of=as_of) for _, row in sorted(served.rows[dataset].items())],
         )
         for dataset in (
             SharadarDataset.TICKERS.value,
@@ -711,42 +976,57 @@ def build_gold(
         )
     )
 
-    # Gold: adjusted bars for unblocked securities, before any spinoff ex-date.
+    # Gold: adjusted bars, with lineage, for unrestricted securities before any
+    # spinoff ex-date. A restricted security's bars are withheld; its membership
+    # rows below are not touched.
     bars = _bars_by_security(served)
     actions = _actions_by_security(served)
     adjusted_rows: list[dict[str, Any]] = []
+    withheld_unresolved = 0
     for security_id in sorted(bars):
-        if security_id in blocked:
+        if security_id in restricted:
             continue
-        factors = _split_factors(actions.get(security_id, []))
         cutoff = spinoff_from.get(security_id)
         for session, bar in bars[security_id]:
             if cutoff is not None and session >= cutoff:
                 continue
-            fields = bar.row.fields
-            o, h, lo, c = (
-                decimal_field(fields.get(name)) for name in ("open", "high", "low", "close")
-            )
-            v = decimal_field(fields.get("volume"))
-            if None in (o, h, lo, c, v):
+            adjusted = adjust_bar(bar, actions.get(security_id, []), as_of=as_of)
+            if adjusted is None:
                 continue
-            factor = _factor(factors, session)
-            adjusted_rows.append(
-                {
-                    "security_id": security_id,
-                    "session_date": session.isoformat(),
-                    "open": str(_price(o * factor)),  # type: ignore[operator]
-                    "high": str(_price(h * factor)),  # type: ignore[operator]
-                    "low": str(_price(lo * factor)),  # type: ignore[operator]
-                    "close": str(_price(c * factor)),  # type: ignore[operator]
-                    "volume": str((v / factor).quantize(Decimal(1), rounding=ROUND_HALF_EVEN)),  # type: ignore[operator]
-                    "factor": str(factor),
-                    "source_content_sha256": bar.row.content_sha256,
-                    "revision_sequence": bar.row.revision_sequence,
-                    "governing_time": bar.availability.governing_time.isoformat(),
-                }
-            )
-    membership_rows = [row.document() for row in universe.rows if row.security_id not in blocked]
+            if adjusted["unresolved_action_keys"]:
+                # A consumed split whose key a later covering delivery did not repeat
+                # may have been corrected or withdrawn; the source cannot say. The
+                # value is withheld rather than published on an action of unknown
+                # standing, and the count is recorded.
+                withheld_unresolved += 1
+                continue
+            adjusted_rows.append(adjusted)
+    # Membership: every decision, as decided at its cutoff. A later quality finding
+    # is a restriction beside the decisions, never an edit of them.
+    membership_rows = [row.document() for row in universe.rows]
+    decision_times = {row.session_date: row.decision_time for row in universe.rows}
+    restrictions = tuple(
+        EligibilityRestriction(
+            security_id=finding.scope,
+            check=finding.check,
+            severity=finding.severity,
+            count=finding.count,
+            restricted_from=finding.effective_from,
+            sessions_affected=tuple(
+                sorted(
+                    session
+                    for session, cutoff in decision_times.items()
+                    if cutoff >= finding.effective_from
+                )
+            ),
+            withheld="adjusted-bars",
+        )
+        for finding in report.findings
+        if finding.severity is Severity.BLOCKING
+        and finding.scope in restricted
+        and finding.effective_from is not None
+    )
+    restriction_rows = [item.document() for item in restrictions]
     action_rows = [
         {
             "security_id": row.row.security_id,
@@ -755,15 +1035,17 @@ def build_gold(
             "date": row.row.fields.get("date"),
             "value": row.row.fields.get("value"),
             "source_content_sha256": row.row.content_sha256,
+            "revision_sequence": row.row.revision_sequence,
             "governing_time": row.availability.governing_time.isoformat(),
+            "redelivery_gaps": list(row.row.gaps_through(as_of)),
         }
         for _, row in sorted(served.rows[SharadarDataset.ACTIONS.value].items())
-        if row.row.security_id not in blocked
     ]
     gold_artifacts = (
         _artifact("gold-adjusted-bars", adjusted_rows),
         _artifact("gold-universe-membership", membership_rows),
         _artifact("gold-corporate-actions", action_rows),
+        _artifact("gold-eligibility-restrictions", restriction_rows),
     )
     limitations: list[LimitationToken] = [LimitationToken.SINGLE_SOURCE_UNVERIFIED]
     if any(
@@ -792,12 +1074,15 @@ def build_gold(
         quality=report,
         limitations=tuple(limitations),
         spinoff_excluded_securities=tuple(sorted(spinoff_from)),
+        restrictions=restrictions,
+        adjusted_rows_withheld_for_unresolved_actions=withheld_unresolved,
         empty_reason=empty_reason,
     )
 
 
 __all__ = [
     "ADJUSTMENT_CONVENTION",
+    "ADJUSTMENT_DERIVATION_VERSION",
     "ADJUSTMENT_POLICY",
     "BUILD_SCOPE",
     "CHECKS_NOT_RUN",
@@ -806,6 +1091,8 @@ __all__ = [
     "PRICE_QUANTUM",
     "QUALITY_PLAN",
     "QUALITY_PLAN_VERSION",
+    "AdjustedRowDefect",
+    "EligibilityRestriction",
     "Finding",
     "GoldArtifact",
     "GoldDefect",
@@ -815,6 +1102,9 @@ __all__ = [
     "QualityReport",
     "ServedCounts",
     "Severity",
+    "adjust_bar",
     "build_gold",
+    "consumed_splits",
+    "verify_adjusted_row",
     "verify_served_rows",
 ]

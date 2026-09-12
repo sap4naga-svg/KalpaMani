@@ -41,6 +41,7 @@ from kalpamani.data.contracts.vocabulary import DataClassification, ObjectStoreF
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER
 from kalpamani.data.objectstore import ObjectKey
 from kalpamani.data.production.sharadar.availability import (
+    ACTION_SELECTION_VERSION,
     RESOLVED_PROFILE,
     AvailabilityEvidence,
     ResolvedLayer,
@@ -48,6 +49,7 @@ from kalpamani.data.production.sharadar.availability import (
 from kalpamani.data.production.sharadar.build_inputs import VerifiedBuildInputs
 from kalpamani.data.production.sharadar.gold import (
     ADJUSTMENT_CONVENTION,
+    ADJUSTMENT_DERIVATION_VERSION,
     ADJUSTMENT_POLICY,
     DEFAULT_JUMP_RATIO,
     DEFAULT_RECONCILIATION_TOLERANCE,
@@ -158,6 +160,8 @@ class BuildConfiguration:
             "reconciliation_tolerance": str(self.reconciliation_tolerance),
             "adjustment_policy": ADJUSTMENT_POLICY.value,
             "adjustment_convention": ADJUSTMENT_CONVENTION.value,
+            "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
+            "action_selection_version": ACTION_SELECTION_VERSION,
             "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
             "source_schema_version": SOURCE_SCHEMA_VERSION,
         }
@@ -282,6 +286,9 @@ def derive_run_id(
         "bronze_digests": sorted(page.payload_sha256 for page in inputs.pages()),
         "ledger_digest": inputs.ledger_digest,
         "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
+        "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
+        "action_selection_version": ACTION_SELECTION_VERSION,
+        "resolution_policy_version": resolved.policy_version,
         "schema_digests": {
             dataset: list(silver.by_dataset(dataset).schema_digests)
             for dataset in ("tickers", "stocks", "actions")
@@ -342,6 +349,8 @@ def build_manifest_document(
             "universe_rule": configuration.rule.document(),
             "adjustment_policy": ADJUSTMENT_POLICY.value,
             "adjustment_convention": ADJUSTMENT_CONVENTION.value,
+            "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
+            "action_selection_version": ACTION_SELECTION_VERSION,
             "resolution_policy_version": resolved.policy_version,
             "calendar_version": configuration.calendar.version,
             "quality_plan_version": gold.quality.plan_version,
@@ -367,6 +376,20 @@ def build_manifest_document(
         "quality": gold.quality.document(),
         "limitations": [token.value for token in gold.limitations],
         "spinoff_excluded_securities": list(gold.spinoff_excluded_securities),
+        "restrictions": [item.document() for item in gold.restrictions],
+        "unresolved_contracts": {
+            "action-event-identity": {
+                "statement": "the vendor actions table carries no event identity; a key "
+                "absent from a later covering delivery is recorded as a redelivery gap, "
+                "never read as a deletion or a correction",
+                "action_keys_with_redelivery_gaps": sum(
+                    1
+                    for row in resolved.actions
+                    if row.row.gaps_through(configuration.as_of) and row.row.revision_sequence == 0
+                ),
+                "adjusted_rows_withheld": gold.adjusted_rows_withheld_for_unresolved_actions,
+            }
+        },
         "empty_reason": gold.empty_reason,
         "outputs": [item.document() for item in published],
         "completed_at": completed_at.isoformat(),

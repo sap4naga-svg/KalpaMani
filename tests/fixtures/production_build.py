@@ -294,6 +294,16 @@ def actions_rows(*, run: int) -> list[tuple[str, ...]]:
 # --- slices -----------------------------------------------------------------------------
 
 
+def slice_with_stocks_window(run: int, window: str) -> dict[str, Any]:
+    """A run's slice with its ``stocks`` window replaced (request count recomputed)."""
+    start, end = (date.fromisoformat(part) for part in window.split("/"))
+    days = (end - start).days + 1
+    doc = dict(slice_for_run(run))
+    doc["windows"] = dict(doc["windows"], stocks=window)
+    doc["request_count"] = 2 + days * 2 + 4
+    return doc
+
+
 def slice_for_run(run: int) -> dict[str, Any]:
     """Run 1 covers 08-31..09-04 (16 requests); run 2 covers 09-02..09-14 (32 requests)."""
     if run == 1:
@@ -313,10 +323,12 @@ def slice_for_run(run: int) -> dict[str, Any]:
     }
 
 
-def responses_for_run(run: int) -> dict[tuple[str, str, int], bytes]:
+def responses_for_run(
+    run: int, slice_doc: dict[str, Any] | None = None
+) -> dict[tuple[str, str, int], bytes]:
     """Every request coordinate of a run mapped to the bytes the synthetic vendor answers."""
     out: dict[tuple[str, str, int], bytes] = {}
-    slice_doc = slice_for_run(run)
+    slice_doc = slice_for_run(run) if slice_doc is None else slice_doc
     lastupdated = "2026-09-04" if run == 1 else "2026-09-14"
     out[("actions", slice_doc["windows"]["actions"], 0)] = csv(
         ACTIONS_HEADER, actions_rows(run=run)
@@ -443,10 +455,11 @@ def acquire(
     run: int,
     at: datetime,
     responses: dict[tuple[str, str, int], bytes] | None = None,
+    slice_doc: dict[str, Any] | None = None,
 ) -> pp.AcquisitionReport:
     """Run the real acquisition path for one synthetic run into ``store``."""
     constants = constants_for(ACQ)
-    slice_doc = slice_for_run(run)
+    slice_doc = slice_for_run(run) if slice_doc is None else slice_doc
     covered = parse_slice(slice_doc)
     digest = plan_digest_for(covered, acquisition_mode=AcquisitionMode.BACKFILL)
     input_document = {
@@ -502,12 +515,15 @@ def acquire(
     return report
 
 
-def ledger_row(run_id: str, run: int, at: datetime) -> dict[str, Any]:
+def ledger_row(
+    run_id: str, run: int, at: datetime, slice_doc: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """The owner's ledger row for one synthetic run."""
-    covered = parse_slice(slice_for_run(run))
+    slice_doc = slice_for_run(run) if slice_doc is None else slice_doc
+    covered = parse_slice(slice_doc)
     return ledger_row_document(
         run_id,
-        slice=slice_for_run(run),
+        slice=slice_doc,
         plan_digest=plan_digest_for(covered, acquisition_mode=AcquisitionMode.BACKFILL),
         launched_at=(at - timedelta(minutes=5)).isoformat(),
         completed_at=(at + timedelta(hours=1)).isoformat(),
@@ -564,9 +580,10 @@ class BuildScenario:
         build_id: str = BUILD_ID,
         now: datetime = BUILD_NOW,
         release: bool = True,
+        slices: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         constants = constants_for(BUILD)
-        rows = [ledger_row(run_id, run, at) for run_id, run, at in runs]
+        rows = [ledger_row(run_id, run, at, (slices or {}).get(run_id)) for run_id, run, at in runs]
         self.ssm = FakeSsm()
         self.ssm.values[constants.binding_parameter] = encode(binding_document(BUILD))
         self.input_bytes = encode(
@@ -663,6 +680,7 @@ __all__ = [
     "responses_for_run",
     "rule",
     "slice_for_run",
+    "slice_with_stocks_window",
     "stocks_rows",
     "tickers_rows",
 ]

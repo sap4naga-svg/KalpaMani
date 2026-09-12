@@ -43,7 +43,11 @@ from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.vocabulary import UniverseExclusionReason
-from kalpamani.data.production.sharadar.availability import ResolvedLayer, ResolvedRow
+from kalpamani.data.production.sharadar.availability import (
+    ResolvedLayer,
+    ResolvedRow,
+    select_current,
+)
 from kalpamani.data.production.sharadar.sessions import DEFAULT_DECISION_MARGIN, SessionCalendar
 from kalpamani.data.qualify.sharadar.parser import date_field, decimal_field
 
@@ -161,6 +165,7 @@ class MembershipRow:
     history_sessions_at_eval: int
     attribute_revision: str | None
     bars_consumed: tuple[str, ...]
+    actions_consumed: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         """Membership only. **Never an identity.**"""
@@ -186,6 +191,7 @@ class MembershipRow:
             "history_sessions_at_eval": self.history_sessions_at_eval,
             "attribute_revision": self.attribute_revision,
             "bars_consumed": list(self.bars_consumed),
+            "actions_consumed": list(self.actions_consumed),
         }
 
 
@@ -263,16 +269,23 @@ def _latest_admissible(rows: list[ResolvedRow], *, cutoff: datetime) -> Resolved
 def _admissible_actions(
     rows: list[ResolvedRow], *, cutoff: datetime, action: str
 ) -> list[tuple[date, ResolvedRow]]:
+    """The current revision of every ``action`` event admissible at ``cutoff``.
+
+    **Selected before any rule reads them**: one revision per action key, the
+    latest admissible, so a superseded revision is never operative beside its
+    successor and an earlier cutoff keeps the revision it could see. Distinct keys
+    -- including a key a later correction to a date or action field created beside
+    the original -- stay distinct events: the source carries no event identity, so
+    nothing here infers that one replaced the other (see ``redelivery_gaps``).
+    """
     out: list[tuple[date, ResolvedRow]] = []
-    for row in rows:
-        if row.availability.governing_time > cutoff:
-            continue
+    for row in select_current(rows, cutoff=cutoff).values():
         if row.row.fields.get("action") != action:
             continue
         when = date_field(row.row.fields.get("date"))
         if when is not None:
             out.append((when, row))
-    return out
+    return sorted(out, key=lambda item: (item[0], item[1].row.row_key))
 
 
 def _unadjusted_close(bar: ResolvedRow) -> Decimal | None:
@@ -288,27 +301,31 @@ def _dollar_volume(bar: ResolvedRow) -> Decimal | None:
     return close * volume
 
 
+def _action_id(row: ResolvedRow) -> str:
+    """The exact revision a clause consumed: key, content digest and sequence."""
+    return f"{'/'.join(row.row.row_key)}#{row.row.content_sha256}#{row.row.revision_sequence}"
+
+
 def _listing_contains(
     facts: _Facts, attribute: ResolvedRow, *, cutoff: datetime, through: date
-) -> bool:
-    """Listed on or before ``through`` and not delisted on or before it."""
+) -> tuple[bool, tuple[ResolvedRow, ...]]:
+    """Listed on or before ``through`` and not delisted on or before it, and the
+    selected action revisions the clause consumed."""
     fields = attribute.row.fields
     first = date_field(fields.get("firstpricedate"))
     last = date_field(fields.get("lastpricedate"))
-    listed_events = [
-        when for when, _ in _admissible_actions(facts.actions, cutoff=cutoff, action=ACTION_LISTED)
-    ]
-    delisted_events = [
-        when
-        for when, _ in _admissible_actions(facts.actions, cutoff=cutoff, action=ACTION_DELISTED)
-    ]
-    listed_by = min([d for d in [first, *listed_events] if d is not None], default=None)
+    listed = _admissible_actions(facts.actions, cutoff=cutoff, action=ACTION_LISTED)
+    delisted = _admissible_actions(facts.actions, cutoff=cutoff, action=ACTION_DELISTED)
+    consumed = tuple(row for _, row in (*listed, *delisted))
+    listed_by = min(
+        [d for d in [first, *(when for when, _ in listed)] if d is not None], default=None
+    )
     if listed_by is None or listed_by > through:
-        return False
-    if any(when <= through for when in delisted_events):
-        return False
+        return False, consumed
+    if any(when <= through for when, _ in delisted):
+        return False, consumed
     delisted_flag = (fields.get("isdelisted") or "").upper() == "Y"
-    return not (delisted_flag and last is not None and last <= through)
+    return not (delisted_flag and last is not None and last <= through), consumed
 
 
 def _decide(
@@ -329,6 +346,7 @@ def _decide(
         history: int = 0,
         attribute: str | None = None,
         bars: tuple[str, ...] = (),
+        actions: tuple[str, ...] = (),
     ) -> MembershipRow:
         return MembershipRow(
             session_date=session,
@@ -341,6 +359,7 @@ def _decide(
             history_sessions_at_eval=history,
             attribute_revision=attribute,
             bars_consumed=bars,
+            actions_consumed=actions,
         )
 
     attribute = _latest_admissible(facts.attributes, cutoff=cutoff)
@@ -355,11 +374,18 @@ def _decide(
         return excluded(BuildExclusionReason.EXCHANGE, attribute=attribute_id)
     if category not in rule.common_stock_categories:
         return excluded(BuildExclusionReason.SECURITY_TYPE, attribute=attribute_id)
-    if not _listing_contains(facts, attribute, cutoff=cutoff, through=previous):
-        return excluded(BuildExclusionReason.HISTORY, attribute=attribute_id)
+    listed, listing_events = _listing_contains(facts, attribute, cutoff=cutoff, through=previous)
+    action_ids = tuple(_action_id(row) for row in listing_events)
+    if not listed:
+        return excluded(BuildExclusionReason.HISTORY, attribute=attribute_id, actions=action_ids)
     spinoffs = _admissible_actions(facts.actions, cutoff=cutoff, action=ACTION_SPINOFF)
+    action_ids += tuple(_action_id(row) for _, row in spinoffs)
     if any(when <= session for when, _ in spinoffs):
-        return excluded(BuildExclusionReason.UNRESOLVED_CORPORATE_ACTION, attribute=attribute_id)
+        return excluded(
+            BuildExclusionReason.UNRESOLVED_CORPORATE_ACTION,
+            attribute=attribute_id,
+            actions=action_ids,
+        )
 
     # History: d-1 and N_history sessions before it, each with an admissible bar.
     needed = calendar.trailing(previous, count=rule.history_sessions + 1)
@@ -373,7 +399,11 @@ def _decide(
     bar_ids = tuple(f"{when.isoformat()}:{bar.row.content_sha256}" for when, bar in consumed)
     if len(needed) < rule.history_sessions + 1 or history < rule.history_sessions + 1:
         return excluded(
-            BuildExclusionReason.HISTORY, history=history, attribute=attribute_id, bars=bar_ids
+            BuildExclusionReason.HISTORY,
+            history=history,
+            attribute=attribute_id,
+            bars=bar_ids,
+            actions=action_ids,
         )
     last_bar = consumed[-1][1]
     price = _unadjusted_close(last_bar)
@@ -384,6 +414,7 @@ def _decide(
             history=history,
             attribute=attribute_id,
             bars=bar_ids,
+            actions=action_ids,
         )
     window = consumed[-rule.addv_window_sessions :]
     maybe_volumes = [_dollar_volume(bar) for _, bar in window]
@@ -395,6 +426,7 @@ def _decide(
             history=history,
             attribute=attribute_id,
             bars=bar_ids,
+            actions=action_ids,
         )
     addv = sum(volumes, Decimal(0)) / Decimal(len(volumes))
     if addv < rule.addv_floor:
@@ -405,6 +437,7 @@ def _decide(
             history=history,
             attribute=attribute_id,
             bars=bar_ids,
+            actions=action_ids,
         )
     return MembershipRow(
         session_date=session,
@@ -417,6 +450,7 @@ def _decide(
         history_sessions_at_eval=history,
         attribute_revision=attribute_id,
         bars_consumed=bar_ids,
+        actions_consumed=action_ids,
     )
 
 

@@ -155,14 +155,14 @@ class TestEndToEnd:
         assert report.status is bp.BuildStatus.COMPLETED, report.defect
         assert report.bootstrap.outcome is RunnerOutcome.RELEASED
         assert report.manifest is bm.ManifestDisposition.PUBLISHED
-        assert report.artifacts_written == 6 and report.artifacts_already_present == 0
+        assert report.artifacts_written == 7 and report.artifacts_already_present == 0
         assert not report.publication_state_unknown
-        # Reads: two locators and every object they name; writes: six artifacts, one manifest.
+        # Reads: two locators and every object they name; writes: seven artifacts, one manifest.
         assert report.objects_read == 2 + 2 * (16 + 32)
-        assert scenario.data_plane_calls() == (98, 7)
+        assert scenario.data_plane_calls() == (98, 8)
         _assert_accounting(scenario, report)
-        puts = store.puts[-7:]
-        assert [key.split("/")[0] for key in puts] == ["silver"] * 3 + ["gold"] * 3 + ["manifests"]
+        puts = store.puts[-8:]
+        assert [key.split("/")[0] for key in puts] == ["silver"] * 3 + ["gold"] * 4 + ["manifests"]
         for key in puts:
             assert key.startswith(("silver/sharadar/", "gold/sharadar/", MANIFEST_PREFIX))
         # The manifest binds the delivered inputs, the versions and the outputs exactly.
@@ -301,7 +301,7 @@ class TestEndToEnd:
         for row in layer.stocks.rows:
             by_key.setdefault(row.row_key, []).append(row)
         same = by_key[(ZZCC.security_id, "2026-09-03")]
-        assert len(same) == 1 and same[0].seen_count == 2
+        assert len(same) == 1 and same[0].observation_count == 2
         assert same[0].system_first_seen_time == min(
             same[0].system_first_seen_time, same[0].provenance.retrieved_at
         )
@@ -888,6 +888,7 @@ class TestQualityAndGold:
             "severity": "WARNING",
             "scope": ZZAA.security_id,
             "count": 1,
+            "effective_from": None,
         } in findings
 
     def test_market_data_findings_are_warnings_with_counts(self) -> None:
@@ -927,11 +928,19 @@ class TestQualityAndGold:
             findings[("TEMPORAL_NO_SESSION_AFTER_T_MINUS_1", ZZAA.security_id)]["severity"]
             == "BLOCKING"
         )
-        assert ZZAA.security_id in manifest_of(store)["quality"]["blocked_securities"]
-        assert not any(
+        assert ZZAA.security_id in manifest_of(store)["quality"]["restricted_securities"]
+        # The membership decision stands as decided; the restriction sits beside it.
+        assert any(
             row["security_id"] == ZZAA.security_id
             for row in artifact_rows(report, "gold-universe-membership")
         )
+        restrictions = artifact_rows(report, "gold-eligibility-restrictions")
+        affected = {
+            r["security_id"]
+            for r in restrictions
+            if r["check"] == "TEMPORAL_NO_SESSION_AFTER_T_MINUS_1"
+        }
+        assert ZZAA.security_id in affected and ZZHH.security_id not in affected
 
     def test_a_valid_empty_result_is_stated_and_not_readiness(self) -> None:
         store = populated_store(runs=(1,))
@@ -1024,7 +1033,7 @@ class TestPublication:
             a.artifact.sha256 for a in second.publication.artifacts
         ]
         assert first.publication.run_id == second.publication.run_id
-        assert second.artifacts_already_present == 6 and second.artifacts_written == 0
+        assert second.artifacts_already_present == 7 and second.artifacts_written == 0
         assert second.manifest is bm.ManifestDisposition.PUBLISHED
         manifests = [json.loads(store.objects[k]) for k in store.keys_under(MANIFEST_PREFIX)]
         assert len(manifests) == 2
@@ -1055,7 +1064,7 @@ class TestPublication:
         scenario = BuildScenario(store)
         report = scenario.run()
         assert report.status is bp.BuildStatus.MANIFEST_NAME_OCCUPIED
-        assert report.artifacts_already_present == 6 and not report.publication_state_unknown
+        assert report.artifacts_already_present == 7 and not report.publication_state_unknown
         assert report.manifest is bm.ManifestDisposition.NAME_OCCUPIED
         assert len(store.keys_under(MANIFEST_PREFIX)) == 1
         _assert_accounting(scenario, report)
@@ -1087,13 +1096,13 @@ class TestPublication:
 
     def test_an_ambiguous_manifest_write_is_reported_as_unknown_never_as_success(self) -> None:
         store = populated_store()
-        store.fail_put_after = len(store.puts) + 6
+        store.fail_put_after = len(store.puts) + 7
         report = BuildScenario(store).run()
         assert report.status is bp.BuildStatus.MANIFEST_STATE_UNKNOWN
         assert report.publication_state_unknown is True
-        assert report.artifacts_written == 6
+        assert report.artifacts_written == 7
         store2 = populated_store()
-        store2.fail_put_after = len(store2.puts) + 6
+        store2.fail_put_after = len(store2.puts) + 7
         store2.fail_put_code = "AccessDenied"
         report2 = BuildScenario(store2).run()
         assert report2.status is bp.BuildStatus.MANIFEST_REFUSED
