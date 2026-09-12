@@ -8,6 +8,15 @@ That is a statement about the present, it will remain true of these days after a
 is not to be rewritten as though this decision had authority before it was accepted. On merge, this ADR
 becomes **ACCEPTED / IN FORCE** as **architecture and acceptance tests only**.
 
+**The condition above has since been satisfied.** **PR #93 merged** — merged **2026-09-12T05:02:48Z**, merge
+commit **`066a93d8780aa6fc06354ed096fa69c34496b10d`**, ordered parents **`aa2ca41176e954bdebd4ded3e55347324a8f3215`** then
+**`2ebbc446009346387d01169546363dc77e30c96c`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`09f48d984973f9fe6a041d74883d85f1bbf3b1f7`). ADR-0036 is therefore **ACCEPTED / IN FORCE** as architecture and acceptance
+tests. While the pull request was open it was proposed and carried no authority — true then, and not
+rewritten. **Acceptance declared nothing, applied nothing and materialized nothing**; the offline Terraform
+declaration that followed it is its own gate, and application, R-3 verification, assignment, profile and
+binding materialization and the first bounded ingestion each remain separately gated behind it.
+
 **Nothing was run to produce this design.** No AWS CLI or SDK call, no STS, SSO, IAM, Identity Center,
 Secrets Manager or S3 operation, no Terraform command of any kind, no policy simulation, no provider
 request, no private-data read, no ingestion, no backtest and no broker activity. Every AWS behaviour

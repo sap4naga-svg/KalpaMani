@@ -46,7 +46,8 @@ DESIGNED_NAMES: Final = (
 PERMISSION_SET_NAME_LIMIT: Final = 32
 
 TWELVE_DIGITS: Final = re.compile(r"\b\d{12}\b")
-HEX_40_OR_64: Final = re.compile(r"\b[0-9a-f]{40}\b|\b[0-9a-f]{64}\b")
+#: 64-hex only: the post-merge note legitimately carries 40-hex commit and tree SHAs.
+HEX_64: Final = re.compile(r"\b[0-9a-f]{64}\b")
 REAL_ARN: Final = re.compile(r"\barn:aws\b")
 IDENTIFIER_SHAPED: Final = re.compile(r"\b(?:runa|runb|assess)[a-z0-9]*-\d{8}-[a-z0-9]+\b")
 SSO_START_URL: Final = re.compile(r"https?://[a-z0-9-]+\.awsapps\.com", re.IGNORECASE)
@@ -511,22 +512,26 @@ def test_qualification_stays_isolated_and_control_stays_deferred() -> None:
 # -- nothing is declared, and nothing private is recorded ----------------------
 
 
-def test_no_designed_name_exists_under_infra() -> None:
-    files = [
-        path
-        for path in INFRA.rglob("*")
-        if path.is_file() and path.suffix in {".tf", ".example", ".md", ".json"}
-    ]
-    assert files
-    for path in files:
+def test_every_designed_name_is_declared_only_in_the_production_files() -> None:
+    """ADR-0036 is accepted and declared offline: the names live in production_*.tf only."""
+    production = sorted(INFRA.rglob("production_*.tf"))
+    assert production, "the offline ADR-0036 declaration is missing"
+    declared = "\n".join(path.read_text(encoding="utf-8") for path in production)
+    for name in DESIGNED_NAMES:
+        assert name in declared, f"{name} is accepted but not declared"
+    for path in sorted(INFRA.rglob("*")):
+        if not path.is_file() or path.suffix not in {".tf", ".example", ".json"}:
+            continue
+        if path.name.startswith("production_"):
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for name in DESIGNED_NAMES:
-            assert name not in text, f"{name} is designed, not declared: {path}"
+            assert name not in text, f"{name} leaked outside the production files: {path}"
 
 
 def test_the_adr_carries_no_private_value() -> None:
     assert TWELVE_DIGITS.search(ADR_TEXT) is None
-    assert HEX_40_OR_64.search(ADR_TEXT) is None
+    assert HEX_64.search(ADR_TEXT) is None
     assert REAL_ARN.search(ADR_TEXT) is None
     assert IDENTIFIER_SHAPED.search(ADR_TEXT) is None
     assert SSO_START_URL.search(ADR_TEXT) is None
@@ -538,8 +543,12 @@ def test_the_adr_carries_no_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_pr_93(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "ADR-0036" in text
-    assert re.search(r"ADR-0036[^\n]{0,200}PROPOSED — NOT IN FORCE", text) is not None
+    assert (
+        re.search(r"ADR-0036[^\n]{0,200}ACCEPTED / IN FORCE[^\n]{0,80}PR #93 merged", text)
+        is not None
+    )
+    assert "NOT PLANNED / NOT APPLIED" in text
     assert "CONTROL stays DEFERRED" in text

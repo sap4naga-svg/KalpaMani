@@ -692,7 +692,14 @@ class TestTheCandidate:
             assert f"data.aws_iam_policy_document.{name}.json" in block.attributes["policy"]
 
     def test_no_iam_role_or_attachment_is_declared_anywhere_under_infra(self) -> None:
-        """The second gate is infrastructure mutation, and it is not this one."""
+        """The qualification package names no holder: no role, no attachment.
+
+        Narrowed, not removed, when ADR-0036 was accepted: the production task
+        roles carry `aws_iam_role_policy_attachment` resources by design (ADR-0036
+        s.2.1), labelled `production_` and checked by their own module. A
+        qualification-labelled role or attachment, or an attachment of any other
+        kind, is still a violation here.
+        """
         offenders: list[str] = []
         for path in sorted(INFRA.glob("*.tf")):
             for block in parse_hcl(path.read_text(encoding="utf-8")):
@@ -704,9 +711,12 @@ class TestTheCandidate:
                     offenders.append(f"{path.name}: {block.labels}")
                 if block.labels[0] in (
                     "aws_iam_policy_attachment",
-                    "aws_iam_role_policy_attachment",
                     "aws_iam_user_policy_attachment",
                     "aws_iam_group_policy_attachment",
+                ):
+                    offenders.append(f"{path.name}: {block.labels}")
+                if block.labels[0] == "aws_iam_role_policy_attachment" and not all(
+                    label.startswith("production_") for label in block.labels[1:]
                 ):
                     offenders.append(f"{path.name}: {block.labels}")
         assert offenders == [], f"an identity or attachment appeared: {offenders}"
@@ -1413,6 +1423,17 @@ class TestTheSecretBindingIsIsolated:
             "log_retention_days",
             "multipart_abort_days",
             "name_prefix",
+            # The eight ADR-0036 inputs (production_variables.tf), every one with a
+            # default or optional, so the qualification binding is unchanged by them.
+            "production_acquisition_secret_arn",
+            "production_apply_principal_arn_pattern",
+            "production_binding_provenance",
+            "production_endpoints_enabled",
+            "production_image_digests",
+            "production_provider_origin_cidrs",
+            "production_r3_verification_digest",
+            "production_stage",
+            "production_target_account_id",
             TASK_CREDENTIAL_VARIABLE,
             "public_subnet_count",
             ACQUISITION_CREDENTIAL_VARIABLE,

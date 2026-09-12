@@ -574,7 +574,16 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
                 if not line.lstrip().startswith("#")
             )
             for resource_type, name in identity.findall(hcl):
-                assert not resource_type.endswith("attachment"), (
+                # ADR-0036 (accepted, PR #93) attaches its two customer-managed policies
+                # to each PRODUCTION task role by design; those attachments are labelled
+                # `production_` and are held by test_production_infrastructure.py. This
+                # guard is about the two ADR-0018 qualification actors, and every other
+                # attachment is still refused here.
+                production_attachment = (
+                    resource_type == "aws_iam_role_policy_attachment"
+                    and name.startswith("production_")
+                )
+                assert production_attachment or not resource_type.endswith("attachment"), (
                     f"{path.name} declares {resource_type}.{name}. Attaching a permission "
                     "set to a principal is infrastructure mutation, which is a separate gate."
                 )

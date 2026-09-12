@@ -401,7 +401,6 @@ FORBIDDEN_TERRAFORM = {
     "aws_lb": "no load balancer: nothing accepts inbound connections",
     "aws_iam_user": "no IAM user: roles issue short-lived credentials instead",
     "aws_iam_access_key": "no long-lived access key may be created by Terraform",
-    "aws_vpc_security_group_ingress_rule": "the task security group admits nothing",
     "aws_ecs_service": "compute is ephemeral; a service is an always-on workload",
     "GLACIER": "an archival transition makes provable deletion slow and expensive",
     'sse_algorithm = "aws:kms"': "not wrong, but a KMS key is a governed change, not a default",
@@ -815,6 +814,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # ADR-0034 and ADR-0035 merged together as PR #92 on 2026-09-12; ADR-0035 depends on ADR-0034.
     ("ADR-0034", "PR #92 merged"),
     ("ADR-0035", "PR #92 merged"),
+    # ADR-0036 merged as PR #93 on 2026-09-12: architecture and acceptance tests only.
+    ("ADR-0036", "PR #93 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -4335,7 +4336,14 @@ def _qualification_role_declarations() -> list[str]:
         for resource_type, name in identity.findall(hcl):
             if "qualification_acquisition" in name or "qualification_assessment" in name:
                 offenders.append(f"{path.name}:{resource_type}.{name}")
-            elif resource_type.endswith("attachment"):
+            elif resource_type.endswith("attachment") and not (
+                resource_type == "aws_iam_role_policy_attachment" and name.startswith("production_")
+            ):
+                # ADR-0036 (accepted, PR #93) attaches its two customer-managed policies
+                # to each production task role by design; those attachments are labelled
+                # `production_` and are held by tests/unit/test_production_infrastructure.py.
+                # Every other attachment, and every qualification-labelled identity, is
+                # still a violation here.
                 offenders.append(f"{path.name}:{resource_type}.{name}")
     return offenders
 
@@ -4351,7 +4359,7 @@ def _qualification_policy_declarations() -> list[str]:
     infra = REPO_ROOT / "infra"
     if not infra.is_dir():
         return []
-    declared = re.compile(r'resource\s+"aws_iam_policy"\s+"([^"]+)"')
+    declared = re.compile(r'resource\s+"aws_iam_policy"\s+"(qualification_[^"]+)"')
     found: list[str] = []
     for path in sorted(infra.rglob("*.tf")):
         found.extend(declared.findall(strip_hcl_comments(read(path))))
@@ -15259,6 +15267,34 @@ def main() -> int:
                 token.lower() not in hcl_only.lower(),
                 why,
             )
+
+        # An inbound rule is permitted on exactly one security group: the ADR-0036
+        # interface-endpoint group, which must admit 443 from the two production task
+        # groups for an interface endpoint to answer at all. No task security group --
+        # the foundation's or either production actor's -- may carry an ingress rule,
+        # and no ingress rule may name a CIDR. Asked precisely on the parsed HCL rather
+        # than as a blanket token, because the blanket form could not tell an endpoint
+        # from a listener.
+        ingress_rules = re.findall(
+            r'resource\s+"aws_vpc_security_group_ingress_rule"\s+"([^"]+)"\s*\{(.*?)\n\}',
+            hcl_only,
+            re.DOTALL,
+        )
+        f.check(
+            "every Terraform ingress rule targets the ADR-0036 endpoint security group and no CIDR",
+            all(
+                re.search(
+                    r"security_group_id\s*=\s*aws_security_group\.production_endpoints\[0\]\.id",
+                    body,
+                )
+                and "referenced_security_group_id" in body
+                and "cidr_ipv4" not in body
+                and "cidr_ipv6" not in body
+                for _, body in ingress_rules
+            ),
+            "the task security groups admit nothing; only the interface-endpoint group answers, "
+            "and only to the tasks",
+        )
 
         f.check(
             "the licensed bucket has versioning disabled",
