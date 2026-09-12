@@ -389,6 +389,11 @@ def test_no_production_module_or_script_constructs_the_concrete_transport() -> N
         BINDING_PREFLIGHT_TEST,
         SCRIPTS / "sharadar_authenticated_qualification.py",
         SCRIPTS / "sharadar_empirical_qualification.py",
+        # The production task image entrypoint (proposed, ADR-0043): the acquisition
+        # entry's transport factory, reached only after a closed entry is selected, a
+        # compiled configuration exists and the credential environment is a task's.
+        # The build entry has no transport factory to call.
+        SCRIPTS / "production_task_entrypoint.py",
     }
     offenders: list[str] = []
     for root in (PACKAGE_ROOT, SCRIPTS, TESTS):

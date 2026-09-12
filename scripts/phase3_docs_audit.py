@@ -825,6 +825,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0040", "PR #97 merged"),
     # ADR-0041 merged as PR #98 on 2026-09-12, with the offline production provider adapter.
     ("ADR-0041", "PR #98 merged"),
+    # ADR-0042 merged as PR #99 on 2026-09-12, with the build-side pagination admission gate.
+    ("ADR-0042", "PR #99 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -6471,11 +6473,14 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
-#: Every file permitted to construct an AWS SDK client. All four are operator
-#: entry points under ``scripts/`` that refuse by default; no module under
-#: ``src/`` appears here, which is what keeps the data platform free of ambient
-#: credential discovery.
+#: Every file permitted to construct an AWS SDK client. All five are entry points
+#: under ``scripts/`` that refuse by default -- four operator commands, and the
+#: production task image entrypoint proposed by ADR-0043, which builds a client
+#: only after a closed entry is selected, a compiled configuration exists and the
+#: credential environment is a task's; no module under ``src/`` appears here,
+#: which is what keeps the data platform free of ambient credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
+    "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",
     "sharadar_binding_preflight.py",
     "sharadar_empirical_qualification.py",
@@ -19950,10 +19955,11 @@ def main() -> int:
     f.check(
         "only the authorized operator entry points construct an SDK client",
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
-        # candidate adds its two operator entry points. All four are named, so a
-        # fifth arriving anywhere fails -- a count could drift, a list cannot.
+        # candidate adds its two operator entry points; ADR-0043 proposes the task
+        # image entrypoint. All five are named, so a sixth arriving anywhere fails
+        # -- a count could drift, a list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
-        "four named modules, not a count that could drift",
+        "five named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",

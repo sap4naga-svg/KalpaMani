@@ -766,11 +766,18 @@ def token_violations(source: str, tokens: tuple[str, ...]) -> list[str]:
     return [token for token in tokens if token in source]
 
 
+#: Modules that name a profile-file variable only to **refuse** its presence by name
+#: (ADR-0043: a task holds the container credential provider and nothing else). The
+#: refusal reads no value and opens no file; a test in the task-entry suite proves
+#: that naming these variables is what makes the environment refuse.
+PROFILE_REFUSING_MODULES: Final[frozenset[str]] = frozenset({"task_clients.py"})
+
+
 def test_no_production_module_reads_or_writes_an_aws_profile_file() -> None:
     offenders = {
         path.name: token_violations(executable(path), PROFILE_FILE_TOKENS)
         for path in production_modules()
-        if path.name not in GUARD_MODULES
+        if path.name not in GUARD_MODULES | PROFILE_REFUSING_MODULES
     }
     found = {name: hits for name, hits in offenders.items() if hits}
     assert found == {}, f"an application reaches a profile or SSO cache: {found}"
