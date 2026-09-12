@@ -29,6 +29,7 @@ from fixtures.production_build import (
 from fixtures.production_entry import (
     ACQ,
     BUILD,
+    CONTAINER_URI,
     METADATA_URI,
     TASK_ENVIRONMENT_NAMES,
     AcquisitionHarness,
@@ -545,12 +546,81 @@ class TestBootstrapRefusalsThroughTheEntry:
             "",
         ):
             harness = AcquisitionHarness(spent=CONFIGURED)
-            harness.environment = {"ECS_CONTAINER_METADATA_URI_V4": uri}
+            harness.environment = {
+                "ECS_CONTAINER_METADATA_URI_V4": uri,
+                "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI,
+            }
             assert harness.run().outcome is TaskOutcome.REFUSED_SELF_CHECK, uri
             assert harness.metadata.calls == []
         harness = AcquisitionHarness(spent=CONFIGURED)
-        harness.environment = {}
+        harness.environment = {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI}
         assert harness.run().outcome is TaskOutcome.REFUSED_SELF_CHECK
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            None,
+            "",
+            "http://169.254.170.2/v2/credentials/abc",
+            "/v4/0123456789abcdef0123456789abcdef-0/task",
+            "/v2/credentials/",
+            "/v2/credentials/abc?x=1",
+            "/v2/credentials/abc/../../v4/x",
+            "//169.254.170.2/v2/credentials/abc",
+        ],
+    )
+    def test_a_container_credential_uri_outside_the_documented_shape_refuses_both_entries(
+        self, value: str | None
+    ) -> None:
+        """The one credential value the task reads is checked before any client exists."""
+        acquisition = AcquisitionHarness(spent=CONFIGURED)
+        acquisition.environment = {"ECS_CONTAINER_METADATA_URI_V4": METADATA_URI}
+        if value is not None:
+            acquisition.environment["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = value
+        receipt = acquisition.run()
+        assert receipt.outcome is TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT, value
+        assert acquisition.constructions.built == [] and acquisition.data_plane_calls() == (0, 0, 0)
+        build = BuildHarness(FakeS3Store())
+        build.environment = dict(acquisition.environment)
+        receipt = build.run()
+        assert receipt.outcome is TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT, value
+        assert build.constructions.built == [] and build.data_plane_calls() == (0, 0)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        ],
+    )
+    def test_a_full_uri_or_token_variant_of_the_container_provider_refuses(
+        self, extra: str
+    ) -> None:
+        harness = AcquisitionHarness(spent=CONFIGURED)
+        harness.environment_names = (*TASK_ENVIRONMENT_NAMES, extra)
+        assert harness.run().outcome is TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT
+        assert harness.constructions.built == []
+
+    def test_a_short_name_cluster_in_the_metadata_passes_the_self_check(self) -> None:
+        """Both documented Cluster representations reach processing (finding 2)."""
+        harness = AcquisitionHarness(spent=CONFIGURED)
+        harness.metadata.document = {
+            **metadata_document(ACQ),
+            "Cluster": "synthetic-research-cluster",
+        }
+        receipt = harness.run()
+        assert receipt.outcome is TaskOutcome.COMPLETED and receipt.runner is RunnerOutcome.RELEASED
+        build = BuildHarness(harness.store, runs=((RUN_1, 1, RUN_1_AT),))
+        build.metadata.document = {
+            **metadata_document(BUILD),
+            "Cluster": "synthetic-research-cluster",
+        }
+        assert build.run().outcome is TaskOutcome.COMPLETED
+        mismatched = AcquisitionHarness(spent=CONFIGURED)
+        mismatched.metadata.document = {**metadata_document(ACQ), "Cluster": "another-cluster"}
+        assert mismatched.run().outcome is TaskOutcome.REFUSED_SELF_CHECK
+        assert mismatched.data_plane_calls() == (0, 0, 0)
 
     def test_a_missing_input_refuses_before_identity(self) -> None:
         harness = AcquisitionHarness(spent=CONFIGURED)

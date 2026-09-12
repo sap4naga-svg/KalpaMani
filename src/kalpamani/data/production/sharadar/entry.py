@@ -348,13 +348,16 @@ def pre_entry_refusal(
     entry: TaskEntry,
     configuration: EntryConfiguration,
     environment_names: Callable[[], Any],
+    environment: Callable[[str], object],
 ) -> TaskOutcome | None:
     """The checks every entry makes before it constructs anything, in order.
 
-    The configuration must be this entry's, and the credential environment must be a
-    task's. Both are answered from compiled values and variable names alone.
+    The configuration must be this entry's; the credential environment must be a
+    task's by variable name; and the one credential value the task reads -- the
+    container relative URI -- must be the documented shape.
     """
     from kalpamani.data.production.sharadar.task_clients import (
+        container_credential_source_refusal,
         task_credential_environment_refusal,
     )
 
@@ -365,6 +368,8 @@ def pre_entry_refusal(
     except Exception:
         return TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT
     if task_credential_environment_refusal(names) is not None:
+        return TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT
+    if container_credential_source_refusal(environment) is not None:
         return TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT
     return None
 

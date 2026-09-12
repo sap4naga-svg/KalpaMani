@@ -18,9 +18,11 @@ variable pointing anywhere else costs nothing and reaches nothing.
 back, strict UTF-8, no byte-order mark, no duplicate keys. The document is then handed
 to the accepted parser, which admits only documented fields.
 
-**Contradiction.** The documented ``Cluster`` field, when present as an ARN, must name
-the same partition, region and account as ``TaskARN`` and the cluster ``TaskARN``'s
-path names; a document that disagrees with itself is refused rather than half-trusted.
+**Contradiction.** The documented ``Cluster`` field carries either the cluster's ARN or
+its short name (both are documented v4 representations). A short name must equal the
+cluster component of ``TaskARN`` exactly; an ARN must name the same partition, region
+and account as ``TaskARN`` and that same cluster. Anything else is a document that
+disagrees with itself, refused rather than half-trusted.
 
 **What is not here, on purpose.** No subnet or public-IP self-check: ADR-0036 withdrew
 the claim that the endpoint documents either, and placement stays the launcher's check.
@@ -53,11 +55,13 @@ TASK_PATH_SUFFIX: Final = "/task"
 METADATA_TIMEOUT_SECONDS: Final = 2.0
 MAX_METADATA_BYTES: Final = 64 * 1024
 
-#: A cluster ARN as ECS reports it in the task document.
+#: A cluster ARN as ECS reports it in the task document, and the short name it may
+#: report instead (the same grammar a cluster name satisfies in a task ARN).
 CLUSTER_ARN_RE: Final = re.compile(
     r"arn:(?P<partition>aws):ecs:(?P<region>[a-z0-9-]+):(?P<account>[0-9]{12}):cluster/"
     r"(?P<name>[A-Za-z0-9_-]{1,255})"
 )
+CLUSTER_NAME_RE: Final = re.compile(r"[A-Za-z0-9_-]{1,255}")
 
 
 class TaskMetadataDefect(StrEnum):
@@ -158,9 +162,10 @@ def decode_task_document(raw: object) -> dict[str, Any]:
 def contradiction_refusal(document: dict[str, Any], metadata: TaskMetadata) -> str | None:
     """Why the documented fields disagree with one another, or ``None``.
 
-    ``Cluster`` is optional in the shape this module admits; when it is present it
-    must be a cluster ARN in the task ARN's partition, region and account, naming the
-    cluster the task ARN's path names. Value-free reasons only.
+    ``Cluster`` is optional in the shape this module admits. When present it is either
+    the cluster's short name, which must equal the task ARN's cluster component, or a
+    cluster ARN in the task ARN's partition, region and account naming that same
+    cluster. Value-free reasons only.
     """
     task = TASK_ARN_RE.fullmatch(metadata.task_arn)
     if task is None:
@@ -170,14 +175,16 @@ def contradiction_refusal(document: dict[str, Any], metadata: TaskMetadata) -> s
         return None
     if type(cluster) is not str:
         return "the cluster field is not a string"
+    task_cluster = metadata.task_arn[metadata.task_arn.index(":task/") + 6 :].split("/", 1)[0]
+    if CLUSTER_NAME_RE.fullmatch(cluster):
+        return None if cluster == task_cluster else "the cluster name is not the task's cluster"
     match = CLUSTER_ARN_RE.fullmatch(cluster)
     if match is None:
-        return "the cluster field is not a cluster ARN"
+        return "the cluster field is neither a cluster name nor a cluster ARN"
     task_prefix = metadata.task_arn[: metadata.task_arn.index(":task/")]
     cluster_prefix = cluster[: cluster.index(":cluster/")]
     if task_prefix != cluster_prefix:
         return "the cluster ARN names another partition, region or account"
-    task_cluster = metadata.task_arn[metadata.task_arn.index(":task/") + 6 :].split("/", 1)[0]
     if task_cluster != match.group("name"):
         return "the cluster ARN names another cluster"
     return None
@@ -214,6 +221,7 @@ def fetch_task_metadata(
 
 __all__ = [
     "CLUSTER_ARN_RE",
+    "CLUSTER_NAME_RE",
     "MAX_METADATA_BYTES",
     "METADATA_HOST",
     "METADATA_PATH_PREFIX",

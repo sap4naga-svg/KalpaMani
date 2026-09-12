@@ -2357,6 +2357,9 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         # Asserts the absence of a client in those entry points, so it necessarily
         # names the constructor it is asserting the absence of.
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
+        # Seeds a synthetic ``boto3.Session`` as the default session precisely to prove
+        # the task entrypoint never uses it; every credential it holds is invented.
+        PROJECT_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):
@@ -2364,7 +2367,13 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
             if path in scanning:
                 continue
             source = path.read_text(encoding="utf-8")
-            if "boto3.client(" in source or "boto3.Session(" in source:
+            constructors = (
+                "boto3.client(",
+                "boto3.Session(",
+                # A botocore session built directly is an SDK session too (ADR-0043).
+                "from botocore.session import Session",
+            )
+            if any(constructor in source for constructor in constructors):
                 offenders.append(str(path.relative_to(PROJECT_ROOT)))
     assert offenders == [], f"an SDK client is constructed at: {offenders}"
 

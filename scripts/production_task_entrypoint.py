@@ -17,12 +17,34 @@ passed inside :mod:`kalpamani.data.production.sharadar.entry`.
 **What this file decides is exactly what ``src/`` cannot**: which real client to build.
 The SDK is imported here and only here on the task path (the data platform imports
 none), with the pure configuration dictionaries the platform states -- one attempt in
-total, finite socket timeouts, the regional STS endpoint -- and the credential chain
-left to the ECS container provider, which the platform has already required by
-variable name. The metadata read is a single bounded ``urllib`` request to the URL the
-platform validated, through an opener with **no proxy handler**, so an ambient proxy
-variable cannot redirect a link-local read. The provider transport is the accepted
-origin-pinned one at the production response ceiling.
+total, finite socket timeouts, the regional STS endpoint. **Credentials come from the
+ECS container credential provider and from nothing else, by construction rather than
+by exclusion**: every client is created from one fresh ``botocore`` session whose
+credential resolver holds exactly one provider, the container provider over the
+validated ``/v2/credentials/<id>`` relative URI, so the default chain -- environment
+keys, a shared credentials file, a config file, ``credential_process``, assume-role,
+web identity, SSO, the instance metadata service -- is never consulted, and
+``boto3``'s cached default session is never used. The session's profile, config-file
+and credentials-file variables are overridden so no ``AWS_*`` profile or file variable
+is read either. A container retrieval that fails, fails closed: no other source is
+tried, and no service request is issued. Credentials returned by the agent are
+refreshable through the same, and only the same, provider.
+
+**Reliance on the SDK, stated.** ``botocore.session.Session(session_vars=...)``,
+``Session.register_component``, ``Session.create_client``,
+``botocore.credentials.CredentialResolver``, ``botocore.credentials.ContainerProvider``
+and ``botocore.utils.ContainerMetadataFetcher`` are non-underscored botocore classes and
+methods; they are the SDK's own container-credential mechanism (the one the documented
+default chain uses at its "container credentials" step), but the registry component
+name ``credential_provider`` and the ``session_vars`` tuple layout are not part of the
+documented public API. The tests cover both directly -- they build a session through
+this file's real factory against synthetic files, a seeded default session and a
+synthetic HTTP seam, and assert which provider answered and which were never consulted.
+
+The metadata read is a single bounded ``urllib`` request to the URL the platform
+validated, through an opener with **no proxy handler**, so an ambient proxy variable
+cannot redirect a link-local read. The provider transport is the accepted origin-pinned
+one at the production response ceiling.
 
 **The compiled configuration does not exist in this repository.** The values an image
 needs beyond the code -- its own digest and revision, the acquisition secret
@@ -94,16 +116,84 @@ def _resolve_origin(host: str) -> list[str]:
     return sorted({entry[4][0] for entry in socket.getaddrinfo(host, 443, family=socket.AF_INET)})
 
 
-def _client(service: Any) -> Any:
-    """One SDK client built from the platform's pure construction keywords."""
-    import boto3
-    from botocore.config import Config
+#: A path no file can have: the session's config and credentials "files". Reading them
+#: raises the SDK's own not-found signal, which the session treats as no configuration.
+_NO_FILE: Final = "//kalpamani-task-has-no-aws-configuration-file//"
 
-    from kalpamani.data.production.sharadar.task_clients import client_construction_kwargs
+#: The session variables overridden so that **no** environment variable and **no** file
+#: can steer the session: no profile, no config file, no credentials file. The tuple is
+#: botocore's ``(config_name, env_var, default, converter)``; ``None`` for the first two
+#: means neither a config key nor an environment variable is consulted.
+_ISOLATED_SESSION_VARS: Final[dict[str, tuple[Any, Any, Any, Any]]] = {
+    "profile": (None, None, None, None),
+    "config_file": (None, None, _NO_FILE, None),
+    "credentials_file": (None, None, _NO_FILE, None),
+}
 
-    kwargs = client_construction_kwargs(service)
-    config = Config(**kwargs.pop("config"))  # type: ignore[arg-type]
-    return boto3.client(config=config, **kwargs)
+
+def _isolated_session(environment: Any, *, http: Any = None, sleep: Any = None) -> Any:
+    """One fresh session whose only credential source is the ECS container provider.
+
+    ``environment`` is a mapping read for exactly one key -- the container relative
+    URI -- which must already be the documented shape; ``http`` is the fetcher's HTTP
+    session (the SDK's own when ``None``), ``sleep`` its retry sleeper. The container
+    provider is handed a mapping holding **only** the relative URI, so it can see no
+    full-URI variant and no authorization token. The retrieval is the SDK's bounded one:
+    a 2-second timeout and at most three attempts against the link-local agent, and a
+    failure raises the SDK's sanitized retrieval error, which the entry classifies as
+    ``REFUSED_DEPENDENCY`` without trying anything else.
+    """
+    import time
+
+    from botocore.credentials import ContainerProvider, CredentialResolver
+    from botocore.session import Session
+    from botocore.utils import ContainerMetadataFetcher
+
+    from kalpamani.data.production.sharadar.task_clients import (
+        CONTAINER_CREDENTIAL_VARIABLE,
+        container_credential_source_refusal,
+    )
+
+    if container_credential_source_refusal(environment.get) is not None:
+        raise ValueError("the container credential source is not the documented shape")
+    relative_uri = environment[CONTAINER_CREDENTIAL_VARIABLE]
+    session = Session(session_vars=dict(_ISOLATED_SESSION_VARS))
+    fetcher = ContainerMetadataFetcher(session=http, sleep=time.sleep if sleep is None else sleep)
+    provider = ContainerProvider(
+        environ={CONTAINER_CREDENTIAL_VARIABLE: relative_uri}, fetcher=fetcher
+    )
+    session.register_component("credential_provider", CredentialResolver(providers=[provider]))
+    return session
+
+
+class _IsolatedClients:
+    """Builds every task client from one isolated session, created on first use."""
+
+    __slots__ = ("_environment", "_http", "_session", "_sleep")
+
+    def __init__(self, environment: Any, *, http: Any = None, sleep: Any = None) -> None:
+        """Bind the environment mapping; ``http`` and ``sleep`` are test seams only."""
+        self._environment = environment
+        self._http = http
+        self._sleep = sleep
+        self._session: Any = None
+
+    def client(self, service: Any) -> Any:
+        """One client from the platform's pure construction keywords and the session."""
+        from botocore.config import Config
+
+        from kalpamani.data.production.sharadar.task_clients import client_construction_kwargs
+
+        if self._session is None:
+            self._session = _isolated_session(self._environment, http=self._http, sleep=self._sleep)
+        kwargs = client_construction_kwargs(service)
+        config = Config(**kwargs.pop("config"))  # type: ignore[arg-type]
+        return self._session.create_client(config=config, **kwargs)
+
+
+def _client(service: Any, clients: _IsolatedClients) -> Any:
+    """One SDK client from the isolated session. Never ``boto3.client``."""
+    return clients.client(service)
 
 
 def _transport() -> Any:
@@ -141,8 +231,13 @@ def _compiled_configuration(entry: Any) -> Any:
         return None
 
 
-def _factories(entry: Any, working_directory: Any) -> Any:
-    """The real factories for ``entry``. Constructs nothing; each factory is deferred."""
+def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> Any:
+    """The real factories for ``entry``. Constructs nothing; each factory is deferred.
+
+    ``clients`` is a test seam: an :class:`_IsolatedClients` over a synthetic HTTP
+    session. The image passes none and gets the real one over ``os.environ``.
+    """
+    import os
     import time
     from datetime import UTC, datetime
 
@@ -152,6 +247,9 @@ def _factories(entry: Any, working_directory: Any) -> Any:
     def now() -> datetime:
         return datetime.now(UTC)
 
+    if clients is None:
+        clients = _IsolatedClients(os.environ)
+
     if entry is TaskEntry.ACQUISITION:
         from kalpamani.data.production.sharadar.acquisition_entry import AcquisitionFactories
 
@@ -159,10 +257,10 @@ def _factories(entry: Any, working_directory: Any) -> Any:
             environment_names=_environment_names,
             environment=_environment,
             metadata_fetch=_metadata_fetch,
-            ssm=lambda: _client(TaskService.SSM),
-            sts=lambda: _client(TaskService.STS),
-            s3=lambda: _client(TaskService.S3),
-            secrets=lambda: _client(TaskService.SECRETS_MANAGER),
+            ssm=lambda: _client(TaskService.SSM, clients),
+            sts=lambda: _client(TaskService.STS, clients),
+            s3=lambda: _client(TaskService.S3, clients),
+            secrets=lambda: _client(TaskService.SECRETS_MANAGER, clients),
             transport=_transport,
             resolve_origin=_resolve_origin,
             # The task-side spent-identity source is an owner decision not yet taken
@@ -179,9 +277,9 @@ def _factories(entry: Any, working_directory: Any) -> Any:
         environment_names=_environment_names,
         environment=_environment,
         metadata_fetch=_metadata_fetch,
-        ssm=lambda: _client(TaskService.SSM),
-        sts=lambda: _client(TaskService.STS),
-        s3=lambda: _client(TaskService.S3),
+        ssm=lambda: _client(TaskService.SSM, clients),
+        sts=lambda: _client(TaskService.STS, clients),
+        s3=lambda: _client(TaskService.S3, clients),
         now=now,
         monotonic=time.monotonic,
         sleep=time.sleep,

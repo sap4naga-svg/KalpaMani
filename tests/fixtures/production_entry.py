@@ -80,6 +80,8 @@ TASK_ENVIRONMENT_NAMES: Final[tuple[str, ...]] = (
     "AWS_REGION",
 )
 METADATA_URI: Final = "http://169.254.170.2/v4/0123456789abcdef0123456789abcdef-0"
+#: The Fargate container credential relative URI, as the agent places it (synthetic id).
+CONTAINER_URI: Final = "/v2/credentials/00000000-0000-4000-8000-000000000000"
 #: Documentation-range addresses (RFC 5737); they route nowhere.
 ORIGIN_ADDRESSES: Final[frozenset[str]] = frozenset({"192.0.2.10", "192.0.2.11"})
 
@@ -200,7 +202,10 @@ class AcquisitionHarness:
         self.constructions = Constructions()
         self.cleanups = 0
         self.environment_names: tuple[str, ...] = TASK_ENVIRONMENT_NAMES
-        self.environment: dict[str, str] = {METADATA_URI_ENV_VAR: METADATA_URI}
+        self.environment: dict[str, str] = {
+            METADATA_URI_ENV_VAR: METADATA_URI,
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI,
+        }
         self.resolve: Callable[[str], Iterable[object]] = resolve_inside
 
     def cleanup(self) -> None:
@@ -301,7 +306,10 @@ class BuildHarness:
         self.constructions = Constructions()
         self.cleanups = 0
         self.environment_names: tuple[str, ...] = TASK_ENVIRONMENT_NAMES
-        self.environment: dict[str, str] = {METADATA_URI_ENV_VAR: METADATA_URI}
+        self.environment: dict[str, str] = {
+            METADATA_URI_ENV_VAR: METADATA_URI,
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI,
+        }
 
     def cleanup(self) -> None:
         self.cleanups += 1
@@ -349,6 +357,7 @@ class BuildHarness:
 __all__ = [
     "ACQ",
     "BUILD",
+    "CONTAINER_URI",
     "METADATA_URI",
     "ORIGIN_ADDRESSES",
     "TASK_ENVIRONMENT_NAMES",

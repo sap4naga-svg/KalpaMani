@@ -120,7 +120,10 @@ def run_build_entry(*, configuration: EntryConfiguration, factories: BuildFactor
     cleanup = factories.cleanup
 
     refused = pre_entry_refusal(
-        entry=entry, configuration=configuration, environment_names=factories.environment_names
+        entry=entry,
+        configuration=configuration,
+        environment_names=factories.environment_names,
+        environment=factories.environment,
     )
     if refused is not None:
         return refusal_receipt(entry, refused, cleanup=cleanup)

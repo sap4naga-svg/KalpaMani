@@ -70,14 +70,29 @@ capabilities   acquisition: put-only S3, secrets client, provider adapter over t
                (one attempt, actual transport invocations counted), spent-identity registry or the
                accepted unavailable one; build: get-and-put S3, no secret, no transport, no provider
                -- its factories have no field one could arrive through (A-8)
-credentials    a task holds the ECS container credential provider and nothing else: a static key, a
-               profile, a shared credentials or config file or a web-identity role present BY NAME
-               refuses; the container variable absent refuses; no value is ever read
+credentials    a task obtains credentials from the ECS container credential provider and from
+               nothing else, BY CONSTRUCTION: every client is created from one fresh botocore
+               session whose credential resolver holds exactly one provider -- the container
+               provider over the validated relative URI -- so environment keys, a shared
+               credentials file, a config file, credential_process, assume-role, web identity,
+               SSO and the instance metadata service are never consulted, and boto3's cached
+               default session is never used; the session's profile, config-file and
+               credentials-file variables are overridden so no AWS_* profile or file variable is
+               read; a container retrieval that fails (2 s timeout, at most 3 attempts against
+               the agent) fails closed with no other source tried and no service request issued;
+               refresh goes through the same provider only. Before any session exists: a static
+               key, profile, shared or config file, web-identity role, full-URI container variant
+               or container authorization token present BY NAME refuses; the one credential value
+               read -- AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -- must be the documented
+               /v2/credentials/<id> shape, served from the link-local agent address and never the
+               metadata endpoint's /v4/ path
 metadata       one bounded read of <ECS_CONTAINER_METADATA_URI_V4>/task: scheme http, host exactly
                169.254.170.2, no userinfo, port 80 or none, a /v4/<id> path; 2 s; 64 KiB; strict
                UTF-8, no BOM, no duplicate key; documented fields only (TaskARN, Family, Revision,
-               Containers[].ImageID); Cluster, when present, must agree with TaskARN; NO subnet or
-               public-IP self-check (withdrawn by ADR-0036)
+               Containers[].ImageID); Cluster, when present, is either the cluster's short name,
+               which must equal TaskARN's cluster component, or a cluster ARN in TaskARN's
+               partition, region and account naming that cluster (both documented v4 forms); NO
+               subnet or public-IP self-check (withdrawn by ADR-0036)
 identity       one GetCallerIdentity through an STS client pinned to the regional endpoint, reduced to
                UserId, Account, Arn; the accepted gate compares
 clients        every task client: total_max_attempts 1, standard mode, finite connect and read
@@ -130,8 +145,14 @@ log and completing the row by hand. **Neither is chosen here.** The offline boun
   what ADR-0036 §2.9 refuses to carry a value in, and a flag is an override surface; the command token
   already is the selection.
 - **Let the SDK's default credential chain run.** A task launched on a workstation, or with an ambient
-  key, would authenticate as something other than the task role and fail only at the identity gate,
-  after an STS call; refusing by variable name costs nothing and reaches nothing.
+  key, would authenticate as something other than the task role and fail only at the identity gate --
+  after the first SSM binding read, which precedes the proof. Refusing by variable name costs nothing
+  and reaches nothing, but names alone do not exclude default credential files or a cached default
+  session, so the chain is replaced rather than merely fenced: the resolver holds the container
+  provider and nothing else. The SDK's non-underscored container mechanism (`ContainerProvider`,
+  `CredentialResolver`, `ContainerMetadataFetcher`, `Session.register_component`) is relied on and
+  covered directly by tests, since its component name and `session_vars` layout are not documented
+  public API.
 - **Keep the SDK's default retry mode for SSM, STS and Secrets Manager.** The release barrier counts up
   to 60 reads, the identity proof is one call and the credential is one retrieval; hidden retries would be
   operations the accounting never counted.

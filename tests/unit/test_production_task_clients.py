@@ -34,6 +34,7 @@ from kalpamani.data.production.sharadar.identities import (
 from kalpamani.data.production.sharadar.metadata import parse_task_metadata
 from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
 from kalpamani.data.production.sharadar.task_clients import (
+    CONTAINER_CREDENTIAL_VARIABLE,
     IdentityUnavailableError,
     PutOnlyS3Client,
     ReadWriteS3Client,
@@ -42,12 +43,15 @@ from kalpamani.data.production.sharadar.task_clients import (
     client_config_kwargs,
     client_construction_kwargs,
     compiled_origin_addresses,
+    container_credential_source_refusal,
+    container_credentials_url,
     origin_address_refusal,
     sts_endpoint_url,
     task_credential_environment_refusal,
 )
 from kalpamani.data.production.sharadar.task_metadata import (
     MAX_METADATA_BYTES,
+    METADATA_HOST,
     METADATA_TIMEOUT_SECONDS,
     TaskMetadataDefect,
     TaskMetadataError,
@@ -175,10 +179,36 @@ class TestFetchTaskMetadata:
             decode_task_document(oversize)
         assert refusal.value.defect is TaskMetadataDefect.RESPONSE_TOO_LARGE
 
+    def test_both_documented_cluster_representations_are_admitted(self) -> None:
+        """v4 documents ``Cluster`` as the ARN or the short name; both must agree with TaskARN."""
+        arn_form = metadata_document(ACQ)
+        assert arn_form["Cluster"].startswith("arn:aws:ecs:")
+        name_form = {**metadata_document(ACQ), "Cluster": "synthetic-research-cluster"}
+        for document in (arn_form, name_form):
+            parsed = parse_task_metadata(document)
+            assert parsed is not None
+            assert contradiction_refusal(document, parsed) is None
+            fetched = fetch_task_metadata(
+                environment=self._environment(), fetch=lambda *a, d=document: encode(d)
+            )
+            assert fetched["Cluster"] == document["Cluster"]
+
     def test_a_contradictory_cluster_refuses(self) -> None:
         other_account = "arn:aws:ecs:us-east-1:999999999999:cluster/synthetic-research-cluster"
+        other_region = f"arn:aws:ecs:eu-west-1:{ACCOUNT}:cluster/synthetic-research-cluster"
+        other_partition = f"arn:aws-cn:ecs:us-east-1:{ACCOUNT}:cluster/synthetic-research-cluster"
         other_cluster = f"arn:aws:ecs:us-east-1:{ACCOUNT}:cluster/another-cluster"
-        for cluster in (other_account, other_cluster, "not-an-arn", 7):
+        for cluster in (
+            other_account,
+            other_region,
+            other_partition,
+            other_cluster,
+            "another-cluster",
+            "synthetic-research-cluster ",
+            "arn:aws:ecs:us-east-1:cluster/synthetic-research-cluster",
+            "not an arn",
+            7,
+        ):
             document = {**metadata_document(ACQ), "Cluster": cluster}
             with pytest.raises(TaskMetadataError) as refusal:
                 fetch_task_metadata(
@@ -321,7 +351,40 @@ class TestCredentialEnvironment:
             )
             is None
         )
-        assert task_credential_environment_refusal(["AWS_CONTAINER_CREDENTIALS_FULL_URI"]) is None
+        assert task_credential_environment_refusal(["AWS_CONTAINER_CREDENTIALS_FULL_URI"])
+        assert task_credential_environment_refusal(
+            ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN"]
+        )
+
+    def test_the_container_relative_uri_is_validated_by_value(self) -> None:
+        good = "/v2/credentials/00000000-0000-4000-8000-000000000000"
+        assert (
+            container_credential_source_refusal({CONTAINER_CREDENTIAL_VARIABLE: good}.get) is None
+        )
+        assert container_credentials_url(good) == "http://169.254.170.2" + good
+        assert container_credentials_url(good).split("/v2/")[0] == "http://" + METADATA_HOST
+        assert "/v4/" not in container_credentials_url(good)
+        for bad in (
+            None,
+            "",
+            7,
+            "http://169.254.170.2" + good,
+            "/v4/abc/task",
+            "/v2/credentials/",
+            good + "?x=1",
+            good + "#f",
+            "/v2/credentials/abc/def",
+            " " + good,
+        ):
+            reason = container_credential_source_refusal({CONTAINER_CREDENTIAL_VARIABLE: bad}.get)
+            assert reason is not None and "169.254" not in reason, bad
+        with pytest.raises(ValueError):
+            container_credentials_url("/v4/abc/task")
+
+        def raising(name: str) -> str:
+            raise RuntimeError("synthetic")
+
+        assert container_credential_source_refusal(raising) is not None
 
     @pytest.mark.parametrize(
         "names",

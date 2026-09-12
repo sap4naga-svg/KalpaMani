@@ -5076,6 +5076,9 @@ def _sdk_client_construction_sites() -> list[Path]:
         Path(__file__).resolve(),
         BINDING_TESTS,
         REPO_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
+        # Seeds a synthetic boto3 session as the default session precisely to prove
+        # the task entrypoint never uses it (ADR-0043); every credential is invented.
+        REPO_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
     }
     sites: list[Path] = []
     for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):
@@ -5085,7 +5088,13 @@ def _sdk_client_construction_sites() -> list[Path]:
             if "__pycache__" in path.parts or path in scanning:
                 continue
             source = read(path)
-            if "boto3.client(" in source or "boto3.Session(" in source:
+            constructors = (
+                "boto3.client(",
+                "boto3.Session(",
+                # A botocore session built directly is an SDK session too (ADR-0043).
+                "from botocore.session import Session",
+            )
+            if any(constructor in source for constructor in constructors):
                 sites.append(path)
     return sites
 
@@ -6473,12 +6482,14 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
-#: Every file permitted to construct an AWS SDK client. All five are entry points
-#: under ``scripts/`` that refuse by default -- four operator commands, and the
-#: production task image entrypoint proposed by ADR-0043, which builds a client
-#: only after a closed entry is selected, a compiled configuration exists and the
-#: credential environment is a task's; no module under ``src/`` appears here,
-#: which is what keeps the data platform free of ambient credential discovery.
+#: Every file permitted to construct an AWS SDK client or session. All five are
+#: entry points under ``scripts/`` that refuse by default -- four operator commands,
+#: and the production task image entrypoint proposed by ADR-0043, which builds a
+#: client only after a closed entry is selected, a compiled configuration exists and
+#: the credential environment is a task's, and does so from a fresh botocore session
+#: whose credential resolver holds only the container provider (never ``boto3.client``
+#: and never the default session); no module under ``src/`` appears here, which is
+#: what keeps the data platform free of ambient credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
     "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",

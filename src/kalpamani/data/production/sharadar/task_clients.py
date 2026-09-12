@@ -24,12 +24,18 @@ without importing an SDK. The S3 dictionary is the accepted one, imported rather
 restated. STS is pinned to the **regional** endpoint, because the interface endpoint
 serves ``sts.<region>.amazonaws.com`` and not the global name (ADR-0036 §2.8).
 
-**Environment.** A task's credentials come from the ECS agent's container credential
-provider and from nothing else. The task refuses -- by variable **name**, never by value
--- an environment that carries a static key, a profile, a shared credentials or config
-file, or a web-identity role, and requires the container-credential variable to be
-present, so a run on a workstation or under an ambient default chain fails before any
-client exists (ADR-0036 §2.5: a default chain refuses before any operation).
+**Environment and credential source.** A task's credentials come from the ECS agent's
+container credential provider and from nothing else. Two checks, in order. By variable
+**name** the task refuses an environment that carries a static key, a profile, a shared
+credentials or config file, a web-identity role, the full-URI container variant or a
+container authorization token, and requires the Fargate relative-URI variable to be
+present. By **value** -- the one credential-related value the task reads -- the relative
+URI must be exactly the documented ``/v2/credentials/<id>`` shape, which is served from
+the link-local agent address and is **not** the task metadata endpoint's ``/v4/`` path.
+Both refusals happen before any client exists (ADR-0036 §2.5: a default chain refuses
+before any operation). The names-only refusal is necessary but not sufficient: the
+image entrypoint additionally constructs every client from a session whose credential
+resolver holds **only** the container provider, so no default chain is ever consulted.
 
 **Origin.** The acquisition runner resolves the pinned provider host at start and
 refuses if any resolved address falls outside the compiled set the Terraform gate
@@ -40,6 +46,7 @@ every address, so an unconfigured image fails closed.
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Callable, Iterable
 from enum import StrEnum
 from typing import Any, Final, Protocol
@@ -227,13 +234,15 @@ def client_construction_kwargs(service: TaskService) -> dict[str, object]:
 # Environment
 # ---------------------------------------------------------------------------
 
-#: The ECS container credential provider's documented variables. One must be present.
-CONTAINER_CREDENTIAL_VARIABLES: Final[frozenset[str]] = frozenset(
-    {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"}
-)
+#: The ECS container credential provider's documented Fargate variable: a relative
+#: URI the agent serves from its link-local address. The only accepted source.
+CONTAINER_CREDENTIAL_VARIABLE: Final = "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"
+#: The variables that mean *container*: only the relative one.
+CONTAINER_CREDENTIAL_VARIABLES: Final[frozenset[str]] = frozenset({CONTAINER_CREDENTIAL_VARIABLE})
 
-#: Variables whose presence means a credential source other than the container
-#: provider could be consulted. Refused by name; no value is ever read.
+#: Variables whose presence means a credential source other than the Fargate
+#: container provider could be consulted, or the provider could be redirected.
+#: Refused by name; no value is ever read for these.
 WORKSTATION_CREDENTIAL_VARIABLES: Final[frozenset[str]] = frozenset(
     {
         "AWS_ACCESS_KEY_ID",
@@ -246,22 +255,56 @@ WORKSTATION_CREDENTIAL_VARIABLES: Final[frozenset[str]] = frozenset(
         "AWS_WEB_IDENTITY_TOKEN_FILE",
         "AWS_ROLE_ARN",
         "AWS_EC2_METADATA_DISABLED",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
     }
 )
+
+#: The link-local address the ECS agent serves container credentials from, and the
+#: documented shape of the relative URI it places in the environment. The host is the
+#: metadata endpoint's; the path family is not, and the two are never confused.
+CONTAINER_CREDENTIAL_HOST: Final = "169.254.170.2"
+CONTAINER_CREDENTIAL_PATH_RE: Final = re.compile(r"/v2/credentials/[A-Za-z0-9-]{1,64}")
 
 
 def task_credential_environment_refusal(variable_names: Iterable[str]) -> str | None:
     """Why the task's credential environment is refused, or ``None``.
 
-    Names only. A workstation or ambient credential variable refuses; the container
-    credential variable must be present. Value-free reasons.
+    Names only. A workstation, ambient, full-URI or token variable refuses; the Fargate
+    relative-URI variable must be present. Value-free reasons.
     """
     present = {name for name in variable_names if type(name) is str}
     if present & WORKSTATION_CREDENTIAL_VARIABLES:
         return "a non-container AWS credential source is present in the task environment"
-    if not present & CONTAINER_CREDENTIAL_VARIABLES:
+    if CONTAINER_CREDENTIAL_VARIABLE not in present:
         return "the container credential provider is not present in the task environment"
     return None
+
+
+def container_credential_source_refusal(environment: Callable[[str], object]) -> str | None:
+    """Why the container credential source is refused, or ``None``.
+
+    Reads exactly one value: the relative URI. It must be a string of the documented
+    ``/v2/credentials/<id>`` shape -- no scheme, host, userinfo, query or fragment, and
+    never the metadata endpoint's ``/v4/`` path. Value-free reasons.
+    """
+    try:
+        value = environment(CONTAINER_CREDENTIAL_VARIABLE)
+    except Exception:
+        return "the container credential relative URI could not be read"
+    if type(value) is not str or not value:
+        return "the container credential relative URI is absent"
+    if not CONTAINER_CREDENTIAL_PATH_RE.fullmatch(value):
+        return "the container credential relative URI is not the documented shape"
+    return None
+
+
+def container_credentials_url(relative_uri: str) -> str:
+    """The full container-credential URL for an admitted relative URI, and only one."""
+    if not CONTAINER_CREDENTIAL_PATH_RE.fullmatch(relative_uri):
+        raise ValueError("the relative URI is not the documented container credential shape")
+    return f"http://{CONTAINER_CREDENTIAL_HOST}{relative_uri}"
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +360,9 @@ def origin_address_refusal(
 
 __all__ = [
     "CALLER_IDENTITY_FIELDS",
+    "CONTAINER_CREDENTIAL_HOST",
+    "CONTAINER_CREDENTIAL_PATH_RE",
+    "CONTAINER_CREDENTIAL_VARIABLE",
     "CONTAINER_CREDENTIAL_VARIABLES",
     "PROVIDER_ORIGIN_HOST",
     "WORKSTATION_CREDENTIAL_VARIABLES",
@@ -329,6 +375,8 @@ __all__ = [
     "client_config_kwargs",
     "client_construction_kwargs",
     "compiled_origin_addresses",
+    "container_credential_source_refusal",
+    "container_credentials_url",
     "origin_address_refusal",
     "sts_endpoint_url",
     "task_credential_environment_refusal",
