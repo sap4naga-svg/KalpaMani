@@ -97,6 +97,7 @@ from kalpamani.data.production.sharadar.locator import (
 from kalpamani.data.production.sharadar.metadata import CompiledTask
 from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
 from kalpamani.data.production.sharadar.plan import CompiledPlan, ProductionRequest
+from kalpamani.data.production.sharadar.provider import transport_invocations_of
 from kalpamani.data.production.sharadar.runner import (
     RunnerAdapters,
     RunnerReport,
@@ -214,8 +215,19 @@ class _CountingProvider:
 
     def fetch(self, request: ProductionRequest, *, credential: SharadarCredential) -> bytes:
         self._deadline.admit_provider_request()
-        self.request_count += 1
-        return self._provider.fetch(request, credential=credential)
+        reported = transport_invocations_of(self._provider)
+        if reported is None:
+            # A provider that does not report its transport invocations is counted
+            # by the call, as the synthetic fakes always were.
+            self.request_count += 1
+            return self._provider.fetch(request, credential=credential)
+        # A provider that reports actual transport invocations is counted by them:
+        # a request it refuses before the transport is not a provider request.
+        try:
+            return self._provider.fetch(request, credential=credential)
+        finally:
+            after = transport_invocations_of(self._provider)
+            self.request_count += (after if after is not None else reported) - reported
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

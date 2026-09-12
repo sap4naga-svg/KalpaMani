@@ -456,8 +456,15 @@ def acquire(
     at: datetime,
     responses: dict[tuple[str, str, int], bytes] | None = None,
     slice_doc: dict[str, Any] | None = None,
+    provider: Any | None = None,
+    expect_completed: bool = True,
 ) -> pp.AcquisitionReport:
-    """Run the real acquisition path for one synthetic run into ``store``."""
+    """Run the real acquisition path for one synthetic run into ``store``.
+
+    ``provider`` replaces the coordinate-answering fake with any ``ProductionProvider``
+    -- the real production adapter over a scripted transport, for instance -- so the
+    processor is exercised through the adapter rather than around it.
+    """
     constants = constants_for(ACQ)
     slice_doc = slice_for_run(run) if slice_doc is None else slice_doc
     covered = parse_slice(slice_doc)
@@ -486,9 +493,10 @@ def acquire(
         verified_at=at - timedelta(seconds=10),
     )
     clock = ShiftedClock(base=at)
-    provider = CoordinateProvider(
-        responses=responses_for_run(run) if responses is None else responses
-    )
+    if provider is None:
+        provider = CoordinateProvider(
+            responses=responses_for_run(run) if responses is None else responses
+        )
     report = pp.run_production_acquisition(
         compiled=compiled_task(ACQ),
         bootstrap=RunnerAdapters(
@@ -511,7 +519,8 @@ def acquire(
             clock=clock.now,
         ),
     )
-    assert report.status is pp.AcquisitionStatus.COMPLETED, report
+    if expect_completed:
+        assert report.status is pp.AcquisitionStatus.COMPLETED, report
     return report
 
 

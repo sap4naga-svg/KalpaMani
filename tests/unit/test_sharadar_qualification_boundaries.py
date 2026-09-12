@@ -47,6 +47,10 @@ COMPOSITION = PROVIDER_PACKAGE / "composition.py"
 #: itself, around its own write-only publisher. **ADR-0017's root is unchanged and
 #: is not called by it.**
 EMPIRICAL_ACQUISITION = SRC / "kalpamani" / "data" / "qualify" / "sharadar" / "acquisition.py"
+#: The third construction site, proposed by ADR-0041: the production provider adapter
+#: builds the accepted client around an injected transport and a caller-supplied
+#: credential, one attempt, no pacing of its own. Named here so a fourth site fails.
+PRODUCTION_PROVIDER = SRC / "kalpamani" / "data" / "production" / "sharadar" / "provider.py"
 PLAN_CHECK = PROJECT_ROOT / "scripts" / "sharadar_plan_check.py"
 PRIVATE_HARNESS = PROJECT_ROOT / "scripts" / "sharadar_private_qualification.py"
 
@@ -258,15 +262,20 @@ def test_nothing_in_the_repository_constructs_the_runtime_outside_its_own_tests(
 
 def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
     """The client needs a credential and a transport, so building one *is* the
-    composition root -- and ADR-0014 put it in one module, ADR-0019 in a second.
+    composition root -- and ADR-0014 put it in one module, ADR-0019 in a second, and
+    ADR-0041 (proposed) names a third: the production provider adapter.
 
-    The credential is still a parameter in both. Constructing a client from an
+    The credential is still a parameter in all three. Constructing a client from an
     injected credential sends nothing; what would send something is a credential
     source, and none exists anywhere under ``src/``.
     """
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        if "__pycache__" in path.parts or path in (COMPOSITION, EMPIRICAL_ACQUISITION):
+        if "__pycache__" in path.parts or path in (
+            COMPOSITION,
+            EMPIRICAL_ACQUISITION,
+            PRODUCTION_PROVIDER,
+        ):
             continue
         for node in ast.walk(_tree(path)):
             if (
@@ -276,6 +285,44 @@ def test_only_the_composition_root_constructs_a_sharadar_client() -> None:
             ):
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
     assert offenders == [], f"a client is constructed under src/ at: {offenders}"
+
+
+def test_the_third_client_site_composes_only_around_an_injected_transport() -> None:
+    """The replacement assertion for the permission ADR-0041 widens.
+
+    The production provider adapter may construct the accepted client -- exactly
+    once, from a transport handed in and a credential handed in per call -- and may
+    not construct a transport, an opener, a credential source or a retry policy
+    with more than one attempt. Anything else at that site is a fourth composition
+    root wearing the third one's name.
+    """
+    source = _executable(PRODUCTION_PROVIDER)
+    tree = _tree(PRODUCTION_PROVIDER)
+    constructions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SharadarClient"
+    ]
+    assert len(constructions) == 1, "exactly one client construction at the third site"
+    keywords = {keyword.arg for keyword in constructions[0].keywords}
+    assert keywords == {"credential", "transport", "pacer", "retry_policy", "timeout_seconds"}
+    for forbidden in (
+        "UrllibTransport(",
+        "build_pinned_opener",
+        "urllib",
+        "http.client",
+        "socket",
+        "boto3",
+        "get_secret_value",
+        "os.environ",
+        "getenv",
+        "DEFAULT_RETRY_POLICY",
+    ):
+        assert forbidden not in source, forbidden
+    assert "RetryPolicy(max_attempts=1, backoff_seconds=())" in source
+    assert "min_interval=0.0" in source
 
 
 def test_the_second_runtime_site_composes_only_the_write_only_publisher() -> None:

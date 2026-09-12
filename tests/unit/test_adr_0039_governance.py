@@ -43,11 +43,20 @@ def test_the_adr_exists_and_is_the_only_0039() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0039-*.md"))] == [ADR.name]
 
 
-def test_the_adr_carries_a_conditional_acceptance_status_and_the_gates() -> None:
+def test_the_adr_keeps_its_conditional_status_and_records_the_merge() -> None:
+    """The pre-merge condition is preserved as written; the note beside it records the event."""
     assert "Status: " + PROPOSED in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
     assert "two additional members of `UniverseExclusionReason`" in ADR_FLAT
     assert "Nothing was run to produce this decision" in ADR_FLAT
+    assert "The condition above has since been satisfied." in ADR_FLAT
+    assert "PR #97 merged" in ADR_FLAT and "2026-09-12T16:56:34Z" in ADR_FLAT
+    assert "2be8d2ee7946de457e8071160f89836746713168" in ADR_TEXT
+    assert "6ddfa3601a8b14d4e0768ddd823f2c5a34927bdd" in ADR_TEXT
+    assert "310df423f2a2b26109e23bb5a4b1be8edc787f65" in ADR_TEXT
+    assert "ADR-0039 is therefore ACCEPTED / IN FORCE" in ADR_FLAT.replace("**", "")
+    assert "did not add the members to `kalpamani.data.contracts.vocabulary`" in ADR_FLAT
+    assert "Acceptance authorizes no build, no ingestion and no run" in ADR_FLAT
     assert "## 3. Effectiveness and execution gates" in ADR_TEXT
     assert "acceptance authorizes no build, no ingestion and no run" in ADR_FLAT
     assert "G2 stays OPEN" in ADR_FLAT
@@ -85,7 +94,21 @@ def test_the_adr_carries_no_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_the_merge(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search(r"ADR-0039[^\n]{0,200}" + re.escape(PROPOSED), text) is not None
-    assert "ADR-0039 (two universe exclusion reasons):        " + PROPOSED in text
+    rows = [
+        line
+        for line in text.splitlines()
+        if line.startswith("| ")
+        and "ADR-0039](" in line
+        and "two universe exclusion reasons" in line.split("|")[1]
+    ]
+    assert len(rows) == 1
+    flat = " ".join(rows[0].replace("**", "").split())
+    assert "ACCEPTED / IN FORCE" in flat and "PR #97 merged 2026-09-12T16:56:34Z" in flat
+    assert "2be8d2ee7946de457e8071160f89836746713168" in flat
+    assert "while PR #97 was open it was proposed and carried no authority" in flat
+    assert "Vocabulary integration has not occurred" in flat
+    assert "ADR-0039 (two universe exclusion reasons):        ACCEPTED / IN FORCE" in text
+    assert "vocabulary integration NOT PERFORMED" in text
+    assert re.search(r"ADR-0039[^\n]{0,200}" + re.escape(PROPOSED), text) is None
