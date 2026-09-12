@@ -2328,15 +2328,18 @@ def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
 
 
 def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
-    """Four authorized construction sites, each named, and nothing else.
+    """Five authorized construction sites, each named, and nothing else.
 
-    Narrowed rather than relaxed, three times now. The earliest rule was 'this
+    Narrowed rather than relaxed, four times now. The earliest rule was 'this
     entry point and nowhere else', correct while it was the only operator surface;
-    then two; and the empirical qualification package adds its two operator entry
-    points. Every one is named here, so a **fifth** arriving anywhere under
-    ``src/``, ``scripts/`` or ``tests/`` still fails.
+    then two; the empirical qualification package adds its two operator entry
+    points; and the production task image entrypoint proposed by ADR-0043 is the
+    fifth, constructing a client only after a closed entry is selected, a compiled
+    configuration exists and the credential environment is a task's. Every one is
+    named here, so a **sixth** arriving anywhere under ``src/``, ``scripts/`` or
+    ``tests/`` still fails.
 
-    **All four are in ``scripts/``, and that is the property that matters.** No
+    **All five are in ``scripts/``, and that is the property that matters.** No
     module under ``src/`` constructs a client, which is checked separately and is
     what keeps the data platform free of ambient credential discovery.
     """
@@ -2348,11 +2351,15 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         SCRIPTS / "sharadar_authenticated_qualification.py",
         SCRIPTS / "sharadar_empirical_qualification.py",
         SCRIPTS / "sharadar_qualification_assessment.py",
+        SCRIPTS / "production_task_entrypoint.py",
         Path(__file__).resolve(),
         SCRIPTS / "phase3_docs_audit.py",
         # Asserts the absence of a client in those entry points, so it necessarily
         # names the constructor it is asserting the absence of.
         PROJECT_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
+        # Seeds a synthetic ``boto3.Session`` as the default session precisely to prove
+        # the task entrypoint never uses it; every credential it holds is invented.
+        PROJECT_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):
@@ -2360,7 +2367,13 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
             if path in scanning:
                 continue
             source = path.read_text(encoding="utf-8")
-            if "boto3.client(" in source or "boto3.Session(" in source:
+            constructors = (
+                "boto3.client(",
+                "boto3.Session(",
+                # A botocore session built directly is an SDK session too (ADR-0043).
+                "from botocore.session import Session",
+            )
+            if any(constructor in source for constructor in constructors):
                 offenders.append(str(path.relative_to(PROJECT_ROOT)))
     assert offenders == [], f"an SDK client is constructed at: {offenders}"
 

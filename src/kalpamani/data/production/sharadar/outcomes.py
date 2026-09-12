@@ -69,11 +69,16 @@ class PlacementIncident(StrEnum):
 
 
 class CleanupStage(StrEnum):
-    """Which prescribed cleanup operation failed. Closed."""
+    """Which prescribed cleanup operation failed. Closed.
+
+    The first three are the launch tool's (ADR-0036 §2.12 step 10); the fourth is
+    the task's own deletion of its working directory before exit (step 9).
+    """
 
     DELETE_RELEASE = "DELETE_RELEASE"
     DELETE_INPUT = "DELETE_INPUT"
     STOP_TASK = "STOP_TASK"
+    WORKING_DIRECTORY = "WORKING_DIRECTORY"
 
 
 #: The two closed tokens a cleanup stage reports when its own identity proof did

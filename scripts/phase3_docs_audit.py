@@ -825,6 +825,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0040", "PR #97 merged"),
     # ADR-0041 merged as PR #98 on 2026-09-12, with the offline production provider adapter.
     ("ADR-0041", "PR #98 merged"),
+    # ADR-0042 merged as PR #99 on 2026-09-12, with the build-side pagination admission gate.
+    ("ADR-0042", "PR #99 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -5074,6 +5076,9 @@ def _sdk_client_construction_sites() -> list[Path]:
         Path(__file__).resolve(),
         BINDING_TESTS,
         REPO_ROOT / "tests" / "unit" / "test_sharadar_empirical_entry_points.py",
+        # Seeds a synthetic boto3 session as the default session precisely to prove
+        # the task entrypoint never uses it (ADR-0043); every credential is invented.
+        REPO_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
     }
     sites: list[Path] = []
     for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):
@@ -5083,7 +5088,13 @@ def _sdk_client_construction_sites() -> list[Path]:
             if "__pycache__" in path.parts or path in scanning:
                 continue
             source = read(path)
-            if "boto3.client(" in source or "boto3.Session(" in source:
+            constructors = (
+                "boto3.client(",
+                "boto3.Session(",
+                # A botocore session built directly is an SDK session too (ADR-0043).
+                "from botocore.session import Session",
+            )
+            if any(constructor in source for constructor in constructors):
                 sites.append(path)
     return sites
 
@@ -6471,11 +6482,16 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
-#: Every file permitted to construct an AWS SDK client. All four are operator
-#: entry points under ``scripts/`` that refuse by default; no module under
-#: ``src/`` appears here, which is what keeps the data platform free of ambient
-#: credential discovery.
+#: Every file permitted to construct an AWS SDK client or session. All five are
+#: entry points under ``scripts/`` that refuse by default -- four operator commands,
+#: and the production task image entrypoint proposed by ADR-0043, which builds a
+#: client only after a closed entry is selected, a compiled configuration exists and
+#: the credential environment is a task's, and does so from a fresh botocore session
+#: whose credential resolver holds only the container provider (never ``boto3.client``
+#: and never the default session); no module under ``src/`` appears here, which is
+#: what keeps the data platform free of ambient credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
+    "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",
     "sharadar_binding_preflight.py",
     "sharadar_empirical_qualification.py",
@@ -19950,10 +19966,11 @@ def main() -> int:
     f.check(
         "only the authorized operator entry points construct an SDK client",
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
-        # candidate adds its two operator entry points. All four are named, so a
-        # fifth arriving anywhere fails -- a count could drift, a list cannot.
+        # candidate adds its two operator entry points; ADR-0043 proposes the task
+        # image entrypoint. All five are named, so a sixth arriving anywhere fails
+        # -- a count could drift, a list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
-        "four named modules, not a count that could drift",
+        "five named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",

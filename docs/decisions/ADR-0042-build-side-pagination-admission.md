@@ -11,6 +11,17 @@ ADR-0040's truncation rule — one supported page shape, applied to `tickers`, `
 alike, with a closed refusal vocabulary — and nothing else**, effective together with the offline
 gate merged beside it. **Acceptance authorizes no execution** (§5).
 
+**The condition above has since been satisfied.** **PR #99 merged** — merged **2026-09-12T18:15:35Z**, merge
+commit **`9d2bacc0095ad540bfc5b0bc351f51bfb09582dc`**, ordered parents **`5d4ecd766fa9fcb8ab3fc1c2e3bf77e49a67cc92`** then
+**`622fec5496dd782f83844e3982993e5e9d4a6ca6`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`d1c0cd4322d9b2f789d857a91af2df98dd35c7d4`). ADR-0042 is therefore **ACCEPTED / IN FORCE** as a narrow
+amendment of ADR-0041 §3's pagination clause and of ADR-0040's truncation rule, effective together with the
+offline gate merged beside it. While the pull request was open it was proposed and carried no authority —
+true then, and not rewritten. **Acceptance authorizes no execution.** One accepted, non-blocking diagnostic
+discrepancy is recorded with the merge: for a group shaped `[short, empty, non-empty, empty]` the merged gate
+returns `PAGINATION_UNSUPPORTED` where §2 above reads `PAGINATION_INCONSISTENT`; both refuse the whole
+build before any write, and no correction was part of that merge.
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no credential
 retrieval, no provider request. The evidence is the merged build path exercised on synthetic fixtures
 and the vendor's public documentation recorded in the provider-source register (`PSR-SHD-129`,
