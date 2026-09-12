@@ -178,6 +178,7 @@ class GoldDefect(StrEnum):
 
     REFUSED_TIMING = "REFUSED_TIMING"
     REFUSED_QUALITY = "REFUSED_QUALITY"
+    REFUSED_VERIFICATION = "REFUSED_VERIFICATION"
 
 
 class GoldError(Exception):
@@ -832,72 +833,195 @@ def adjust_bar(
     }
 
 
-class AdjustedRowDefect(StrEnum):
-    """Why an adjusted row's lineage did not reconstruct it. Closed."""
+#: The closed shape of an adjusted row. A document is verified field by field against
+#: this set: nothing outside it is admitted, and nothing inside it can be omitted.
+ADJUSTED_ROW_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "security_id",
+        "session_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "factor",
+        "derivation_version",
+        "adjustment_policy",
+        "adjustment_convention",
+        "source_content_sha256",
+        "revision_sequence",
+        "source_governing_time",
+        "derived_governing_time",
+        "lineage",
+        "unresolved_action_keys",
+    }
+)
 
+#: The closed shape of a lineage reference and the selectors each entity requires.
+LINEAGE_REF_FIELDS: Final[frozenset[str]] = frozenset({"entity", "dataset_version", "selector"})
+LINEAGE_SELECTORS: Final[dict[str, frozenset[str]]] = {
+    LINEAGE_ENTITY_BAR: frozenset(
+        {"security_id", "session_date", "content_sha256", "revision_sequence"}
+    ),
+    LINEAGE_ENTITY_ACTION: frozenset(
+        {"security_id", "row_key", "content_sha256", "revision_sequence", "ratio"}
+    ),
+}
+
+
+class AdjustedRowDefect(StrEnum):
+    """Why an adjusted row did not reconstruct from its lineage. Closed; never a value."""
+
+    DOCUMENT_MALFORMED = "DOCUMENT_MALFORMED"
+    LINEAGE_MALFORMED = "LINEAGE_MALFORMED"
     LINEAGE_UNRESOLVABLE = "LINEAGE_UNRESOLVABLE"
-    VALUE_MISMATCH = "VALUE_MISMATCH"
+    IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
+    CONTRACT_MISMATCH = "CONTRACT_MISMATCH"
+    PROVENANCE_MISMATCH = "PROVENANCE_MISMATCH"
+    LINEAGE_MISMATCH = "LINEAGE_MISMATCH"
     CONSUMED_SET_MISMATCH = "CONSUMED_SET_MISMATCH"
+    VALUE_MISMATCH = "VALUE_MISMATCH"
     AVAILABILITY_MISMATCH = "AVAILABILITY_MISMATCH"
+    UNRESOLVED_METADATA_MISMATCH = "UNRESOLVED_METADATA_MISMATCH"
+
+
+#: Every field of the closed shape, the defect its disagreement raises, in the order the
+#: verifier compares them. **Total over ``ADJUSTED_ROW_FIELDS`` minus ``lineage``**, which
+#: is compared structurally; a test asserts the totality, so a field added to the shape
+#: cannot escape verification.
+_FIELD_DEFECTS: Final[tuple[tuple[str, AdjustedRowDefect], ...]] = (
+    ("security_id", AdjustedRowDefect.IDENTITY_MISMATCH),
+    ("session_date", AdjustedRowDefect.IDENTITY_MISMATCH),
+    ("adjustment_policy", AdjustedRowDefect.CONTRACT_MISMATCH),
+    ("adjustment_convention", AdjustedRowDefect.CONTRACT_MISMATCH),
+    ("derivation_version", AdjustedRowDefect.CONTRACT_MISMATCH),
+    ("source_content_sha256", AdjustedRowDefect.PROVENANCE_MISMATCH),
+    ("revision_sequence", AdjustedRowDefect.PROVENANCE_MISMATCH),
+    ("factor", AdjustedRowDefect.VALUE_MISMATCH),
+    ("open", AdjustedRowDefect.VALUE_MISMATCH),
+    ("high", AdjustedRowDefect.VALUE_MISMATCH),
+    ("low", AdjustedRowDefect.VALUE_MISMATCH),
+    ("close", AdjustedRowDefect.VALUE_MISMATCH),
+    ("volume", AdjustedRowDefect.VALUE_MISMATCH),
+    ("source_governing_time", AdjustedRowDefect.AVAILABILITY_MISMATCH),
+    ("derived_governing_time", AdjustedRowDefect.AVAILABILITY_MISMATCH),
+    ("unresolved_action_keys", AdjustedRowDefect.UNRESOLVED_METADATA_MISMATCH),
+)
+
+
+class _MalformedError(Exception):
+    """Internal: the document or its lineage is not the closed shape."""
+
+    def __init__(self, defect: AdjustedRowDefect) -> None:
+        super().__init__(defect.value)
+        self.defect = defect
+
+
+def _lineage_refs(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """The lineage as a list of closed references, or a malformed-lineage refusal."""
+    refs = document["lineage"]
+    if type(refs) is not list or not refs:
+        raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+    out: list[dict[str, Any]] = []
+    for ref in refs:
+        if type(ref) is not dict or set(ref) != LINEAGE_REF_FIELDS:
+            raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+        entity, version, selector = ref["entity"], ref["dataset_version"], ref["selector"]
+        if type(entity) is not str or entity not in LINEAGE_SELECTORS:
+            raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+        if type(version) is not str or type(selector) is not dict:
+            raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+        if set(selector) != LINEAGE_SELECTORS[entity] or any(
+            type(value) is not str for value in selector.values()
+        ):
+            raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+        out.append(ref)
+    if out[0]["entity"] != LINEAGE_ENTITY_BAR or any(
+        ref["entity"] != LINEAGE_ENTITY_ACTION for ref in out[1:]
+    ):
+        raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+    keys = [ref["selector"]["row_key"] for ref in out[1:]]
+    if len(keys) != len(set(keys)):
+        raise _MalformedError(AdjustedRowDefect.LINEAGE_MALFORMED)
+    return out
+
+
+def _resolve_revision(ref: dict[str, Any], candidate: ResolvedRow | None) -> ResolvedRow:
+    """The served revision a reference names, or an unresolvable refusal."""
+    selector = ref["selector"]
+    if (
+        candidate is None
+        or candidate.row.security_id != selector["security_id"]
+        or candidate.row.content_sha256 != selector["content_sha256"]
+        or str(candidate.row.revision_sequence) != selector["revision_sequence"]
+    ):
+        raise _MalformedError(AdjustedRowDefect.LINEAGE_UNRESOLVABLE)
+    return candidate
 
 
 def verify_adjusted_row(
-    document: dict[str, Any],
+    document: object,
     *,
     bars: dict[tuple[str, ...], ResolvedRow],
     actions: dict[tuple[str, ...], ResolvedRow],
     as_of: datetime,
 ) -> AdjustedRowDefect | None:
-    """Reconstruct an adjusted row from its recorded lineage against served revisions.
+    """Reconstruct an adjusted row from its recorded lineage and validate every field.
 
-    Every lineage reference must resolve to the exact served revision (key, content
-    digest, sequence); the factor and prices recomputed from those inputs must equal
-    the row's; the consumed set must be exactly the served splits with an ex-date on
-    or before the session; and the derived availability must be the latest input's.
-    Returns the first defect, or ``None`` when the row reconstructs.
+    The document must be the closed shape (:data:`ADJUSTED_ROW_FIELDS`, no field more
+    or fewer) with a closed lineage (:data:`LINEAGE_REF_FIELDS` and the entity's
+    selectors). The lineage is resolved to the exact served revisions first -- the bar
+    by its selector's security and session, each action by its row key, all held to
+    their content digest and sequence -- and **the expected document is rebuilt from
+    the resolved bar and the served actions**, never from the document's own fields:
+    the security and session come from the resolved bar, the consumed set from the
+    served splits with an ex-date on or before that session, every value from the
+    arithmetic. Every field of the closed shape is then compared with its expected
+    value and the first disagreement is returned as a closed defect. A document that
+    is not the shape returns a closed defect rather than raising; no value is carried
+    by any refusal. ``None`` means the row reconstructs exactly.
     """
-    refs = document.get("lineage", [])
-    if not refs or refs[0]["entity"] != LINEAGE_ENTITY_BAR:
-        return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
-    selector = refs[0]["selector"]
-    bar = bars.get((selector["security_id"], selector["session_date"]))
-    if (
-        bar is None
-        or bar.row.content_sha256 != selector["content_sha256"]
-        or str(bar.row.revision_sequence) != selector["revision_sequence"]
-    ):
-        return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
-    consumed: list[tuple[ResolvedRow, Decimal]] = []
-    for ref in refs[1:]:
-        sel = ref["selector"]
-        action = actions.get(tuple(sel["row_key"].split("/")))
-        if (
-            ref["entity"] != LINEAGE_ENTITY_ACTION
-            or action is None
-            or action.row.content_sha256 != sel["content_sha256"]
-            or str(action.row.revision_sequence) != sel["revision_sequence"]
-        ):
+    try:
+        if type(document) is not dict or set(document) != ADJUSTED_ROW_FIELDS:
+            return AdjustedRowDefect.DOCUMENT_MALFORMED
+        refs = _lineage_refs(document)
+        bar_selector = refs[0]["selector"]
+        bar = _resolve_revision(
+            refs[0], bars.get((bar_selector["security_id"], bar_selector["session_date"]))
+        )
+        if refs[0]["dataset_version"] != SILVER_NORMALIZATION_VERSION:
+            return AdjustedRowDefect.LINEAGE_MISMATCH
+        for ref in refs[1:]:
+            action = _resolve_revision(
+                ref, actions.get(tuple(ref["selector"]["row_key"].split("/")))
+            )
+            if action.row.security_id != bar.row.security_id:
+                return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
+        # The expectation is derived from the resolved bar and the served actions of its
+        # security: nothing the document says chooses what it is checked against.
+        expected = adjust_bar(
+            bar,
+            [row for row in actions.values() if row.row.security_id == bar.row.security_id],
+            as_of=as_of,
+        )
+        if expected is None:
             return AdjustedRowDefect.LINEAGE_UNRESOLVABLE
-        consumed.append((action, Decimal(sel["ratio"])))
-    session = date.fromisoformat(document["session_date"])
-    expected = consumed_splits(
-        [row for row in actions.values() if row.row.security_id == bar.row.security_id],
-        session=session,
-    )
-    if [(r.row.row_key, r.row.revision_sequence, ratio) for r, ratio in consumed] != [
-        (r.row.row_key, r.row.revision_sequence, ratio) for r, ratio in expected
-    ]:
-        return AdjustedRowDefect.CONSUMED_SET_MISMATCH
-    rebuilt = adjust_bar(bar, [row for row, _ in expected], as_of=as_of)
-    if rebuilt is None or any(
-        rebuilt[name] != document.get(name)
-        for name in ("open", "high", "low", "close", "volume", "factor")
-    ):
-        return AdjustedRowDefect.VALUE_MISMATCH
-    if rebuilt["derived_governing_time"] != document.get("derived_governing_time") or rebuilt[
-        "source_governing_time"
-    ] != document.get("source_governing_time"):
-        return AdjustedRowDefect.AVAILABILITY_MISMATCH
+        if refs != expected["lineage"]:
+            consumed = [ref["selector"]["row_key"] for ref in refs[1:]]
+            expected_consumed = [ref["selector"]["row_key"] for ref in expected["lineage"][1:]]
+            if consumed != expected_consumed:
+                return AdjustedRowDefect.CONSUMED_SET_MISMATCH
+            return AdjustedRowDefect.LINEAGE_MISMATCH
+        for field, defect in _FIELD_DEFECTS:
+            observed = document[field]
+            if type(observed) is not type(expected[field]) or observed != expected[field]:
+                return defect
+    except (_MalformedError, KeyError, TypeError, ValueError, ArithmeticError) as error:
+        return (
+            error.defect
+            if isinstance(error, _MalformedError)
+            else AdjustedRowDefect.DOCUMENT_MALFORMED
+        )
     return None
 
 
@@ -941,7 +1065,8 @@ def build_gold(
     Raises:
         GoldError: ``REFUSED_TIMING`` if a served row is bounded after ``as_of`` or
             under an inexpressible derivation; ``REFUSED_QUALITY`` on a build-scoped
-            BLOCKING finding.
+            BLOCKING finding; ``REFUSED_VERIFICATION`` if an adjusted row does not
+            reconstruct from its own lineage.
     """
     if type(layer) is not ResolvedLayer or type(universe) is not UniverseSnapshot:
         raise TypeError("layer and universe must be exact")
@@ -1001,6 +1126,17 @@ def build_gold(
                 withheld_unresolved += 1
                 continue
             adjusted_rows.append(adjusted)
+    # Every adjusted row is verified from its own lineage against the served revisions
+    # before it can enter an artifact. A row that does not reconstruct refuses the build:
+    # no artifact is published and no success manifest can follow.
+    served_bars = served.rows[SharadarDataset.STOCKS.value]
+    served_actions = served.rows[SharadarDataset.ACTIONS.value]
+    for adjusted in adjusted_rows:
+        if (
+            verify_adjusted_row(adjusted, bars=served_bars, actions=served_actions, as_of=as_of)
+            is not None
+        ):
+            raise GoldError(GoldDefect.REFUSED_VERIFICATION)
     # Membership: every decision, as decided at its cutoff. A later quality finding
     # is a restriction beside the decisions, never an edit of them.
     membership_rows = [row.document() for row in universe.rows]
@@ -1081,6 +1217,7 @@ def build_gold(
 
 
 __all__ = [
+    "ADJUSTED_ROW_FIELDS",
     "ADJUSTMENT_CONVENTION",
     "ADJUSTMENT_DERIVATION_VERSION",
     "ADJUSTMENT_POLICY",
@@ -1088,6 +1225,8 @@ __all__ = [
     "CHECKS_NOT_RUN",
     "DEFAULT_JUMP_RATIO",
     "DEFAULT_RECONCILIATION_TOLERANCE",
+    "LINEAGE_REF_FIELDS",
+    "LINEAGE_SELECTORS",
     "PRICE_QUANTUM",
     "QUALITY_PLAN",
     "QUALITY_PLAN_VERSION",

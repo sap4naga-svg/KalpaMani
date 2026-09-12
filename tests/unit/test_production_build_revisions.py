@@ -23,6 +23,7 @@ from fixtures.production_build import (
     STOCKS_HEADER,
     TICKERS_HEADER,
     ZZAA,
+    ZZBB,
     ZZHH,
     BuildScenario,
     FakeS3Store,
@@ -635,7 +636,7 @@ class TestAdjustmentLineage:
         )
         assert (
             gd.verify_adjusted_row(dict(row, lineage=[]), bars=bars, actions=actions, as_of=as_of)
-            is gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE
+            is gd.AdjustedRowDefect.LINEAGE_MALFORMED
         )
 
     def test_manifest_records_the_derivation_and_selection_versions(self) -> None:
@@ -647,6 +648,321 @@ class TestAdjustmentLineage:
         assert transformation["action_selection_version"] == av.ACTION_SELECTION_VERSION
         assert transformation["silver_normalization_version"] == "sharadar-silver-v2"
         assert transformation["resolution_policy_version"] == "sharadar-availability-v2"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up: the verifier validates identity, contract, provenance and shape
+# ---------------------------------------------------------------------------
+
+
+class TestAdjustedRowVerification:
+    """Every field that establishes an adjusted row's identity, interpretation,
+    provenance and availability is validated against the resolved lineage; the
+    expectation is derived from the resolved bar, never from the document."""
+
+    AS_OF: Final = datetime(2026, 9, 30, tzinfo=UTC)
+
+    def _context(
+        self,
+    ) -> tuple[
+        dict[str, Any], dict[str, Any], dict[Any, av.ResolvedRow], dict[Any, av.ResolvedRow]
+    ]:
+        store, runs = lineage_store()
+        report = build(store, runs, as_of=self.AS_OF, build_id="synthetic-build-verifier")
+        resolved = resolved_layer(store, runs, now=self.AS_OF)
+        bars = av.select_current(resolved.stocks, cutoff=self.AS_OF)
+        actions = av.select_current(resolved.actions, cutoff=self.AS_OF)
+        rows = artifact(report, "gold-adjusted-bars")
+        split_row = next(
+            r
+            for r in rows
+            if r["security_id"] == ZZAA.security_id and r["session_date"] == "2026-09-04"
+        )
+        plain_row = next(
+            r
+            for r in rows
+            if r["security_id"] == ZZAA.security_id and r["session_date"] == "2026-09-01"
+        )
+        return split_row, plain_row, bars, actions
+
+    def verify(self, document: object, bars: Any, actions: Any) -> gd.AdjustedRowDefect | None:
+        return gd.verify_adjusted_row(document, bars=bars, actions=actions, as_of=self.AS_OF)
+
+    def test_positive_controls_reconstruct(self) -> None:
+        split_row, plain_row, bars, actions = self._context()
+        assert len(split_row["lineage"]) == 2 and split_row["factor"] == "3"
+        assert len(plain_row["lineage"]) == 1 and plain_row["factor"] == "1"
+        assert self.verify(split_row, bars, actions) is None
+        assert self.verify(plain_row, bars, actions) is None
+        assert set(split_row) == gd.ADJUSTED_ROW_FIELDS
+
+    def test_the_field_scheme_is_total_over_the_closed_shape(self) -> None:
+        compared = {field for field, _ in gd._FIELD_DEFECTS}
+        assert compared | {"lineage"} == gd.ADJUSTED_ROW_FIELDS
+        assert len(compared) == len(gd._FIELD_DEFECTS)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "defect"),
+        [
+            ("security_id", ZZBB.security_id, gd.AdjustedRowDefect.IDENTITY_MISMATCH),
+            ("session_date", "2026-09-03", gd.AdjustedRowDefect.IDENTITY_MISMATCH),
+            ("adjustment_policy", "RAW", gd.AdjustedRowDefect.CONTRACT_MISMATCH),
+            ("adjustment_convention", "BACK_ADJUSTED", gd.AdjustedRowDefect.CONTRACT_MISMATCH),
+            (
+                "derivation_version",
+                "sharadar-adjusted-bars-v1",
+                gd.AdjustedRowDefect.CONTRACT_MISMATCH,
+            ),
+            ("source_content_sha256", "0" * 64, gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
+            ("revision_sequence", 9, gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
+            ("revision_sequence", "0", gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
+            ("factor", "2", gd.AdjustedRowDefect.VALUE_MISMATCH),
+            ("open", "1.000000", gd.AdjustedRowDefect.VALUE_MISMATCH),
+            ("volume", "1", gd.AdjustedRowDefect.VALUE_MISMATCH),
+            (
+                "source_governing_time",
+                "2026-09-01T00:00:00+00:00",
+                gd.AdjustedRowDefect.AVAILABILITY_MISMATCH,
+            ),
+            (
+                "derived_governing_time",
+                "2026-09-01T00:00:00+00:00",
+                gd.AdjustedRowDefect.AVAILABILITY_MISMATCH,
+            ),
+            ("unresolved_action_keys", 1, gd.AdjustedRowDefect.UNRESOLVED_METADATA_MISMATCH),
+            ("unresolved_action_keys", "0", gd.AdjustedRowDefect.UNRESOLVED_METADATA_MISMATCH),
+        ],
+    )
+    def test_each_identity_contract_provenance_and_value_field_is_validated(
+        self, field: str, value: object, defect: gd.AdjustedRowDefect
+    ) -> None:
+        split_row, _, bars, actions = self._context()
+        assert self.verify(dict(split_row, **{field: value}), bars, actions) is defect
+
+    def test_a_wrong_session_with_the_same_split_set_is_an_identity_mismatch(self) -> None:
+        split_row, _, bars, actions = self._context()
+        # 09-04 and 09-03 consume the same split; the document's session may not choose
+        # the bar it is checked against.
+        moved = dict(split_row, session_date="2026-09-03")
+        assert self.verify(moved, bars, actions) is gd.AdjustedRowDefect.IDENTITY_MISMATCH
+        # A no-split row relabelled to another no-split session is caught the same way.
+        _, plain_row, _, _ = self._context()
+        assert (
+            self.verify(dict(plain_row, session_date="2026-09-02"), bars, actions)
+            is gd.AdjustedRowDefect.IDENTITY_MISMATCH
+        )
+
+    @pytest.mark.parametrize(
+        ("mutate", "defect"),
+        [
+            (
+                lambda row: [
+                    dict(row["lineage"][0], dataset_version="other-v9"),
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MISMATCH,
+            ),
+            (
+                lambda row: [
+                    row["lineage"][0],
+                    dict(row["lineage"][1], dataset_version="other-v9"),
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MISMATCH,
+            ),
+            (
+                lambda row: [
+                    row["lineage"][0],
+                    dict(
+                        row["lineage"][1], selector=dict(row["lineage"][1]["selector"], ratio="2")
+                    ),
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MISMATCH,
+            ),
+            (
+                lambda row: [
+                    dict(
+                        row["lineage"][0],
+                        selector=dict(row["lineage"][0]["selector"], revision_sequence="9"),
+                    ),
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,
+            ),
+            (
+                lambda row: [
+                    dict(
+                        row["lineage"][0],
+                        selector=dict(row["lineage"][0]["selector"], content_sha256="0" * 64),
+                    ),
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,
+            ),
+            (
+                lambda row: [
+                    row["lineage"][0],
+                    dict(
+                        row["lineage"][1],
+                        selector=dict(row["lineage"][1]["selector"], revision_sequence="0"),
+                    ),
+                ],
+                gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,
+            ),
+            (
+                lambda row: [
+                    row["lineage"][0],
+                    dict(
+                        row["lineage"][1],
+                        selector=dict(row["lineage"][1]["selector"], security_id=ZZBB.security_id),
+                    ),
+                ],
+                gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,
+            ),
+            (lambda row: row["lineage"][:1], gd.AdjustedRowDefect.CONSUMED_SET_MISMATCH),
+            (
+                lambda row: [*row["lineage"], row["lineage"][1]],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (lambda row: [], gd.AdjustedRowDefect.LINEAGE_MALFORMED),
+            (lambda row: "nonsense", gd.AdjustedRowDefect.LINEAGE_MALFORMED),
+            (
+                lambda row: [row["lineage"][1], row["lineage"][0]],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (
+                lambda row: [dict(row["lineage"][0], entity="security"), *row["lineage"][1:]],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (
+                lambda row: [dict(row["lineage"][0], extra="x"), *row["lineage"][1:]],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (
+                lambda row: [
+                    {k: v for k, v in row["lineage"][0].items() if k != "dataset_version"},
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (
+                lambda row: [
+                    dict(
+                        row["lineage"][0],
+                        selector={
+                            k: v
+                            for k, v in row["lineage"][0]["selector"].items()
+                            if k != "content_sha256"
+                        },
+                    ),
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (
+                lambda row: [
+                    dict(
+                        row["lineage"][0],
+                        selector=dict(row["lineage"][0]["selector"], revision_sequence=0),
+                    ),
+                    *row["lineage"][1:],
+                ],
+                gd.AdjustedRowDefect.LINEAGE_MALFORMED,
+            ),
+            (lambda row: [row["lineage"][0], "not-a-ref"], gd.AdjustedRowDefect.LINEAGE_MALFORMED),
+            (
+                lambda row: [
+                    row["lineage"][0],
+                    dict(
+                        row["lineage"][1],
+                        selector=dict(row["lineage"][1]["selector"], row_key="no-slashes"),
+                    ),
+                ],
+                gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,
+            ),
+        ],
+    )
+    def test_lineage_references_are_closed_resolved_and_complete(
+        self, mutate: Any, defect: gd.AdjustedRowDefect
+    ) -> None:
+        split_row, _, bars, actions = self._context()
+        assert self.verify(dict(split_row, lineage=mutate(split_row)), bars, actions) is defect
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            "not-a-document",
+            None,
+            [],
+            {},
+        ],
+    )
+    def test_a_document_that_is_not_the_closed_shape_is_a_closed_defect(
+        self, document: object
+    ) -> None:
+        _, _, bars, actions = self._context()
+        assert self.verify(document, bars, actions) is gd.AdjustedRowDefect.DOCUMENT_MALFORMED
+
+    def test_missing_and_unexpected_fields_are_closed_defects(self) -> None:
+        split_row, _, bars, actions = self._context()
+        for field in sorted(gd.ADJUSTED_ROW_FIELDS):
+            missing = {k: v for k, v in split_row.items() if k != field}
+            assert self.verify(missing, bars, actions) is gd.AdjustedRowDefect.DOCUMENT_MALFORMED, (
+                field
+            )
+        assert (
+            self.verify(dict(split_row, extra="x"), bars, actions)
+            is gd.AdjustedRowDefect.DOCUMENT_MALFORMED
+        )
+
+    def test_no_refusal_carries_a_value_and_no_exception_escapes(self) -> None:
+        split_row, _, bars, actions = self._context()
+        hostile = dict(
+            split_row, lineage=[{"entity": None, "dataset_version": 1, "selector": ["x"]}]
+        )
+        result = self.verify(hostile, bars, actions)
+        assert result is gd.AdjustedRowDefect.LINEAGE_MALFORMED
+        assert "sharadar:" not in result.value and "2026" not in result.value
+
+    def test_the_production_path_verifies_every_row_before_it_enters_an_artifact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store, runs = lineage_store()
+        calls: list[dict[str, Any]] = []
+        original = gd.verify_adjusted_row
+
+        def spy(document: Any, **kwargs: Any) -> gd.AdjustedRowDefect | None:
+            calls.append(document)
+            return original(document, **kwargs)
+
+        monkeypatch.setattr(gd, "verify_adjusted_row", spy)
+        report = build(store, runs, as_of=self.AS_OF, build_id="synthetic-build-spy")
+        rows = artifact(report, "gold-adjusted-bars")
+        assert rows and calls == rows
+
+    def test_a_verification_failure_refuses_the_build_and_publishes_no_manifest(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store, runs = lineage_store()
+        original = gd.verify_adjusted_row
+
+        def one_bad_row(document: Any, **kwargs: Any) -> gd.AdjustedRowDefect | None:
+            if document["session_date"] == "2026-09-04":
+                return gd.AdjustedRowDefect.VALUE_MISMATCH
+            return original(document, **kwargs)
+
+        monkeypatch.setattr(gd, "verify_adjusted_row", one_bad_row)
+        scenario = BuildScenario(
+            store,
+            runs=runs,
+            config=configuration(as_of=self.AS_OF),
+            build_id="synthetic-build-refused",
+        )
+        report = scenario.run()
+        assert report.status is bp.BuildStatus.REFUSED_VERIFICATION
+        assert report.defect == gd.GoldDefect.REFUSED_VERIFICATION.value
+        assert report.manifest.value == "NOT_ATTEMPTED" and report.publication is None
+        assert scenario.data_plane_calls()[1] == 0
+        assert store.keys_under("manifests/") == [] and store.keys_under("gold/") == []
 
 
 # ---------------------------------------------------------------------------

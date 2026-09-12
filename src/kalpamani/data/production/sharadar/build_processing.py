@@ -48,7 +48,7 @@ from kalpamani.data.production.sharadar.build_manifest import (
     PublicationResult,
     publish_build,
 )
-from kalpamani.data.production.sharadar.gold import GoldError, build_gold
+from kalpamani.data.production.sharadar.gold import GoldDefect, GoldError, build_gold
 from kalpamani.data.production.sharadar.identities import SpentIdentityRegistry
 from kalpamani.data.production.sharadar.inputs import BuildInput
 from kalpamani.data.production.sharadar.locator import PayloadDisposition, ProductionLocatorReader
@@ -83,6 +83,7 @@ class BuildStatus(StrEnum):
     REFUSED_NORMALIZATION = "REFUSED_NORMALIZATION"
     REFUSED_TIMING = "REFUSED_TIMING"
     REFUSED_QUALITY = "REFUSED_QUALITY"
+    REFUSED_VERIFICATION = "REFUSED_VERIFICATION"
     HALTED = "HALTED"
     MANIFEST_NAME_OCCUPIED = "MANIFEST_NAME_OCCUPIED"
     MANIFEST_STATE_UNKNOWN = "MANIFEST_STATE_UNKNOWN"
@@ -275,11 +276,11 @@ def run_production_build(
             tolerance=configuration.reconciliation_tolerance,
         )
     except GoldError as error:
-        status = (
-            BuildStatus.REFUSED_TIMING
-            if error.defect.value == "REFUSED_TIMING"
-            else BuildStatus.REFUSED_QUALITY
-        )
+        status = {
+            GoldDefect.REFUSED_TIMING: BuildStatus.REFUSED_TIMING,
+            GoldDefect.REFUSED_QUALITY: BuildStatus.REFUSED_QUALITY,
+            GoldDefect.REFUSED_VERIFICATION: BuildStatus.REFUSED_VERIFICATION,
+        }[error.defect]
         return refused(status, error.defect.value)
 
     # Stage 7c: publication -- Silver, Gold, then the manifest last.

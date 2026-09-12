@@ -98,8 +98,14 @@ Consequences:
    sequence, ratio) and carries **two** availabilities kept apart: `source_governing_time`, the raw bar's,
    and `derived_governing_time`, the latest governing time of every input actually consumed -- so a split
    revision or correction available later than the bar can never yield a value labelled available before
-   it, and an action not consumed affects neither the value nor its availability. A verifier reconstructs
-   the value and the consumed set from the recorded lineage against the served revisions. The derivation
+   it, and an action not consumed affects neither the value nor its availability. The adjusted row is a
+   **closed shape**, and a verifier resolves its lineage to the exact served revisions, rebuilds the expected
+   row from the resolved bar and the served actions -- never from the document's own fields -- and
+   validates every field of the shape (identity, policy, convention, derivation version, source digest and
+   sequence, complete lineage, contributing action revisions and ratios, prices, volume, factor, source and
+   derived availability, unresolved-action metadata); a malformed document is a closed defect. **The build
+   verifies every adjusted row before it enters an artifact** and refuses (`REFUSED_VERIFICATION`) with no
+   artifact and no manifest if one does not reconstruct. The derivation
    is versioned (`adjustment_derivation_version`) beside the action-selection policy
    (`action_selection_version`), and both are in the manifest and the `run_id`.
 10. **Membership decisions are immutable; quality restrictions are a separate artifact.** A membership row
