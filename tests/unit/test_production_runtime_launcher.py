@@ -448,6 +448,20 @@ class TestCreateOnlyConflicts:
         assert scenario.launcher_ssm.names("delete_parameter") == []
         assert scenario.human_ssm.names("delete_parameter") == [scenario.constants.input_parameter]
 
+    def test_an_invalid_utf8_input_is_refused_before_any_launch_and_deletes_nothing(self) -> None:
+        scenario = _Scenario()
+        scenario.authorization = pl.LaunchAuthorization(identity=RUN_ID, input_bytes=b"\xff")
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.REFUSED_INPUT_WRITE
+        assert (
+            report.counts.parameter_creates == 0 == len(scenario.human_ssm.names("put_parameter"))
+        )
+        assert not report.task_started and scenario.ecs.calls == []
+        # Nothing was created, so nothing is deleted: no delete on an uncreated parameter.
+        assert scenario.human_ssm.names("delete_parameter") == []
+        assert report.cleanup_failures == ()
+        scenario.assert_counts_match_call_logs(report)
+
     def test_the_channels_never_overwrite(self) -> None:
         scenario = _Scenario()
         scenario.run()

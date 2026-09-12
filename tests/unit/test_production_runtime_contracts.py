@@ -717,6 +717,24 @@ class TestParameterChannel:
             and info.value.operation is ParameterOperation.PUT
         )
 
+    def test_invalid_utf8_is_refused_locally_with_nothing_issued_or_counted(self) -> None:
+        ssm = FakeSsm()
+        adapter = SsmParameterAdapter(ssm=ssm)
+        with pytest.raises(ParameterError) as info:
+            adapter.create_parameter("/x", b"\xff", key_id="k", expires_at_iso="t")
+        assert info.value.operation is ParameterOperation.PUT
+        assert info.value.failure is ParameterFailure.INVALID_CONFIGURATION
+        assert adapter.put_count == 0 and ssm.names("put_parameter") == []
+        assert info.value.__cause__ is None
+
+    def test_a_valid_request_the_client_rejects_still_counts_as_one_issued(self) -> None:
+        ssm = FakeSsm(put_failures={"/x": "AccessDeniedException"})
+        adapter = SsmParameterAdapter(ssm=ssm)
+        with pytest.raises(ParameterError) as info:
+            adapter.create_parameter("/x", b"{}", key_id="k", expires_at_iso="t")
+        assert info.value.failure is ParameterFailure.ACCESS_DENIED
+        assert adapter.put_count == 1 == len(ssm.names("put_parameter"))
+
     def test_a_response_without_a_string_value_is_invalid(self) -> None:
         class Odd:
             def get_parameter(self, **kwargs: Any) -> dict[str, Any]:

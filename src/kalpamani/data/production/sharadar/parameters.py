@@ -181,23 +181,34 @@ class SsmParameterAdapter:
     ) -> None:
         """``PutParameter`` **without** ``Overwrite``: create only, advanced tier.
 
+        Every request argument is prepared **before** the counter moves: a value
+        that is not ``bytes`` or is not valid UTF-8 is refused locally as
+        ``INVALID_CONFIGURATION`` with nothing issued and nothing counted. The
+        counter is incremented immediately before the client is invoked, so an
+        issued request that the client rejects still counts as one.
+
         Raises:
             ParameterError: ``PUT`` with the classified failure; ``ALREADY_EXISTS``
                 is the stale-input / stale-release guard firing.
         """
         if type(value) is not bytes:
             raise _refuse(ParameterOperation.PUT, ParameterFailure.INVALID_CONFIGURATION)
+        try:
+            text = value.decode("utf-8")
+        except UnicodeDecodeError:
+            raise _refuse(ParameterOperation.PUT, ParameterFailure.INVALID_CONFIGURATION) from None
+        request = {
+            "Name": name,
+            "Value": text,
+            "Type": SECURE_STRING,
+            "KeyId": key_id,
+            "Tier": ADVANCED_TIER,
+            "Overwrite": False,
+            "Policies": expiration_policy(expires_at_iso=expires_at_iso),
+        }
         self.put_count += 1
         try:
-            self._ssm.put_parameter(
-                Name=name,
-                Value=value.decode("utf-8"),
-                Type=SECURE_STRING,
-                KeyId=key_id,
-                Tier=ADVANCED_TIER,
-                Overwrite=False,
-                Policies=expiration_policy(expires_at_iso=expires_at_iso),
-            )
+            self._ssm.put_parameter(**request)
         except Exception as exception:
             raise _refuse(ParameterOperation.PUT, classify_parameter_failure(exception)) from None
 
