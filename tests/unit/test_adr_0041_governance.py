@@ -40,11 +40,20 @@ def test_the_adr_exists_and_is_the_only_0041() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0041-*.md"))] == [ADR.name]
 
 
-def test_the_adr_carries_a_conditional_acceptance_status_and_the_gates() -> None:
+def test_the_adr_keeps_its_conditional_status_and_records_the_merge() -> None:
+    """The pre-merge condition is preserved as written; the note beside it records the event."""
     assert "Status: " + PROPOSED in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
     assert "a narrow amendment of ADR-0009's request model" in ADR_FLAT
     assert "Nothing was run to produce this decision" in ADR_FLAT
+    assert "The condition above has since been satisfied." in ADR_FLAT
+    assert "PR #98 merged" in ADR_FLAT and "2026-09-12T17:38:46Z" in ADR_FLAT
+    assert "5d4ecd766fa9fcb8ab3fc1c2e3bf77e49a67cc92" in ADR_TEXT
+    assert "2be8d2ee7946de457e8071160f89836746713168" in ADR_TEXT
+    assert "db5b950bc1ff377fae4773c15efb14ee0fa051be" in ADR_TEXT
+    assert "ADR-0041 is therefore ACCEPTED / IN FORCE" in ADR_FLAT.replace("**", "")
+    assert "Acceptance authorizes no execution" in ADR_FLAT
+    assert "not implemented by that merge" in ADR_FLAT
     assert 'not a "test" request, not the published test key' in ADR_FLAT
     assert "## 5. Effectiveness and execution gates" in ADR_TEXT
     assert "acceptance authorizes no execution" in ADR_FLAT
@@ -104,8 +113,21 @@ def test_the_adr_carries_no_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_the_merge(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search(r"ADR-0041[^\n]{0,200}" + re.escape(PROPOSED), text) is not None
-    assert "ADR-0041 (production provider request form):     " + PROPOSED in text
+    rows = [
+        line
+        for line in text.splitlines()
+        if line.startswith("| ")
+        and "ADR-0041](" in line
+        and "production provider request form" in line.split("|")[1]
+    ]
+    assert len(rows) == 1
+    flat = " ".join(rows[0].replace("**", "").split())
+    assert "ACCEPTED / IN FORCE" in flat and "PR #98 merged 2026-09-12T17:38:46Z" in flat
+    assert "5d4ecd766fa9fcb8ab3fc1c2e3bf77e49a67cc92" in flat
+    assert "while PR #98 was open it was proposed and carried no authority" in flat
+    assert "Acceptance authorized no request" in flat
+    assert "ADR-0041 (production provider request form):     ACCEPTED / IN FORCE" in text
     assert "SCRIPTED-TRANSPORT-ONLY" in text
+    assert re.search("ADR-0041[^\\n]{0,200}" + re.escape(PROPOSED), text) is None

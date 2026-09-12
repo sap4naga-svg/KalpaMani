@@ -11,6 +11,16 @@ explicit request form beside the accepted one — and nothing else**, effective 
 adapter merged beside it. **The offline adapter that accompanies this proposal is likewise proposed and
 offline until that merge, and acceptance authorizes no execution** (§5).
 
+**The condition above has since been satisfied.** **PR #98 merged** — merged **2026-09-12T17:38:46Z**, merge
+commit **`5d4ecd766fa9fcb8ab3fc1c2e3bf77e49a67cc92`**, ordered parents **`2be8d2ee7946de457e8071160f89836746713168`** then
+**`db5b950bc1ff377fae4773c15efb14ee0fa051be`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`a1ee6800875a95036f15f790a7ddf02c168274ba`). ADR-0041 is therefore **ACCEPTED / IN FORCE** as a narrow
+amendment of ADR-0009's request model, effective together with the offline adapter merged beside it. While the
+pull request was open it was proposed and carried no authority — true then, and not rewritten. **Acceptance
+authorizes no execution**: the only transport the adapter has been handed is a scripted fake, and the build-side
+refusal §3 and §5 deferred was **not implemented by that merge** — it is proposed separately
+([ADR-0042](ADR-0042-build-side-pagination-admission.md)).
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no credential
 retrieval, no provider request of any kind — not a "test" request, not the published test key. The
 evidence is the accepted request model in code, the compiled production plan, and the vendor's public

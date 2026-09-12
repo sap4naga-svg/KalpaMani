@@ -823,6 +823,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # ADR-0039 and ADR-0040 merged as PR #97 on 2026-09-12, with the offline build processing.
     ("ADR-0039", "PR #97 merged"),
     ("ADR-0040", "PR #97 merged"),
+    # ADR-0041 merged as PR #98 on 2026-09-12, with the offline production provider adapter.
+    ("ADR-0041", "PR #98 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
