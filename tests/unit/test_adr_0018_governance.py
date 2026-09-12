@@ -574,7 +574,16 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
                 if not line.lstrip().startswith("#")
             )
             for resource_type, name in identity.findall(hcl):
-                assert not resource_type.endswith("attachment"), (
+                # ADR-0036 (accepted, PR #93) attaches its two customer-managed policies
+                # to each PRODUCTION task role by design. Those four attachments are
+                # admitted by EXACT (file, role, policy) triple through the audit's
+                # `role_policy_attachment_violations` below -- never by label. Every
+                # other attachment kind is refused here, and so is any identity for the
+                # two ADR-0018 qualification actors.
+                assert (
+                    resource_type == "aws_iam_role_policy_attachment"
+                    or not resource_type.endswith("attachment")
+                ), (
                     f"{path.name} declares {resource_type}.{name}. Attaching a permission "
                     "set to a principal is infrastructure mutation, which is a separate gate."
                 )
@@ -583,6 +592,9 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
                         f"{path.name} declares {resource_type}.{name}. Designing a role is "
                         "not creating one, and infrastructure mutation is a separate gate."
                     )
+        # The audit's own collector, keyed by repository-relative path: a dictionary
+        # built here by basename let two files share one key and hide each other.
+        assert GUARD.role_policy_attachment_violations(GUARD.infra_terraform_sources()) == []
 
     def test_the_offline_permission_set_candidate_exists_and_creates_no_identity(self) -> None:
         """The reverse-drift half. Deleting the candidate must fail too.

@@ -74,3 +74,25 @@ untagged_image_expiry_days = 14
 # configuration and only its ARN is referenced here, in the uncommitted
 # `terraform.tfvars`. An ARN contains an account id and is never committed.
 provider_secret_arns = []
+
+# ----------------------------------------------------------------------------
+# ADR-0036 production principals (production_variables.tf). LEAVE THESE AT THEIR
+# DEFAULTS: `production_stage = "none"` declares nothing and changes nothing
+# applied. Every other value is required only when the stage moves, under its own
+# written authorization, and every one is an identifier or evidence pointer that
+# belongs only in the uncommitted `terraform.tfvars`.
+# ----------------------------------------------------------------------------
+production_stage = "none"
+
+# Required for stage a or b. Placeholders that would FAIL validation, on purpose.
+# production_target_account_id           = "REPLACE-WITH-12-DIGIT-AWS-ACCOUNT-ID"   # defaults to qualification_target_account_id
+# production_acquisition_secret_arn      = "REPLACE-WITH-THE-ONE-PRODUCTION-SECRET-ARN"
+# production_apply_principal_arn_pattern = "REPLACE-WITH-THE-APPLY-PRINCIPAL-ARN-PATTERN"
+# identity_center_region                 = "REPLACE-WITH-THE-IDENTITY-CENTER-REGION"   # the instance's Region, not aws_region
+# production_image_digests               = { acquisition = "sha256:REPLACE", build = "sha256:REPLACE" }
+# production_binding_provenance          = { implementation_commit = "REPLACE-40-HEX", implementation_tree = "REPLACE-40-HEX", environment_binding_sha256 = "REPLACE-64-HEX" }
+# production_provider_origin_cidrs       = ["REPLACE-WITH-RESOLVED-PROVIDER-CIDR/32"]
+# production_endpoints_enabled           = false
+
+# Required ONLY for stage b, and only after R-3 is verified (ADR-0036 s.2.7, s.3).
+# production_r3_verification_digest      = "REPLACE-WITH-THE-64-HEX-DIGEST-OF-THE-R3-RECORD"

@@ -147,6 +147,119 @@ data "aws_iam_policy_document" "licensed_bucket" {
   # No Allow statement. Nothing grants access to this bucket except the task role
   # in iam.tf, and there is no cross-account principal, no anonymous principal and
   # no public grant anywhere in this configuration.
+
+  # -------------------------------------------------------------------------
+  # ADR-0036 s.2.7 -- server-side immutable writes on the production prefixes.
+  #
+  # Three Deny statements, present ONLY at production stage a or b and absent at
+  # the default stage `none`, so the applied bucket policy is byte-for-byte what
+  # it was until an authorized apply moves the stage. They apply to EVERY
+  # principal, the foundation's own task role included, and their scope is the
+  # production prefixes: the qualification prefixes (`qualification/*` and
+  # `bronze/sharadar/<dataset>/qualification/*`) are deliberately absent, so the
+  # qualification package's accounting is untouched. The `_verification/` prefix
+  # is in scope because R-3 (ADR-0036 s.3) proves these statements there.
+  #
+  # AWS documents the mechanism: `s3:if-none-match` and `s3:ObjectCreationOperation`
+  # in bucket policies, and a CopyObject under such a policy failing 403 or 501.
+  # These statements are what R-3 verifies with a fresh positive control; until R-3
+  # is verified, no production assignment exists (production_variables.tf).
+  # -------------------------------------------------------------------------
+
+  # An object-creating request without If-None-Match is refused.
+  dynamic "statement" {
+    for_each = local.production_stage_a ? [1] : []
+
+    content {
+      sid    = "ProductionRefusesUnconditionalObjectCreation"
+      effect = "Deny"
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      actions   = ["s3:PutObject"]
+      resources = local.production_immutable_write_scope
+
+      condition {
+        test     = "Null"
+        variable = "s3:if-none-match"
+        values   = ["true"]
+      }
+
+      condition {
+        test     = "Bool"
+        variable = "s3:ObjectCreationOperation"
+        values   = ["true"]
+      }
+    }
+  }
+
+  # Multipart parts are refused outright: every production object is one PutObject.
+  dynamic "statement" {
+    for_each = local.production_stage_a ? [1] : []
+
+    content {
+      sid    = "ProductionRefusesMultipartUploads"
+      effect = "Deny"
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      actions   = ["s3:PutObject"]
+      resources = local.production_immutable_write_scope
+
+      condition {
+        test     = "Bool"
+        variable = "s3:ObjectCreationOperation"
+        values   = ["false"]
+      }
+    }
+  }
+
+  # A copy-shaped put is refused explicitly, in addition to the documented
+  # behaviour of conditional-write enforcement.
+  dynamic "statement" {
+    for_each = local.production_stage_a ? [1] : []
+
+    content {
+      sid    = "ProductionRefusesCopyShapedWrites"
+      effect = "Deny"
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      actions   = ["s3:PutObject"]
+      resources = local.production_immutable_write_scope
+
+      condition {
+        test     = "Null"
+        variable = "s3:x-amz-copy-source"
+        values   = ["false"]
+      }
+    }
+  }
+}
+
+locals {
+  # The production prefixes the three statements above govern: the disjoint
+  # production namespaces of ADR-0037 (`.../production/...`, `_production_claims`),
+  # the locator index, the outputs and the R-3 verification prefix. Enumerated,
+  # never `bronze/sharadar/*` -- so no qualification payload, record or claim, and
+  # none of ADR-0017's objects, is under a production statement; a test builds the
+  # real qualification keys and proves it.
+  production_immutable_write_scope = concat(
+    local.production_payload_objects,
+    local.production_record_objects,
+    [local.production_index_objects, local.production_claim_objects],
+    local.production_output_objects,
+    ["${aws_s3_bucket.licensed.arn}/_verification/*"],
+  )
 }
 
 # ---------------------------------------------------------------------------
