@@ -9,6 +9,16 @@ is not to be rewritten as though this decision had authority before it was accep
 becomes **ACCEPTED / IN FORCE** as **a narrow amendment of the accepted point-in-time vocabulary — two
 additional members of `UniverseExclusionReason` — and nothing else**.
 
+**The condition above has since been satisfied.** **PR #97 merged** — merged **2026-09-12T16:56:34Z**, merge
+commit **`2be8d2ee7946de457e8071160f89836746713168`**, ordered parents **`6ddfa3601a8b14d4e0768ddd823f2c5a34927bdd`** then
+**`310df423f2a2b26109e23bb5a4b1be8edc787f65`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`7860098ac5d3deec9947254a55aae4af5fde5629`). ADR-0039 is therefore **ACCEPTED / IN FORCE** as a narrow amendment of the accepted point-in-time
+vocabulary. While the pull request was open it was proposed and carried no authority — true then, and not
+rewritten. **The merged code did not add the members to `kalpamani.data.contracts.vocabulary`**: the build
+still records them through its build-local mirror with `exclusion_vocabulary = "proposed-adr-0039"`, and
+moving the members into the accepted vocabulary and retiring the mirror (§2.1) is a **later, separately
+reviewed change** that has not occurred. **Acceptance authorizes no build, no ingestion and no run.**
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no read of any
 licensed object, no provider request. The evidence is the accepted vocabulary, ADR-0035's design, and the
 offline build implementation exercised on synthetic fixtures.

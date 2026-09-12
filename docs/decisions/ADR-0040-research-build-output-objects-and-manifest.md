@@ -10,6 +10,15 @@ becomes **ACCEPTED / IN FORCE** as **a narrow amendment fixing the inner object 
 actor writes under ADR-0036's accepted `silver/`, `gold/` and `manifests/` prefixes, the manifest
 contract, and the build's elapsed-time deadline — and nothing else**.
 
+**The condition above has since been satisfied.** **PR #97 merged** — merged **2026-09-12T16:56:34Z**, merge
+commit **`2be8d2ee7946de457e8071160f89836746713168`**, ordered parents **`6ddfa3601a8b14d4e0768ddd823f2c5a34927bdd`** then
+**`310df423f2a2b26109e23bb5a4b1be8edc787f65`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`7860098ac5d3deec9947254a55aae4af5fde5629`). ADR-0040 is therefore **ACCEPTED / IN FORCE** as a narrow amendment fixing the inner shapes under
+ADR-0036's accepted prefixes, effective together with the offline implementation merged beside it. While
+the pull request was open it was proposed and carried no authority — true then, and not rewritten.
+**Acceptance authorizes no build and no run**: the calendar the merged build consumes is synthetic, the
+split-ratio reading, the action-event-identity contract and every ADR-0036 gate stay as §3 records them.
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no read of any
 licensed object, no provider request. The evidence is the accepted ADRs and the offline build
 implementation exercised on synthetic fixtures.

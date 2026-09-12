@@ -206,6 +206,102 @@ class SharadarRequest:
         return self.window.requested_range if self.window is not None else SNAPSHOT_RANGE
 
 
+#: The parameters a production cross-section request may carry: the accepted allowlist
+#: without ``ticker``. No name is added to the accepted allowlist by this form.
+CROSS_SECTION_PARAMETER_ALLOWLIST: Final[frozenset[str]] = QUERY_PARAMETER_ALLOWLIST - {"ticker"}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CrossSectionRequest:
+    """One fully-specified **ticker-less** request: a snapshot or a date cross-section.
+
+    The production request form proposed by ADR-0041, kept apart from
+    :class:`SharadarRequest` -- the accepted qualification form, which names a ticker
+    on every request and is unchanged. The vendor documents ``ticker`` as optional
+    with the default ``all`` on the three tables, and shows ``from``/``to``-only
+    examples; that is the whole of what this form uses. No filter beyond the window
+    exists here: no ``action``, ``contraticker``, ``permaticker``, ``table``, ``status``,
+    ``sort``, ``fields`` or ``years``, and the tickers table's own ``from``/``to``
+    (bounds on ``lastpricedate``) are refused because a snapshot carries no window.
+    """
+
+    dataset: SharadarDataset
+    response_format: ResponseFormat
+    page: Page
+    window: DateWindow | None
+
+    def __post_init__(self) -> None:
+        dataset = closed_member(SharadarDataset, self.dataset)
+        if dataset is None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
+        object.__setattr__(self, "dataset", dataset)
+        response_format = closed_member(ResponseFormat, self.response_format)
+        if response_format is None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        object.__setattr__(self, "response_format", response_format)
+        if type(self.page) is not Page:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        if self.window is not None and type(self.window) is not DateWindow:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        windowed = dataset in WINDOWED_DATASETS
+        if windowed and self.window is None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        if not windowed and self.window is not None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+
+    @property
+    def requested_range(self) -> str:
+        """What Bronze records as this request's range. ``SNAPSHOT`` when untimed."""
+        return self.window.requested_range if self.window is not None else SNAPSHOT_RANGE
+
+
+def build_cross_section_query_parameters(
+    request: CrossSectionRequest, *, credential: SharadarCredential
+) -> tuple[tuple[str, str], ...]:
+    """The exact query parameters for a cross-section request, in a fixed order.
+
+    ``api_key``, ``format``, then ``from`` and ``to`` for a windowed dataset, then
+    ``limit`` and ``skip``. **Never ``ticker``.** The return value carries the
+    credential; hand it straight to :func:`build_cross_section_url`.
+
+    Raises:
+        SharadarRequestError: if the built names are not a subset of
+            :data:`CROSS_SECTION_PARAMETER_ALLOWLIST` or intersect the forbidden set.
+    """
+    if type(request) is not CrossSectionRequest:
+        raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
+    parameters: list[tuple[str, str]] = [
+        ("api_key", credential.reveal()),
+        ("format", request.response_format.value),
+    ]
+    if request.window is not None:
+        parameters.append(("from", request.window.start.isoformat()))
+        parameters.append(("to", request.window.end.isoformat()))
+    parameters.append(("limit", str(request.page.limit)))
+    parameters.append(("skip", str(request.page.skip)))
+    names = {name for name, _ in parameters}
+    if not names <= CROSS_SECTION_PARAMETER_ALLOWLIST or names & FORBIDDEN_QUERY_PARAMETERS:
+        raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, request.dataset.value)
+    return tuple(parameters)
+
+
+def build_cross_section_url(request: CrossSectionRequest, *, credential: SharadarCredential) -> str:
+    """Build one cross-section request URL. **Never log or store the return value.**"""
+    parameters = build_cross_section_query_parameters(request, credential=credential)
+    url = f"{API_BASE_URL}/{request.dataset.value}?{urlencode(parameters)}"
+    if not url.startswith("https://"):
+        raise _refuse(SharadarErrorCode.REQUEST_SCHEME_REFUSED, request.dataset.value)
+    return url
+
+
+def describe_cross_section_request(request: CrossSectionRequest) -> str:
+    """A disclosure-free description: dataset, range and page. No ticker exists to name."""
+    return (
+        f"{PROVIDER} {request.dataset.value} cross-section range {request.requested_range} "
+        f"limit {request.page.limit} skip {request.page.skip}"
+    )
+
+
 def build_query_parameters(
     request: SharadarRequest, *, credential: SharadarCredential
 ) -> tuple[tuple[str, str], ...]:
@@ -273,18 +369,23 @@ def describe_request(request: SharadarRequest) -> str:
 
 __all__ = [
     "API_BASE_URL",
+    "CROSS_SECTION_PARAMETER_ALLOWLIST",
     "FORBIDDEN_QUERY_PARAMETERS",
     "MAX_PAGE_LIMIT",
     "PROVIDER",
     "QUERY_PARAMETER_ALLOWLIST",
     "SNAPSHOT_RANGE",
     "WINDOWED_DATASETS",
+    "CrossSectionRequest",
     "DateWindow",
     "Page",
     "ResponseFormat",
     "SharadarDataset",
     "SharadarRequest",
+    "build_cross_section_query_parameters",
+    "build_cross_section_url",
     "build_query_parameters",
     "build_request_url",
+    "describe_cross_section_request",
     "describe_request",
 ]

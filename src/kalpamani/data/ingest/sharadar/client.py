@@ -49,7 +49,12 @@ from dataclasses import dataclass
 from typing import Final
 
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
-from kalpamani.data.ingest.sharadar.datasets import SharadarRequest, build_request_url
+from kalpamani.data.ingest.sharadar.datasets import (
+    CrossSectionRequest,
+    SharadarRequest,
+    build_cross_section_url,
+    build_request_url,
+)
 from kalpamani.data.ingest.sharadar.redaction import (
     RETRYABLE_CODES,
     SharadarErrorCode,
@@ -388,6 +393,26 @@ class SharadarClient:
                 stage=SharadarStage.FETCH, code=SharadarErrorCode.REQUEST_MALFORMED
             )
         url = build_request_url(request, credential=self._credential)
+        return self._fetch_url(url, dataset=request.dataset.value)
+
+    def fetch_cross_section(self, request: CrossSectionRequest) -> bytes:
+        """Return the vendor's response bytes for a ticker-less cross-section request.
+
+        The production request form (ADR-0041). The URL is built by
+        :func:`~kalpamani.data.ingest.sharadar.datasets.build_cross_section_url`;
+        everything after that -- pacing, the one transport call per attempt, the
+        retry policy, the response check, the sanitized refusal -- is the same loop
+        :meth:`fetch` runs, so the two forms cannot drift in behaviour.
+        """
+        if type(request) is not CrossSectionRequest:
+            raise SharadarRequestError(
+                stage=SharadarStage.FETCH, code=SharadarErrorCode.REQUEST_MALFORMED
+            )
+        url = build_cross_section_url(request, credential=self._credential)
+        return self._fetch_url(url, dataset=request.dataset.value)
+
+    def _fetch_url(self, url: str, *, dataset: str) -> bytes:
+        """The fetch loop over one built URL. **The URL carries the credential.**"""
         code = SharadarErrorCode.REQUEST_MALFORMED
         for attempt in range(self._retry_policy.max_attempts):
             self._pacer.wait()
@@ -420,9 +445,7 @@ class SharadarClient:
             if attempt == self._retry_policy.max_attempts - 1:
                 break
             self._pacer.pause(self._retry_policy.backoff_seconds[attempt])
-        raise SharadarRequestError(
-            stage=SharadarStage.FETCH, code=code, dataset=request.dataset.value
-        )
+        raise SharadarRequestError(stage=SharadarStage.FETCH, code=code, dataset=dataset)
 
 
 __all__ = [
