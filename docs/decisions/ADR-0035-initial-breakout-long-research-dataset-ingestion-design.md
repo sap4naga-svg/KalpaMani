@@ -20,14 +20,18 @@ store, no backtest and no Brain implementation. **Design acceptance, infrastruct
 application, the first bounded ingestion, and G2 closure are five separate gates**, and this decision
 opens only the first.
 
+**This ADR is proposed on the same pull request as ADR-0034 and depends on it.** Both become effective
+together on that pull request's single independently reviewed merge; this ADR cannot be in force without
+ADR-0034, and neither is in force before that merge.
+
 ---
 
 ## 1. Context
 
 ### 1.1 The decision this design serves
 
-[ADR-0034](ADR-0034-select-sharadar-for-initial-equity-research-domains.md) — proposed alongside this
-ADR — records the owner's partial G1 decision: Sharadar `tickers` and `stocks` selected for initial
+[ADR-0034](ADR-0034-select-sharadar-for-initial-equity-research-domains.md) — proposed on the same pull
+request, on which this ADR depends — records the owner's partial G1 decision: Sharadar `tickers` and `stocks` selected for initial
 equity research; `actions` selected with announcement-based signals and spinoff treatment gated; G2 open
 with `PROVIDER_REALISTIC_PIT` as the target profile. The first research consumer is the Breakout Long
 module of the accepted Strategy Brain specification, whose data needs are daily price bars, a
@@ -140,6 +144,12 @@ Three things are versioned, and they are kept apart:
 | **source facts** | `revision_sequence` per `(security_id, session_date)` for bars and per action key for actions: a later acquisition delivering different bytes for a row already seen yields a **new revision**, never an overwrite; the vendor's `lastupdated` date is carried as `provider_last_updated_date` on every row | Silver |
 | **the transformation** | `source_schema_version` (compiled), the observed schema digest per payload, `universe_rule_version`, `adjustment_policy`, `resolution_policy_version`, the exchange-calendar version, the commit | the manifest and the `run_id` |
 
+**A revision never inherits an earlier version's availability.** Each row *version* — each distinct
+byte content for a row key — carries its own provider-availability evidence and its own
+`system_first_seen_time`. A later revision starts from the first-seen bound of *its own* acquisition,
+whatever the earlier version's timing was; a build that served revision `v2` at a time established only
+for `v1` would be serving a fact nobody could have held, and is refused (§3.9, example T-1).
+
 **Schema drift is a finding, not a surprise.** The observed column set and order of every payload is
 digested at normalisation; a digest not in the accepted set for that dataset is `SCHEMA_UNSTABLE` and
 BLOCKING until the schema is reviewed and the accepted set is versioned.
@@ -155,51 +165,80 @@ exactly one derivation and no row is ever served earlier than the evidence suppo
 | `information_origin` | `PROVIDER_DERIVED` (ADR-0010) | `AUTHORITATIVE_PUBLIC` — a split, dividend, listing or delisting is a public fact delivered by a vendor | `PROVIDER_DERIVED` attribute rows; `security` is `DERIVED_ARTIFACT` |
 | `temporal_fact_class` | `RETROSPECTIVE`, keyed to the exchange session | `ANNOUNCED_FORWARD` by nature, but with **no announcement anchor delivered** (`PSR-SHD-094/112`) | `SAMPLED_STATE` |
 | public time | not applicable — `PUBLIC_PIT` ineligible | exact: unknown. **Bound:** `public_available_upper_bound` = the ex-date session open, `PublicBoundDerivation.DATE_PLUS_LAG` with lag zero — an ex-date fact is public by its ex-date; announcement anchor `AnnouncementBoundDerivation.NONE` | not applicable |
-| provider time — **rule P-1 (exact)** | `ProviderTimeDerivation.VENDOR_STAMPED` from `lastupdated`, taken as the **last instant of that calendar date in the vendor's delivery timezone (ET)**, converted to UTC — **only after the owner's written G2 acceptance that the field's semantics are documented and verified for this use** (criterion G2-A) | same rule, same condition | same rule, same condition |
+| provider time — **rule P-1 (vendor-date bound)** | a **bound, never an exact instant**: `lastupdated` is a date-only field, so it can at most bound the availability of the row version it describes. `provider_available_upper_bound` = the last instant of the stamped date in the **evidenced** vendor timezone, or — absent timezone evidence — the last instant of that date anywhere on Earth (UTC−12:00), whichever is later; `provider_available_time` stays null. **Three separate prerequisites**, none of which owner acceptance can supply: (i) **field semantics evidence** that `lastupdated` refers to the delivered row *version* and bounds its availability — the public documentation says *last changed*, which upper-bounds the availability of the *current* version only if the stamp is reliable per version; (ii) **timezone evidence**, else the conservative fallback; (iii) **precision recorded as a bound**. The contract has no member for this derivation — `ProviderBoundDerivation` offers `FIRST_SEEN_UPPER_BOUND` and `DELIVERY_WINDOW` only — so P-1 requires the extension **`ProviderBoundDerivation.VENDOR_DATE_UPPER_BOUND`**, proposed here and **gated** until a contract ADR adds it and the evidence exists (criterion G2-A) | same rule, same prerequisites | same rule, same prerequisites |
 | provider time — **rule P-2 (bound)** | `DatasetGapPolicy.BOUND`: `provider_available_upper_bound` = the acquisition's retrieval instant, `ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND`; `provider_available_time` stays null; limitation tokens `PROVIDER_AVAILABILITY_UNKNOWN`, `PROVIDER_TIME_BOUNDED` | same | same |
-| provider time — **rule P-3 (delivery-window bound)** | `ProviderBoundDerivation.DELIVERY_WINDOW`: for session dates on or after a **documented service-inception date** for the table, the bound is the second documented daily delivery (23:30 ET) of the session date — **admissible only once the inception date and continuous daily delivery are established from an additional source** (criterion G2-D) | same, keyed to the action date | not applicable |
+| provider time — **rule P-3 (delivery-window bound, version-specific)** | `ProviderBoundDerivation.DELIVERY_WINDOW`, and only for a row version with **version-specific evidence** that *these bytes* existed at the claimed time — a dated archival capture containing the identical row, or a per-version vendor record. **A service-inception date and a delivery schedule establish that *some* version of a row was delivered on a date; they do not establish that the version retrieved today is that version**, because the vendor revises rows in place (`lastupdated`, `PSR-SHD-022`). Without version-specific evidence the row falls to P-2. Where the evidence exists, the bound is the second documented daily delivery (23:30 ET) of the evidenced date (criterion G2-D) | same, keyed to the action date, same evidence requirement | not applicable |
 | `system_first_seen_time` | the acquisition record's retrieval instant, exact, for every row | same | same |
 | governing time under `PROVIDER_REALISTIC_PIT` | `resolved_provider_time` | `max(resolved_public_time, resolved_provider_time)` | `resolved_provider_time` |
 
-**Rule order.** P-1 applies only when accepted; otherwise P-3 where established; otherwise P-2. **A row
-is never served under a later rule's time while labelled with an earlier rule's derivation**, and the
-manifest's per-dataset resolution map records which rule admitted how many rows.
+**Rule order.** P-3 applies only to a row version with version-specific evidence; otherwise P-1 only
+once the contract extension exists and its three prerequisites are met for the dataset; otherwise P-2 —
+**first-seen timing is the default, and the only rule that needs no evidence beyond the acquisition
+record.** Every rule yields a **bound**; no rule in this design writes an exact `provider_available_time`.
+**A row is never served under a later rule's time while labelled with an earlier rule's derivation**,
+**a later revision never inherits an earlier version's bound** (§3.2), and the manifest's per-dataset
+resolution map records which rule admitted how many rows.
 
 **The consequence that must be stated rather than discovered.** Under P-2 alone, a bar first ingested on
 day *D* is admissible under `PROVIDER_REALISTIC_PIT` only from *D*. A backtest over sessions before the
 first ingestion admits **nothing** under P-2, because a backfilled row may not become historically
 available merely because the session it describes is old (contract §3.4). Historical admissibility
 under the target profile therefore rests on P-1 or P-3 — both of which need evidence this repository does
-not yet hold — and that is exactly the split §5.1 makes between controls implementable now and evidence
-requiring additional sources. `DOWNGRADE` to `PUBLIC_PIT` is **not** available for `stocks`, because the
+not yet hold, and neither of which an acceptance can manufacture — and that is exactly the split §4 makes
+between controls implementable now and evidence requiring additional sources. `DOWNGRADE` to `PUBLIC_PIT` is **not** available for `stocks`, because the
 origin is ineligible; a research run that cannot satisfy the target profile is refused, not relabelled.
 
 ### 3.4 Historical-universe construction — the survivorship control
 
 Universe membership is **built once per session and stored** (`curate/universe.py`), never filtered from
-today's listings. For the initial dataset the rule, versioned as `universe_rule_version = breakout-long-v1`,
-admits a `security_id` on session `d` when every clause holds using **only facts admissible at `d`
-under the resolved profile**:
+today's listings.
 
-| Clause | Source | Exclusion reason |
+**The decision cutoff.** Membership for session `d` is fixed at one instant, `decision_time(d)`: the
+exchange-calendar open of session `d` minus a compiled operational margin (initial value: thirty minutes;
+a rule parameter in the manifest). **Trades during session `d` may occur only in securities that are members
+of `membership(d)`**, and `membership(d)` may consume only facts whose resolved availability under the
+resolved profile is **≤ `decision_time(d)`**. Session `d`'s own bar does not exist at that instant, so **no
+clause may depend on session `d`'s completed bar** — every price, volume and history clause reads bars
+through session `d−1` only. Under `PROVIDER_REALISTIC_PIT` this cutoff binds twice: the `d−1` bar must
+have been *published* by then, and its **provider-availability bound** (§3.3) must also be ≤
+`decision_time(d)` — which, under P-2, no bar acquired after the fact ever is.
+
+**Decision-time eligibility and later completeness are separate questions.** Whether a member actually
+traded on `d`, whether its `d` bar arrived, and whether it was delisted during `d` are **completeness and
+quality facts** checked afterwards (§3.7); they may mark a session's results incomplete or a fill
+unrealistic, and they never rewrite `membership(d)`. A rule that looked at `d`'s bar to decide `d`'s
+membership would be the look-ahead this section exists to prevent (§3.9, example C-1).
+
+For the initial dataset the rule, versioned as `universe_rule_version = breakout-long-v1`, admits a
+`security_id` on session `d` when every clause holds at `decision_time(d)`:
+
+| Clause | Source, and the revision consumed | Exclusion reason |
 |---|---|---|
-| listing life contains `d`: the security is listed on or before `d` and not delisted before `d` — from `actions` listing/delisting events where delivered, else from `tickers` `firstpricedate`/`lastpricedate` as bounds | `actions`, `tickers` | `HISTORY` |
-| exchange in {NYSE, NASDAQ, NYSE American} and category is a domestic common stock, from the security attribute admissible at `d` | `tickers` | `EXCHANGE`, `SECURITY_TYPE` |
-| a bar exists for `d` and for at least `N_history` prior sessions | `stocks` | `HISTORY` |
-| unadjusted close on the prior session ≥ the price floor | `stocks` | `PRICE` |
-| average daily dollar volume over the trailing window ending the prior session ≥ the ADDV floor | `stocks` | `ADDV` |
+| **listing life** contains `d`: listed on or before `d−1` and not delisted on or before `d−1` — from `actions` listing/delisting **events** admissible at `decision_time(d)`; the `tickers` `firstpricedate`/`lastpricedate` bounds are a **snapshot attribute** and may serve only from the snapshot revision admissible at `decision_time(d)` | `actions`; `tickers` attribute revision | `HISTORY` |
+| **exchange** in {NYSE, NASDAQ, NYSE American} — from the `security_attribute` revision admissible at `decision_time(d)`; **no revision admissible → the clause is indeterminate and the security is excluded** | `tickers` attribute revision | `EXCHANGE`; indeterminate → `ATTRIBUTE_UNAVAILABLE` |
+| **security type** is a domestic common stock — same rule, same revision discipline | `tickers` attribute revision | `SECURITY_TYPE`; indeterminate → `ATTRIBUTE_UNAVAILABLE` |
+| a bar exists for `d−1` and for at least `N_history` sessions before it, each admissible at `decision_time(d)` | `stocks` | `HISTORY` |
+| unadjusted close on `d−1` ≥ the price floor | `stocks` | `PRICE` |
+| average daily dollar volume over the trailing window ending `d−1` ≥ the ADDV floor | `stocks` | `ADDV` |
 
-**Every lookback ends strictly before `d`.** The numeric floors and window lengths are rule parameters
-carried in the manifest, not constants a rebuild could silently change. Delisted securities are members
-while listed and disappear at delisting — which is what makes the dataset survivorship-aware — and a
-security that reappears after a delisting is a distinct listing episode.
+**Every lookback ends at `d−1`, and every input is the revision admissible at `decision_time(d)`.** The
+numeric floors, the window lengths and the operational margin are rule parameters carried in the manifest,
+not constants a rebuild could silently change. Delisted securities are members while listed and disappear
+at delisting — which is what makes the dataset survivorship-aware — and a security that reappears after a
+delisting is a distinct listing episode.
 
-**Two limits are inherent to the source and are recorded, not hidden.** `tickers` carries **no dated
-classification history** (`PSR-SHD-113`): sector and industry are current values, admissible only from
-the snapshot that first delivered them, so sector-relative features are excluded from the initial dataset
-(§5.1). And listing lifecycle events are exactly as complete as the vendor's `actions` table; the
-`firstpricedate`/`lastpricedate` bounds are the fallback, and a security whose events and bounds disagree
-is a quality finding (§3.7).
+**A current snapshot never silently becomes historical truth — for any attribute.** `tickers` is a
+`SAMPLED_STATE` snapshot with **no dated history for exchange, security type, listing bounds, sector or
+industry** (`PSR-SHD-096`, `PSR-SHD-113`). Every attribute row is admissible only from the revision that
+first delivered it, under that revision's own availability bound (§3.3). So for sessions before the first
+snapshot's bound, the exchange and security-type clauses are **indeterminate** and the security is excluded
+with `ATTRIBUTE_UNAVAILABLE` — a second proposed vocabulary member, implemented only under the ingestion
+gate — rather than admitted on the strength of a value observed years later. Sector-relative features are
+excluded from the initial dataset for the same reason. **Only additional sources can change this for the
+past**: event-dated listing and exchange facts (the `actions` listing events, where they carry them; exchange
+master files; index or listing archives) are what would make an attribute clause determinable for a
+historical session (criterion G2-H). Listing lifecycle events are exactly as complete as the vendor's
+`actions` table, and a security whose events and snapshot bounds disagree is a quality finding (§3.7).
 
 ### 3.5 Identifier changes
 
@@ -242,11 +281,11 @@ severity the data-quality plan assigns:
 |---|---|---|
 | structural | payload decodes as strict UTF-8 CSV; observed schema digest in the accepted set; no duplicate `(ticker, date)` in a cross-section; no duplicate action key | BLOCKING |
 | completeness | final page not at the limit (`DELIVERY_TRUNCATED`); every planned request has a record; per-session row count within the expected band from the prior session | BLOCKING / WARNING |
-| temporal envelope | session date on the exchange calendar; no session after `T-1`; every row carries exactly one provider-time derivation; the ordering invariant `resolved_public ≤ resolved_provider ≤ system_first_seen` where applicable; no row served under a rule not admitted for its dataset | BLOCKING |
+| temporal envelope | session date on the exchange calendar; no session after `T-1`; every row carries exactly one provider-time derivation, and it is a **bound**; the ordering invariant `resolved_public ≤ resolved_provider ≤ system_first_seen` where applicable; no row served under a rule not admitted for its dataset; **no revision served under an earlier version's bound**; **no membership clause reads session `d`'s bar** | BLOCKING |
 | market data | `low ≤ open, close ≤ high`; non-negative volume; zero-volume run length; close-to-close jumps beyond a threshold without a split on the ex-date; missing sessions per security against the calendar | WARNING → BLOCKING by rule |
 | identity | one `permaticker` per symbol in the same-run snapshot; bars outside `[firstpricedate, lastpricedate]`; ticker-change events consistent with `ticker_history`; delisting event date versus last bar | BLOCKING / WARNING |
 | adjustment reconciliation | repository `SPLIT_ONLY` reconstruction versus the vendor's split-adjusted columns within tolerance; any security with a spinoff flagged `UNRESOLVED_CORPORATE_ACTION` | WARNING / BLOCKING |
-| history-admissibility census | per dataset and calendar year: rows admissible under P-1, P-3 and P-2, and rows excluded — an INFO report that feeds the owner's G2 decision and stays inside the licensed store | INFO |
+| history-admissibility census | per dataset and calendar year: rows admissible under P-3, P-1 and P-2, rows excluded, and — **for every attribute the universe rule consumes: exchange, security type, listing bounds, sector, industry** — the count of securities per session-year whose attribute revision is admissible at `decision_time(d)` versus `ATTRIBUTE_UNAVAILABLE`; and the per-year count of sessions whose `membership(d)` is determinable at all — an INFO report that feeds the owner's G2 decision and stays inside the licensed store | INFO |
 | cross-provider | none available; every manifest carries `SINGLE_SOURCE_UNVERIFIED` | — |
 
 A BLOCKING finding refuses Gold publication for the affected scope; a WARNING is recorded in the report
@@ -270,7 +309,28 @@ and the manifest; no check may be loosened without a plan version change.
   reconstructed are LICENSED, live only in the deletion-first licensed store, and stay inside the
   cloud-deletion runbook's 30-day obligation. Manifests carry no vendor rows.
 
-### 3.9 The infrastructure boundary — designed here, decided later
+### 3.9 Adversarial acceptance examples
+
+**These are fixtures the ingestion gate must build and the quality plan must fail or pass as stated.** They
+are acceptance examples for future runtime code; **a governance test that checks this document's wording
+proves nothing about runtime correctness**, and none of these fixtures exists yet.
+
+| # | Fixture | Must |
+|---|---|---|
+| **T-1** timing revision | row key `(security S, session 2019-03-05)` acquired as version `v1` on 2026-10-01 (first-seen bound `b1`), then re-delivered as `v2` with different bytes on 2026-11-15 (bound `b2 > b1`). A build with `as_of` between `b1` and `b2` requests the row | serve `v1` only; a build that serves `v2` under `b1` is **refused** (`REFUSED` at manifest emission, not annotated); the manifest records one revision admitted, one excluded by time |
+| **T-2** delivery-window without version evidence | the same `v2`, plus a documented vendor delivery schedule covering 2019-03-05 but no capture of `v2`'s bytes on that date | P-3 is **not** applied; `v2` carries `FIRST_SEEN_UPPER_BOUND` = `b2`; a fixture that assigns a `DELIVERY_WINDOW` bound to `v2` **fails** |
+| **T-3** delivery-window with version evidence | `v2` plus a dated archival capture whose row bytes are identical to `v2`, dated 2019-03-06 | P-3 applies with the evidenced date; the manifest cites the evidence digest; the bound is a bound, and `provider_available_time` stays null |
+| **D-1** date precision | a row with `lastupdated = 2019-03-06`, no timezone evidence, and the `VENDOR_DATE_UPPER_BOUND` extension present | `provider_available_upper_bound` = 2019-03-06T23:59:59.999 at UTC−12:00 (2019-03-07T11:59:59.999Z); `provider_available_time` **null**; a fixture that writes an exact instant from the date **fails** |
+| **D-2** date precision, timezone evidenced | the same row with evidenced vendor timezone America/New_York | bound = 2019-03-07T04:59:59.999Z; still a bound; the derivation names the evidence |
+| **D-3** date precision, extension absent | the same row, but the contract has no `VENDOR_DATE_UPPER_BOUND` member | P-1 is unavailable; the row falls to P-2; a fixture that emits any vendor-date bound **fails** |
+| **C-1** decision cutoff | security `S` satisfies every clause on bars through `d−1` but its `d` bar is absent (halted on `d`) | `S ∈ membership(d)`; the missing `d` bar is a completeness finding, not an exclusion; a rule that excludes `S` from `membership(d)` because of `d`'s bar **fails** |
+| **C-2** decision cutoff, availability | `S`'s `d−1` bar has a provider-availability bound later than `decision_time(d)` (e.g. first seen the following week) | `S ∉ membership(d)` with reason `HISTORY`; a fixture that admits it **fails** |
+| **C-3** decision cutoff, delisting during `d` | `S ∈ membership(d)` and an `actions` delisting event dated `d` | membership unchanged; the delisting is a completeness finding for `d` and an exclusion from `membership(d+1)` |
+| **A-1** historical attribute | the only `tickers` snapshot was first seen in 2026; the build asks for `membership(2019-03-05)` | the exchange and security-type clauses are indeterminate; every security is excluded with `ATTRIBUTE_UNAVAILABLE`; the census reports zero attribute-determinable securities for 2019; a fixture that admits `S` on the 2026 snapshot's exchange value **fails** |
+| **A-2** historical attribute with an event-dated source | as A-1, plus an additional event-dated exchange-listing source admissible in 2019 | the clause resolves from that source; the manifest names it; `SINGLE_SOURCE_UNVERIFIED` is replaced for that attribute by the cross-source check's outcome |
+| **V-1** revision inheritance across rules | `v1` admitted under P-3 with 2019 evidence; `v2` arrives with no evidence | `v2` is P-2 only; the resolution map shows the per-version split; a fixture in which `v2` inherits `v1`'s P-3 bound **fails** |
+
+### 3.10 The infrastructure boundary — designed here, decided later
 
 Production needs two principals the qualification package does not have, and neither is created by this
 ADR:
@@ -295,10 +355,11 @@ can implement now, or needs historical evidence from an additional source.**
 
 | # | Criterion | Implementable now | Needs additional sources |
 |---|---|---|---|
-| **G2-A** | **`lastupdated` semantics accepted for rule P-1**: the owner records, from the private evidence, whether the field is accepted as the exact provider-availability date for bars and actions, or not | the control — P-1 gated behind a written acceptance, with the end-of-date-ET bound — is implementable now | the *acceptance* rests on the private P1 evidence and on any further owner verification; nothing public establishes it |
+| **G2-A** | **Rule P-1 evidenced, not merely accepted**: (i) field-semantics evidence that `lastupdated` bounds the availability of the delivered row *version*; (ii) timezone evidence or the recorded conservative fallback; (iii) the `VENDOR_DATE_UPPER_BOUND` contract extension accepted by its own ADR, so precision is recorded as a bound; and the owner's written record of which evidence was reviewed | the gate, the bound arithmetic and the fallback are implementable now; the extension is a contract ADR | the semantics and timezone evidence must come from the private cross-run evidence and/or vendor documentation or correspondence; **owner acceptance cannot manufacture it** |
+| **G2-H** | **Historical attribute admissibility understood**: the census reports, per session-year, how many securities have an admissible exchange, security-type and listing-bound revision at `decision_time(d)`, and the owner records whether the resulting universe horizon is acceptable or whether event-dated attribute sources are to be obtained | the census and the `ATTRIBUTE_UNAVAILABLE` exclusion are implementable now (the exclusion member is a vocabulary addition under the ingestion gate) | event-dated exchange, security-type and listing evidence for historical sessions needs additional sources |
 | **G2-B** | **Forward availability from first ingestion**: every row carries an exact `system_first_seen_time`, and P-2 produces a sound `FIRST_SEEN_UPPER_BOUND` for every row from the first production run onward | **yes** — entirely a repository control | none |
 | **G2-C** | **Per-dataset resolution map in every manifest**, entering `run_id`, with exact / bounded / excluded counts and the rule that admitted each row | **yes** — the manifest contract already carries the map | none |
-| **G2-D** | **Delivery-window bound (rule P-3) established** for each table: a documented service-inception date and continuous daily delivery since, so that sessions after inception can carry a `DELIVERY_WINDOW` bound | the rule is implementable now behind a per-table inception date | **yes** — the inception dates and delivery continuity need vendor history documentation or an archival source; not established by anything held |
+| **G2-D** | **Delivery-window bound (rule P-3) established per row version**: version-specific evidence that the retrieved bytes existed at the claimed time — dated archival captures or per-version vendor records — for the rows it is applied to; a service-inception date and a delivery schedule are necessary context and are **not sufficient** | the rule, its version-evidence requirement and the fall-through to P-2 are implementable now | **yes** — the archival captures or per-version records do not exist in this repository and would come from an additional source; without them P-3 admits nothing |
 | **G2-E** | **History-admissibility census reviewed**: the owner has seen, per year, how many rows each rule admits, and accepts the resulting research horizon | the census (§3.7) is implementable now; it needs the research-build actor to run | the *horizon* it reveals may motivate additional sources; that is the owner's call |
 | **G2-F** | **No profile mixing possible**: a run that cannot be served under `PROVIDER_REALISTIC_PIT` is refused, never downgraded, for `PROVIDER_DERIVED` datasets | **yes** — a manifest-emission refusal | none |
 | **G2-G** | **Corporate-action timing bounded honestly**: actions carry the ex-date public bound and no announcement anchor; announcement-based use stays gated until an announcement source exists | the bound and the gate are implementable now | an announcement-dated source (e.g. an exchange notice feed or EDGAR-derived events, Phase 3B) would be needed to lift the gate |
@@ -306,7 +367,8 @@ can implement now, or needs historical evidence from an additional source.**
 **G2 closes only by a written owner ADR that cites which criteria are met by controls and which by
 evidence, and names the accepted research horizon.** Meeting G2-B, G2-C, G2-F and G2-G alone yields a
 provider-realistic dataset whose admissible history begins at the first production ingestion; extending
-that history backwards is exactly what G2-A or G2-D must supply.
+that history backwards is exactly what G2-A or G2-D must supply, and G2-H bounds what a historical
+universe can even be determined for. **No criterion is satisfied by the merge of this ADR.**
 
 ---
 
@@ -318,8 +380,8 @@ that history backwards is exactly what G2-A or G2-D must supply.
 |---|---|
 | **I-1** | A production acquisition plan module with compiled ceilings (requests per run, bytes per response and per run, elapsed deadline, pacing, page limits, zero provider retries), refusing any limit above its constant; synthetic tests prove the canonical order, the slice cut, and that a plan issues zero requests when refused |
 | **I-2** | A production runner that declares `BACKFILL`/`UPDATE`, publishes through the write-only surface only, keeps the owner-only slice ledger under the ADR-0023 trust boundary, refuses resumption of a spent identity, and prints only allowlisted sentences and integer counts |
-| **I-3** | Silver normalisation for the three tables implementing §3.3 rules P-1 (gated), P-2 and P-3 (gated), §3.5 identity mapping and §3.6 action handling, with the `UNRESOLVED_CORPORATE_ACTION` vocabulary addition |
-| **I-4** | Quality plan `breakout-long-ingest-v1` with every check in §3.7 implemented, plus adversarial fixtures that must FAIL (a truncated page, a duplicate symbol mapping, a bar before listing, a served row without a derivation) and negative controls that must PASS |
+| **I-3** | Silver normalisation for the three tables implementing §3.3 rules P-2 (default), P-3 (version-evidence gated) and P-1 (extension gated), per-version availability with no inheritance across revisions, §3.4's `decision_time(d)` cutoff, §3.5 identity mapping and §3.6 action handling, with the `UNRESOLVED_CORPORATE_ACTION` and `ATTRIBUTE_UNAVAILABLE` vocabulary additions |
+| **I-4** | Quality plan `breakout-long-ingest-v1` with every check in §3.7 implemented, plus the adversarial fixtures of §3.9 (T-1…T-3, D-1…D-3, C-1…C-3, A-1, A-2, V-1) and the earlier ones (a truncated page, a duplicate symbol mapping, a bar before listing, a served row without a derivation), each failing or passing exactly as stated |
 | **I-5** | The rebuild criterion of §3.8 proven on synthetic Bronze: byte-identical Gold and identical `run_id` across two builds |
 | **I-6** | Static guards: the production acquisition path imports no read surface; the research-build path imports no credential or transport; no vendor row can reach a log, manifest or public output |
 | **I-7** | `pytest`, `ruff check`, `ruff format --check`, `mypy`, the docs audit and the integrity audit all pass at the reviewed commit |
@@ -346,16 +408,18 @@ research authorization is given; no Brain implementation; no broker activity.
 ## 6. Consequences
 
 - **The repository gains a reviewable target for the production data plane** that reuses every accepted
-  contract and adds exactly one vocabulary member and one private artifact kind (the slice ledger).
+  contract and proposes two `UniverseExclusionReason` members, one `ProviderBoundDerivation` member and one
+  private artifact kind (the slice ledger) — each implemented only under its own later gate.
 - **The honest research horizon becomes a measured quantity.** The history-admissibility census turns
   "how far back can a provider-realistic backtest go" from an assumption into a number the owner reviews
   before closing G2.
 - **The gated uses in ADR-0034 are enforced by construction**: no announcement anchor exists to consume,
   and spinoff-affected securities are excluded rather than adjusted.
 - **Five gates follow this one, each its own authorization**: infrastructure design (principals,
-  Terraform); infrastructure application; offline implementation of I-1 … I-7; the first bounded
-  ingestion (I-8 … I-12); and G2 closure (G2-A … G2-G). Backtesting, Brain implementation and any
-  capital decision sit behind all of them.
+  Terraform); infrastructure application; offline implementation of I-1 … I-7 (with the contract
+  extension ADR for `VENDOR_DATE_UPPER_BOUND` if P-1 is to exist at all); the first bounded ingestion
+  (I-8 … I-12); and G2 closure (G2-A … G2-H). Backtesting, Brain implementation and any capital decision
+  sit behind all of them.
 - **Phase 3 stays NOT COMPLETE.** This ADR advances Stage 3A's design; 3B, 3C and 3D are untouched.
 
 ---
@@ -372,9 +436,18 @@ research authorization is given; no Brain implementation; no broker activity.
 - **Resume a halted backfill under the same identity.** Rejected: ADR-0018's no-resume rule exists
   because a resumed identity cannot say which retrieval instant its records carry; a sequence of
   single-use runs over a deterministic slice cut preserves that.
-- **Adopt `lastupdated` as `provider_available_time` without an owner acceptance.** Rejected: the public
-  documentation says *last changed* (`PSR-SHD-022/093`), which is the trap the contract §5.2 names; only
-  a verified, accepted reading may write an exact time.
+- **Adopt `lastupdated` as an exact `provider_available_time`, with or without an owner acceptance.**
+  Rejected: a date-only field cannot yield an instant; the public documentation says *last changed*
+  (`PSR-SHD-022/093`), which is the trap the contract §5.2 names; and an acceptance is not evidence. At most
+  it is a bound, and the contract must be extended before even that is expressible.
+- **Let a vendor delivery schedule date every historical row.** Rejected: a schedule dates deliveries, not
+  the version of a row retrieved years later from a vendor that revises rows in place; version-specific
+  evidence or first-seen timing, nothing in between.
+- **Decide `membership(d)` after session `d`, using `d`'s bar.** Rejected: that is look-ahead by
+  construction; membership is fixed at `decision_time(d)` and completeness is checked afterwards.
+- **Apply today's exchange, type and listing attributes to historical sessions.** Rejected: a current
+  snapshot is not historical truth; an indeterminate clause excludes, and additional sources are the only
+  way to make it determinable for the past.
 - **Downgrade to `PUBLIC_PIT` when provider timing is unknown.** Rejected on eligibility: the bars are
   `PROVIDER_DERIVED`; a downgraded run would serve ineligible rows.
 - **Apply dividend or spinoff adjustment in the initial dataset.** Rejected: the entry template does not
@@ -392,18 +465,20 @@ research authorization is given; no Brain implementation; no broker activity.
 
 ```text
 this ADR:                                     PROPOSED / NO AUTHORITY WHILE ITS PR IS OPEN
-G1 (tickers, stocks; actions restricted):     DECIDED IN ADR-0034 — in force only on its merge
-G2:                                           OPEN — criteria G2-A … G2-G above
+G1 (tickers, stocks; actions restricted):     DECIDED IN ADR-0034 — in force only on the shared merge
+this ADR:                                     DEPENDENT ON ADR-0034 — effective together, on one merge
+G2:                                           OPEN — criteria G2-A … G2-H above
 production acquisition plan / runner:         NOT IMPLEMENTED / NOT AUTHORIZED
 Silver / Gold for the selected domains:       NOT IMPLEMENTED / NOT AUTHORIZED
 production principals, Terraform, deployment: NOT DESIGNED IN DETAIL / NOT AUTHORIZED
 research-read surface:                        NONE
 first bounded ingestion:                      NOT AUTHORIZED / NOT RUN
-vocabulary addition (UNRESOLVED_CORPORATE_ACTION):   PROPOSED — implemented only under the ingestion gate
+vocabulary additions (UNRESOLVED_CORPORATE_ACTION,
+    ATTRIBUTE_UNAVAILABLE, VENDOR_DATE_UPPER_BOUND):  PROPOSED — implemented only under later gates
 backtesting:                                  NOT STARTED
 Brain implementation:                         NOT AUTHORIZED
 Run A / Run B / combined assessment:          COMPLETED — command outcomes; no retry authorized
-P1-P9:                                        IN THE PRIVATE REPORT ONLY — NOT DISCLOSED
+P1-P9:                                        IN THE PRIVATE REPORT — NOT RECORDED IN THIS REPOSITORY
 Phase 3:                                      NOT COMPLETE
 CONTROL:                                      DEFERRED
 live trading:                                 HARD-DISABLED

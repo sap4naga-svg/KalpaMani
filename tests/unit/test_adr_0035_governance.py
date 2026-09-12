@@ -35,8 +35,12 @@ ADR_FLAT: Final = " ".join(ADR_TEXT.split())
 #: ``Enum.Member`` references the design makes. Each must resolve against the real vocabulary.
 CITED_MEMBERS: Final = tuple(sorted(set(re.findall(r"\b([A-Z][A-Za-z]+)\.([A-Z_]+)\b", ADR_TEXT))))
 
-#: The one member the design proposes and must NOT yet have implemented.
-PROPOSED_MEMBER: Final = ("UniverseExclusionReason", "UNRESOLVED_CORPORATE_ACTION")
+#: The members the design proposes and must NOT yet have implemented.
+PROPOSED_MEMBERS: Final = (
+    ("UniverseExclusionReason", "UNRESOLVED_CORPORATE_ACTION"),
+    ("UniverseExclusionReason", "ATTRIBUTE_UNAVAILABLE"),
+    ("ProviderBoundDerivation", "VENDOR_DATE_UPPER_BOUND"),
+)
 
 EVALUATIVE_TOKENS: Final = (
     "PARTIALLY_TESTED",
@@ -95,7 +99,7 @@ def test_the_adr_is_built_on_adr_0034() -> None:
 def test_every_cited_vocabulary_member_resolves() -> None:
     assert CITED_MEMBERS, "the design cites no vocabulary members"
     for enum_name, member in CITED_MEMBERS:
-        if (enum_name, member) == PROPOSED_MEMBER:
+        if (enum_name, member) in PROPOSED_MEMBERS:
             continue
         enum = getattr(vocabulary, enum_name, None)
         if enum is None:
@@ -105,11 +109,12 @@ def test_every_cited_vocabulary_member_resolves() -> None:
         assert hasattr(enum, member), f"{enum_name}.{member} is cited but does not exist"
 
 
-def test_the_proposed_member_is_not_yet_implemented() -> None:
-    enum_name, member = PROPOSED_MEMBER
-    assert f"{enum_name}.{member}" in ADR_TEXT
+@pytest.mark.parametrize("proposed", PROPOSED_MEMBERS, ids=lambda pair: pair[1])
+def test_each_proposed_member_is_cited_and_not_yet_implemented(proposed: tuple[str, str]) -> None:
+    enum_name, member = proposed
+    assert f"{enum_name}.{member}" in ADR_TEXT or f"`{member}`" in ADR_TEXT
     assert not hasattr(getattr(vocabulary, enum_name), member), (
-        "the design proposes this member; implementing it is the ingestion gate's work"
+        "the design proposes this member; implementing it is a later gate's work"
     )
 
 
@@ -149,10 +154,61 @@ def test_the_design_covers_every_required_topic() -> None:
 def test_the_availability_rules_are_ordered_and_gated() -> None:
     for rule in ("rule P-1", "rule P-2", "rule P-3"):
         assert rule in ADR_TEXT, rule
-    assert "only after the owner's written G2 acceptance" in ADR_FLAT
     assert vocabulary.ProviderBoundDerivation.FIRST_SEEN_UPPER_BOUND.value in ADR_TEXT
     assert vocabulary.ProviderBoundDerivation.DELIVERY_WINDOW.value in ADR_TEXT
     assert "admits **nothing** under P-2" in ADR_FLAT
+    # P-1 is a bound, never an exact instant, and acceptance is not evidence.
+    assert "a **bound, never an exact instant**" in ADR_FLAT
+    assert "no rule in this design writes an exact `provider_available_time`" in ADR_FLAT
+    assert "none of which owner acceptance can supply" in ADR_FLAT
+    assert "Three separate prerequisites" in ADR_FLAT
+    # P-3 needs version-specific evidence; a schedule alone never dates a retrieved version.
+    assert "version-specific evidence" in ADR_FLAT
+    assert "do not establish that the version retrieved today is that version" in ADR_FLAT
+    # Revisions never inherit availability.
+    assert "A revision never inherits an earlier version's availability" in ADR_FLAT
+
+
+def test_the_decision_cutoff_separates_eligibility_from_completeness() -> None:
+    assert "`decision_time(d)`" in ADR_TEXT
+    assert "no clause may depend on session `d`'s completed bar" in ADR_FLAT
+    assert "Decision-time eligibility and later completeness are separate questions" in ADR_FLAT
+    assert "Trades during session `d` may occur only in securities that are members" in ADR_FLAT
+
+
+def test_historical_attributes_are_not_inherited_from_a_current_snapshot() -> None:
+    assert "A current snapshot never silently becomes historical truth" in ADR_FLAT
+    for attribute in ("exchange", "security type", "listing bounds", "sector", "industry"):
+        assert attribute in ADR_FLAT, attribute
+    assert "`ATTRIBUTE_UNAVAILABLE`" in ADR_TEXT
+    assert "**G2-H**" in ADR_TEXT
+
+
+def test_the_adversarial_acceptance_examples_exist_and_are_not_claimed_as_runtime_proof() -> None:
+    assert "### 3.9 Adversarial acceptance examples" in ADR_TEXT
+    for fixture in (
+        "T-1",
+        "T-2",
+        "T-3",
+        "D-1",
+        "D-2",
+        "D-3",
+        "C-1",
+        "C-2",
+        "C-3",
+        "A-1",
+        "A-2",
+        "V-1",
+    ):
+        assert f"**{fixture}**" in ADR_TEXT, fixture
+    assert "proves nothing about runtime correctness" in ADR_FLAT
+    assert "none of these fixtures exists yet" in ADR_FLAT
+
+
+def test_both_adrs_become_effective_on_one_merge_and_0035_depends_on_0034() -> None:
+    assert "proposed on the same pull request as ADR-0034 and depends on it" in ADR_FLAT
+    assert "single independently reviewed merge" in ADR_FLAT
+    assert "separate merge" not in ADR_FLAT.lower()
 
 
 def test_the_gated_uses_of_adr_0034_are_enforced_by_the_design() -> None:
@@ -162,7 +218,7 @@ def test_the_gated_uses_of_adr_0034_are_enforced_by_the_design() -> None:
 
 
 def test_the_acceptance_criteria_are_all_present_and_labelled() -> None:
-    for label in ("G2-A", "G2-B", "G2-C", "G2-D", "G2-E", "G2-F", "G2-G"):
+    for label in ("G2-A", "G2-B", "G2-C", "G2-D", "G2-E", "G2-F", "G2-G", "G2-H"):
         assert f"**{label}**" in ADR_TEXT, label
     for n in range(1, 13):
         assert f"**I-{n}**" in ADR_TEXT, f"I-{n}"

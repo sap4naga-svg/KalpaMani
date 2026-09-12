@@ -6900,8 +6900,11 @@ ADR_0018_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     # they explain what COMPLETED means, and a denylist entry a correct document
     # contains is an entry that gets deleted rather than fixed.
     "the provider passed qualification",
-    "p1-p9: disclosed",
-    "the private report is disclosed",
+    # Not "disclosed": the owner shared the assessment output with an external AI
+    # service, and the documents are required to say so. What may never be true is
+    # that the report is reproduced in the repository.
+    "p1-p9: recorded in this repository",
+    "the private report is reproduced",
     # The superseded HeadObject arithmetic, in both spellings the status
     # documents use -- the en-dashed status row and the ASCII code block.
     "conditional `headobject` 0–147",  # noqa: RUF001
@@ -12514,11 +12517,11 @@ RUN_A_STATUS_FORBIDDEN: Final[tuple[str, ...]] = (
     "the run b execution identifier was reused",
     "run b: retried",
     "combined assessment: retried",
-    "p1-p9: disclosed",
-    "p1–p9: disclosed",  # noqa: RUF001
+    "p1-p9: recorded in this repository",
+    "p1–p9: recorded in this repository",  # noqa: RUF001
     "p1-p9: passed",
     "p1–p9: passed",  # noqa: RUF001
-    "the private report is disclosed",
+    "the private report is reproduced",
     "the combined assessment closed g1",
     "the combined assessment closed g2",
     "the combined assessment is a provider verdict",

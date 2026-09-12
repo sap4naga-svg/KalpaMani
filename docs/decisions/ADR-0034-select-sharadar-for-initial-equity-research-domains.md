@@ -21,6 +21,11 @@ no CONTROL publication and no trading. **A provider-selection decision, an infor
 decision, an ingestion design, and an ingestion authorization are four separate gates**, and this
 decision closes only the first, and only in part.
 
+**This ADR and [ADR-0035](ADR-0035-initial-breakout-long-research-dataset-ingestion-design.md) are
+proposed on one pull request and become effective together on its single independently reviewed merge.**
+ADR-0035 depends on this decision; this decision does not depend on ADR-0035. Neither is in force before
+that merge.
+
 ---
 
 ## 1. Context
@@ -40,14 +45,18 @@ its end:
 |---|---|---|
 | Run A acquisition | `COMPLETED`, 48 provider requests, 145 append-only licensed writes | 2026-09-04 |
 | Run B acquisition | `COMPLETED`, 48 provider requests, 145 append-only licensed writes; provider budget 96 of 96 consumed | 2026-09-12 |
-| Combined assessment, first invocation | `REFUSED_LOCATOR` (exit 9) before any evidence read and before any write — a wrong Run B identity, established offline | 2026-09-12 |
+| Combined assessment, first invocation | `REFUSED_LOCATOR` (exit 9) before any acquisition-record or payload read and before any write — a wrong Run B identity, established offline | 2026-09-12 |
 | Combined assessment, second invocation | `COMPLETED`; 194 object-byte reads, one owner-only private report published | 2026-09-12 |
 | Private owner review (gate 12) | performed by the owner; contents never recorded | 2026-09-12 |
 
-Those are command outcomes. The **P1–P9 results exist only inside the private report**, which
-[ADR-0008](ADR-0008-sharadar-personal-use-license-and-private-qualification.md) and ADR-0018 §11.3
-keep out of Git, CI, logs, chat, any AI session and CONTROL; the report carries, by design, no aggregate
-verdict, no provider-selection value and no readiness value. **G1 — provider selection, "which vendors,
+Those are command outcomes. The **P1–P9 results exist inside the private report and are not recorded in
+this repository**: [ADR-0008](ADR-0008-sharadar-personal-use-license-and-private-qualification.md) and
+ADR-0018 §11.3 keep the report out of Git, CI, logs, chat, automated AI sessions and CONTROL, and the report
+carries, by design, no aggregate verdict, no provider-selection value and no readiness value. **The
+disclosure history is wider than the repository, and it is recorded rather than denied**: the owner, as
+licensee, separately authorized sharing the assessment output with an external AI service to obtain
+recommendations. This ADR records neither that output nor those recommendations, and it makes no claim
+either way about whether that sharing is within the vendor's Terms; that is not established here. **G1 — provider selection, "which vendors,
 for which domains" ([ADR-0005](ADR-0005-point-in-time-data-architecture.md) gate table) — is an owner
 decision taken by a person reading that evidence.** This ADR records that decision in **decision language
 only**. It states what was selected, for what, under what restrictions, and what remains open. It states
@@ -132,12 +141,16 @@ proposable.
 ## 3. Consequences
 
 - **ADR-0005 authorization A3 — ingestion implementation for the selected domains — becomes proposable.**
-  ADR-0035 is that proposal; its acceptance is a separate merge, and its execution a separate
-  authorization behind acceptance criteria.
+  ADR-0035 is that proposal; it is proposed on the same pull request, becomes effective together with this
+  decision on that single independently reviewed merge, depends on this decision, and its execution stays a
+  separate authorization behind its acceptance criteria.
 - **Phase 3A's provider question is answered for the three tables the qualification package acquired**,
   and for those tables only. Phase 3 stays **NOT COMPLETE**; 3B, 3C and 3D are unstarted.
-- **The private report stays private.** A future reader of this ADR learns the decision and its
-  restrictions, not the evidence. That asymmetry is deliberate and is the licence boundary.
+- **The private report is not recorded in this repository.** A future reader of this ADR learns the
+  decision and its restrictions, not the evidence. The owner's separately authorized sharing of the
+  assessment output with an external AI service is part of the disclosure history and is recorded in the
+  status documents without its contents; nothing here claims that sharing to be within or outside the
+  vendor's Terms.
 - **The restrictions in §2.2 are load-bearing for the Brain specification.** A Breakout Long research
   module may consume ex-date-keyed splits and listing lifecycle facts; it may not consume an announcement
   signal derived from `actions`, and its adjusted series may not depend on spinoff semantics.
@@ -179,11 +192,11 @@ G1 — every other domain:                      OPEN
 G2:                                           OPEN — target PROVIDER_REALISTIC_PIT; criteria in ADR-0035
 G3:                                           CLOSED (ADR-0008) — unchanged
 G4 / G5 / G6 / G7:                            OPEN — unchanged
-ingestion design:                             PROPOSED separately — ADR-0035
+ingestion design:                             ADR-0035 — proposed on the same pull request, dependent on this decision
 production ingestion / backfill / update:     NOT AUTHORIZED / NOT RUN
 research-read surface on the licensed store:  NONE — to be designed under ADR-0035, deployed under a later gate
 Run A / Run B / combined assessment:          COMPLETED — command outcomes; no retry authorized; budget spent
-P1-P9:                                        IN THE PRIVATE REPORT ONLY — NOT DISCLOSED
+P1-P9:                                        IN THE PRIVATE REPORT — NOT RECORDED IN THIS REPOSITORY
 backtesting:                                  NOT STARTED
 Brain implementation:                         NOT AUTHORIZED
 Phase 3:                                      NOT COMPLETE

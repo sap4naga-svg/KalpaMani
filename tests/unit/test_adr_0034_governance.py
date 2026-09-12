@@ -131,6 +131,22 @@ def test_the_adr_points_at_the_ingestion_design() -> None:
     assert ADR_0035.name in ADR_TEXT
 
 
+def test_both_adrs_become_effective_on_one_merge() -> None:
+    assert "become effective together on its single independently reviewed merge" in ADR_FLAT
+    assert "ADR-0035 depends on this decision" in ADR_FLAT
+    assert "separate merge" not in ADR_FLAT.lower()
+
+
+def test_the_disclosure_history_is_recorded_not_denied() -> None:
+    """Repository non-disclosure is asserted; broader non-disclosure is not, because it is false."""
+    assert "not recorded in this repository" in ADR_FLAT.lower()
+    assert "sharing the assessment output with an external AI service" in ADR_FLAT
+    assert "makes no claim either way" in ADR_FLAT
+    assert "disclosed nowhere" not in ADR_FLAT.lower()
+    assert "not to any ai session" not in ADR_FLAT.lower()
+    assert "stays private" not in ADR_FLAT.lower()
+
+
 # -- what must never be in a decision record ----------------------------------
 
 
@@ -163,3 +179,21 @@ def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
     assert "ADR-0034" in text
     assert re.search(r"ADR-0034[^\n]{0,400}PROPOSED", text) is not None
     assert "partial" in text.lower()
+
+
+@pytest.mark.parametrize("path", [README, CLAUDE])
+def test_status_documents_record_the_disclosure_history_accurately(path: Path) -> None:
+    section = (
+        path.read_text(encoding="utf-8")
+        .split("### The completed Run B acquisition and the completed combined assessment")[1]
+        .split("\n### ")[0]
+    )
+    flat = " ".join(section.split()).lower()
+    assert "not recorded in this repository" in flat
+    assert "external ai service (chatgpt)" in flat
+    assert "not established here" in flat
+    assert "disclosed nowhere" not in flat
+    assert "not to any ai session" not in flat
+    assert "successful-run subtotal" in flat
+    assert "excludes the refused assessment invocation" in flat
+    assert "before any evidence read" not in flat
