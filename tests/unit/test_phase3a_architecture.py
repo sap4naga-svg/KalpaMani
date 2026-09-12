@@ -143,16 +143,23 @@ def test_no_data_module_imports_the_broker_or_execution_packages() -> None:
     )
 
 
-#: The one file-and-token pair this scan exempts, and nothing wider.
+#: The file-and-token pairs this scan exempts, by exact path, and nothing wider.
 #:
 #: ADR-0023's private runtime binding carries the AWS account this deployment is
-#: bound to, under the schema field ``target_account_id``. That is an **AWS** account
-#: number, not a brokerage identifier -- a different thing from what this guard
-#: protects against -- and the field name is fixed by the accepted contract, so it
-#: has to be spelled somewhere under ``src/``. The exemption is by exact file and
-#: exact token; every other token stays forbidden in that file, and every other file
-#: stays forbidden every token. The compensating check follows immediately below.
-_ACCOUNT_FIELD_EXEMPTION: Final = ("runtime_binding.py", "account_id")
+#: bound to, under the schema field ``target_account_id``, and ADR-0036 §2.5 gives
+#: the two production bindings the same field, which their loader and their
+#: identity gate compare against. That is an **AWS** account number, not a
+#: brokerage identifier -- a different thing from what this guard protects against
+#: -- and the field name is fixed by the accepted contracts, so it has to be
+#: spelled in those modules. The exemption is by exact file and exact token; every
+#: other token stays forbidden in those files, and every other file stays forbidden
+#: every token. The compensating check follows immediately below.
+_ACCOUNT_FIELD_TOKEN: Final = "account_id"  # noqa: S105 - a schema field name, not a secret
+_ACCOUNT_FIELD_EXEMPT_FILES: Final = (
+    DATA_ROOT / "qualify" / "sharadar" / "runtime_binding.py",
+    DATA_ROOT / "production" / "sharadar" / "bindings.py",
+    DATA_ROOT / "production" / "sharadar" / "identity.py",
+)
 
 
 def test_no_broker_identifier_appears_in_any_data_contract() -> None:
@@ -162,7 +169,7 @@ def test_no_broker_identifier_appears_in_any_data_contract() -> None:
     for path in _python_files(DATA_ROOT):
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
-            if (path.name, token) == _ACCOUNT_FIELD_EXEMPTION:
+            if token == _ACCOUNT_FIELD_TOKEN and path in _ACCOUNT_FIELD_EXEMPT_FILES:
                 continue
             if token in text:
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)} mentions {token!r}")
@@ -172,14 +179,16 @@ def test_no_broker_identifier_appears_in_any_data_contract() -> None:
     )
 
 
-def test_the_exempted_module_names_an_aws_field_and_no_broker_or_account_value() -> None:
+@pytest.mark.parametrize("exempt", _ACCOUNT_FIELD_EXEMPT_FILES, ids=lambda p: p.name)
+def test_the_exempted_module_names_an_aws_field_and_no_broker_or_account_value(
+    exempt: Path,
+) -> None:
     """The compensating check, stricter than the token scan it stands in for.
 
-    Every ``account_id`` in the exempted module must be the AWS schema field name, no
+    Every ``account_id`` in an exempted module must be the AWS schema field name, no
     other forbidden token may appear there, and -- the part the token scan never
     checked anywhere -- no twelve-digit account **value** may be present.
     """
-    exempt = DATA_ROOT / "qualify" / "sharadar" / _ACCOUNT_FIELD_EXEMPTION[0]
     text = exempt.read_text(encoding="utf-8")
     for token in ("BrokerId", "broker_id", "account_binding", "perm_id", "PermId"):
         assert token not in text
@@ -358,6 +367,11 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
         "live",
         "normalize",
         "pit",
+        # The ADR-0036 / ADR-0037 production runtime foundations: bindings, inputs,
+        # the placement release, the identity shapes, the disjoint production key
+        # layout and the run locator. Contracts and adapters only -- no processing,
+        # no entry point, no client construction (PR #95).
+        "production",
         "quality",
         # The private empirical qualification package. Deliberately **not** under
         # `ingest`, so the acquisition path stays parser-free and the separation is

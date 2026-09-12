@@ -480,13 +480,19 @@ PROVIDER_PACKAGE = SRC / "kalpamani" / "data" / "ingest" / "sharadar"
 #: outside ``ingest`` so the acquisition path stays parser-free.
 QUALIFY_PACKAGE = SRC / "kalpamani" / "data" / "qualify" / "sharadar"
 
-#: Every package permitted to hold vendor knowledge. Named, so a third still fails.
-VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE)
+#: The ADR-0036 / ADR-0037 production runtime foundations: a third vendor-scoped
+#: package, because ADR-0036 names Sharadar as the production provider whose
+#: credential, prefixes and datasets these contracts bind.
+PRODUCTION_PACKAGE = SRC / "kalpamani" / "data" / "production" / "sharadar"
+
+#: Every package permitted to hold vendor knowledge. Named, so a fourth still fails.
+VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE, PRODUCTION_PACKAGE)
 
 PROVIDER_DESCRIBED = (
     SRC / "kalpamani" / "data" / "__init__.py",
     SRC / "kalpamani" / "data" / "ingest" / "__init__.py",
     SRC / "kalpamani" / "data" / "qualify" / "__init__.py",
+    SRC / "kalpamani" / "data" / "production" / "__init__.py",
 )
 
 
@@ -497,8 +503,10 @@ def test_the_provider_is_named_only_inside_the_authorized_package() -> None:
     none was authorized. ADR-0009 authorized **one** integration in **one** place;
     the private empirical qualification package is the **second** vendor-scoped
     package, deliberately outside ``ingest`` so the acquisition path stays
-    parser-free. Both are named, so the rule stays narrower rather than absent: a
-    **third** integration cannot appear beside them without failing here.
+    parser-free; the ADR-0036 / ADR-0037 production runtime foundations are the
+    **third**, because the accepted production data plane is Sharadar's. All
+    three are named, so the rule stays narrower rather than absent: a **fourth**
+    cannot appear beside them without failing here.
 
     Naming the implementation target is still not selecting a production provider.
     **G1 remains OPEN**, and the checks below hold the repository to that.

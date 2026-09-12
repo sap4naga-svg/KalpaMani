@@ -261,6 +261,29 @@ def _bounded_body(response: Any, *, ceiling: int) -> bytes:
     return b"".join(chunks)
 
 
+def read_bounded_body(response: object, *, ceiling: int) -> bytes:
+    """Every byte of a ``GetObject`` response body, refused above ``ceiling`` while reading.
+
+    The public seam through which the ADR-0036 production run-locator read applies
+    **this module's** chunked, ceiling-while-reading discipline to a by-name read
+    under a different prefix, rather than a second spelling of it. The response
+    is an already-obtained ``GetObject`` response; nothing here issues a request.
+
+    Raises:
+        LicensedReadError: ``GET: INVALID_RESPONSE`` or ``GET: TOO_LARGE``.
+    """
+    if type(ceiling) is not int or not 0 < ceiling <= MAX_READ_BYTES:
+        raise _refuse(ReadOperation.GET, ReadFailure.INVALID_KEY) from None
+    return _bounded_body(response, ceiling=ceiling)
+
+
+def classified_read_failure(
+    exception: BaseException, operation: ReadOperation
+) -> LicensedReadError:
+    """The closed refusal for a backend exception during ``operation``. Public seam."""
+    return _classified(exception, operation)
+
+
 class LicensedObjectReader:
     """Exact reads and one conditional report write, against one licensed bucket.
 
@@ -453,4 +476,6 @@ __all__ = [
     "LicensedReadError",
     "ReadFailure",
     "ReadOperation",
+    "classified_read_failure",
+    "read_bounded_body",
 ]

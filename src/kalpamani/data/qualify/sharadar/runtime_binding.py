@@ -1135,6 +1135,26 @@ def _decode_document(raw: bytes) -> object:
         raise _refuse(RuntimeBindingDefect.DOCUMENT_MALFORMED) from None
 
 
+def read_private_document(
+    raw_path: str,
+    root: Path,
+    inspect: Callable[[Path], FileSecurity],
+    max_bytes: int,
+) -> object:
+    """One owner-only private JSON artifact, read and decoded under the same order.
+
+    The public seam through which a later loader family -- the ADR-0036 production
+    bindings -- reads a private artifact **with exactly this module's containment,
+    ownership, size, swap and decoding rules**, rather than with a second spelling
+    of them. Nothing is validated about the document's *content* here; that is the
+    caller's contract, and every one of this module's own loaders applies its own.
+
+    Raises:
+        RuntimeBindingError: one closed :class:`RuntimeBindingDefect`, never a value.
+    """
+    return _decode_document(_read_private_bytes(raw_path, root, inspect, max_bytes))
+
+
 def canonical_binding_bytes(document: object) -> bytes:
     """One private binding document, as the exact bytes a producer must write.
 
@@ -1494,6 +1514,7 @@ __all__ = [
     "parse_environment_binding",
     "parse_runtime_binding",
     "private_root",
+    "read_private_document",
     "require_exclusive_security",
     "sha256_hex",
     "windows_file_security",
