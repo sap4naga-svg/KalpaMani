@@ -11,12 +11,14 @@ gate compares the authenticated account to the binding's account and the
 authenticated role name to the compiled task-role name. Loading is not proof,
 and no operation past the gate is reachable without it.
 
-**Processing is not implemented, and the runner says so.** After the barrier
-passes, the sequence halts at ``HALTED_PROCESSING_NOT_IMPLEMENTED``: no
-acquisition (secret retrieval, provider request, Bronze publication, locator) and
-no build (locator read, exact reads, Silver/Gold publication) exists in this
-repository, and this module claims neither. The counts it reports for those
-operations are zero because they are zero.
+**The bootstrap ends at the hand-off, and processing is somebody else's.** After
+the barrier passes, :func:`run_task_bootstrap` returns ``RELEASED`` together with
+the validated binding, the admitted input and -- for the acquisition actor -- the
+plan compiled from that input's own slice. The acquisition path continues in
+:mod:`~kalpamani.data.production.sharadar.processing`; the build path has no
+processing and :func:`run_build_task` halts it at
+``HALTED_PROCESSING_NOT_IMPLEMENTED``. The counts this module reports for data-plane
+operations are zero because it performs none.
 
 The human path has the same shape with the private file in place of the
 parameter, and no barrier: a human actor's placement is not verified because it
@@ -43,11 +45,14 @@ from kalpamani.data.production.sharadar.bindings import (
     load_human_runtime_binding,
     load_task_runtime_binding,
 )
+from kalpamani.data.production.sharadar.identities import SpentIdentityRegistry
 from kalpamani.data.production.sharadar.identity import (
     ProvenIdentity,
     production_identity_refusal,
 )
 from kalpamani.data.production.sharadar.inputs import (
+    AcquisitionInput,
+    BuildInput,
     InputError,
     decode_input,
     input_digest,
@@ -61,6 +66,7 @@ from kalpamani.data.production.sharadar.metadata import (
     task_environment_refusal,
 )
 from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
+from kalpamani.data.production.sharadar.plan import CompiledPlan, bind_plan
 from kalpamani.data.production.sharadar.release import ReleaseError, ReleaseExpectation
 from kalpamani.data.production.sharadar.vocabulary import (
     IdentityPath,
@@ -102,41 +108,55 @@ class RunnerAdapters:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RunnerReport:
-    """The sanitized task-side result: outcome, stage, counts, barrier verdict."""
+    """The sanitized task-side result: outcome, stage, counts, barrier verdict.
+
+    On ``RELEASED`` the report also carries what processing needs and nothing
+    else may obtain: the validated binding, the admitted input and -- for the
+    acquisition actor -- the compiled plan. None of the three is rendered.
+    """
 
     outcome: RunnerOutcome
     stage: RunnerStage
     counts: OperationCounts
     barrier: BarrierResult | None
+    binding: ProductionRuntimeBinding | None = None
+    admitted_input: AcquisitionInput | BuildInput | None = None
+    plan: CompiledPlan | None = None
 
     def __post_init__(self) -> None:
-        """Closed members and integers; data-plane counts are zero in this cycle."""
+        """Closed members and integers; the bootstrap performs no data-plane operation."""
         if type(self.outcome) is not RunnerOutcome or type(self.stage) is not RunnerStage:
             raise TypeError("outcome and stage must be exact members")
         if type(self.counts) is not OperationCounts:
             raise TypeError("counts must be an exact OperationCounts")
         if self.counts.data_plane_operations != 0:
-            raise ValueError("no data-plane operation exists in this cycle; the count must be zero")
+            raise ValueError(
+                "the bootstrap performs no data-plane operation; the count must be zero"
+            )
+        released = self.outcome is RunnerOutcome.RELEASED
+        if released != (self.binding is not None and self.admitted_input is not None):
+            raise ValueError("the binding and the input are carried exactly when released")
+        if self.plan is not None and type(self.admitted_input) is not AcquisitionInput:
+            raise ValueError("a plan is carried only with an admitted acquisition input")
 
     def __repr__(self) -> str:
         """Outcome and stage only."""
         return f"RunnerReport(outcome={self.outcome.value!r}, stage={self.stage.value!r})"
 
 
-def _parse_input(
+def _admit_input(
     actor: ProductionActor,
     document: dict[str, Any],
     *,
     now: datetime,
-    expected_plan_digest: str | None,
-    is_spent: Callable[[str], bool],
-) -> str:
-    """The identity the input names, after the actor's own contract admitted it."""
+    registry: SpentIdentityRegistry,
+) -> tuple[str, AcquisitionInput | BuildInput, CompiledPlan | None]:
+    """The identity, the admitted input and (acquisition) the plan compiled from its slice."""
     if actor is ProductionActor.ACQUISITION:
-        return parse_acquisition_input(
-            document, now=now, expected_plan_digest=expected_plan_digest, is_spent=is_spent
-        ).run_identity
-    return parse_build_input(document, now=now).build_identity
+        acquisition = parse_acquisition_input(document, now=now, registry=registry)
+        return acquisition.run_identity, acquisition, bind_plan(acquisition)
+    build = parse_build_input(document, now=now)
+    return build.build_identity, build, None
 
 
 def run_task_bootstrap(
@@ -144,14 +164,14 @@ def run_task_bootstrap(
     actor: ProductionActor,
     compiled: CompiledTask,
     adapters: RunnerAdapters,
-    expected_plan_digest: str | None,
-    is_spent: Callable[[str], bool],
+    registry: SpentIdentityRegistry,
 ) -> RunnerReport:
     """The task-side sequence through the release barrier; one sanitized report.
 
-    ``expected_plan_digest`` and ``is_spent`` serve the acquisition input contract
-    and are ignored for a build; both are injected because no compiled production
-    plan and no spent-identity registry exist in this repository.
+    ``registry`` serves the acquisition input contract's spent-identity clause and
+    is not consulted for a build. The acquisition plan is compiled **from the
+    admitted input's own slice** and its digest compared to the input's; a
+    mismatch refuses the input.
     """
     if type(actor) is not ProductionActor or type(compiled) is not CompiledTask:
         raise TypeError("actor and compiled must be exact values")
@@ -189,12 +209,8 @@ def run_task_bootstrap(
     try:
         raw_input = adapters.parameters.read_parameter(constants_for(actor).input_parameter)
         digest = input_digest(raw_input)
-        identity = _parse_input(
-            actor,
-            decode_input(raw_input),
-            now=adapters.now(),
-            expected_plan_digest=expected_plan_digest,
-            is_spent=is_spent,
+        identity, admitted, plan = _admit_input(
+            actor, decode_input(raw_input), now=adapters.now(), registry=registry
         )
     except (InputError, Exception):
         return RunnerReport(
@@ -264,12 +280,41 @@ def run_task_bootstrap(
             outcome=outcome, stage=RunnerStage.RELEASE_BARRIER, counts=counts, barrier=barrier
         )
 
-    # Step 7 does not exist in this repository. Halt, and say so.
+    # The hand-off: zero data-plane operations so far, and everything processing
+    # needs carried once. What happens next is the actor's processing module's.
+    return RunnerReport(
+        outcome=RunnerOutcome.RELEASED,
+        stage=RunnerStage.RELEASE_BARRIER,
+        counts=counts,
+        barrier=barrier,
+        binding=binding,
+        admitted_input=admitted,
+        plan=plan,
+    )
+
+
+def run_build_task(
+    *,
+    compiled: CompiledTask,
+    adapters: RunnerAdapters,
+    registry: SpentIdentityRegistry,
+) -> RunnerReport:
+    """The build actor's task: the bootstrap, then the honest halt.
+
+    Build processing -- the locator read, the exact reads, Silver/Gold/manifest
+    publication -- does not exist in this repository. A released build task halts
+    at ``HALTED_PROCESSING_NOT_IMPLEMENTED`` with zero data-plane operations.
+    """
+    report = run_task_bootstrap(
+        actor=ProductionActor.BUILD, compiled=compiled, adapters=adapters, registry=registry
+    )
+    if report.outcome is not RunnerOutcome.RELEASED:
+        return report
     return RunnerReport(
         outcome=RunnerOutcome.HALTED_PROCESSING_NOT_IMPLEMENTED,
         stage=RunnerStage.PROCESSING,
-        counts=counts,
-        barrier=barrier,
+        counts=report.counts,
+        barrier=report.barrier,
     )
 
 
@@ -348,5 +393,6 @@ __all__ = [
     "RunnerReport",
     "RunnerStage",
     "human_bootstrap",
+    "run_build_task",
     "run_task_bootstrap",
 ]

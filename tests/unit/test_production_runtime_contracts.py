@@ -35,12 +35,19 @@ from fixtures.production_runtime import (
     loose_encode,
     metadata_document,
     revision_arn,
+    slice_document,
 )
 from kalpamani.data.production.sharadar import barrier as pbar
 from kalpamani.data.production.sharadar import inputs as pin
 from kalpamani.data.production.sharadar import metadata as pm
+from kalpamani.data.production.sharadar import plan as pplan
 from kalpamani.data.production.sharadar import release as pr
 from kalpamani.data.production.sharadar.documents import DocumentDefect
+from kalpamani.data.production.sharadar.identities import (
+    LedgerSpentIdentities,
+    SpentStatus,
+    UnavailableSpentIdentities,
+)
 from kalpamani.data.production.sharadar.parameters import (
     ParameterError,
     ParameterFailure,
@@ -64,11 +71,7 @@ BLD: Final = ProductionActor.BUILD
 
 
 def _acq(document: object, **kwargs: Any) -> pin.AcquisitionInput:
-    defaults: dict[str, Any] = {
-        "now": NOW,
-        "expected_plan_digest": PLAN_DIGEST,
-        "is_spent": lambda _: False,
-    }
+    defaults: dict[str, Any] = {"now": NOW, "registry": LedgerSpentIdentities([])}
     defaults.update(kwargs)
     return pin.parse_acquisition_input(document, **defaults)
 
@@ -84,7 +87,7 @@ def _acq_refused(document: object, **kwargs: Any) -> pin.InputDefect:
 class TestAcquisitionInput:
     def test_a_valid_input_is_admitted_and_its_identity_hidden(self) -> None:
         parsed = _acq(acquisition_input_document())
-        assert parsed.run_identity == RUN_ID and parsed.slice.request_count == 2
+        assert parsed.run_identity == RUN_ID and parsed.slice.request_count == 6
         assert RUN_ID not in repr(parsed) and PLAN_DIGEST not in repr(parsed)
 
     def test_the_digest_is_over_the_delivered_bytes(self) -> None:
@@ -109,7 +112,6 @@ class TestAcquisitionInput:
                 pin.InputDefect.CONTRACT_ID_UNKNOWN,
             ),
             ({"run_identity": "../x"}, pin.InputDefect.IDENTITY_MALFORMED),
-            ({"plan_digest": OTHER_PLAN_DIGEST}, pin.InputDefect.PLAN_DIGEST_MISMATCH),
             ({"plan_digest": "xyz"}, pin.InputDefect.FIELD_MALFORMED),
             ({"extra": 1}, pin.InputDefect.FIELD_UNKNOWN),
             (
@@ -147,60 +149,107 @@ class TestAcquisitionInput:
 
     def test_a_spent_identity_is_refused(self) -> None:
         assert (
-            _acq_refused(acquisition_input_document(), is_spent=lambda _: True)
+            _acq_refused(acquisition_input_document(), registry=LedgerSpentIdentities([RUN_ID]))
             is pin.InputDefect.IDENTITY_SPENT
         )
 
-    def test_a_raising_spent_check_refuses_rather_than_proceeding(self) -> None:
-        def raising(_: str) -> bool:
-            raise RuntimeError("registry unavailable")
+    def test_an_unavailable_or_raising_registry_refuses_rather_than_proceeding(self) -> None:
+        class Raising:
+            def status(self, _: str) -> SpentStatus:
+                raise RuntimeError("registry unavailable")
 
-        assert (
-            _acq_refused(acquisition_input_document(), is_spent=raising)
-            is pin.InputDefect.IDENTITY_SPENT
-        )
+        class NonMember:
+            def status(self, _: str) -> str:
+                return "UNSPENT"
 
-    def test_no_compiled_plan_digest_refuses_before_comparison(self) -> None:
-        assert (
-            _acq_refused(acquisition_input_document(), expected_plan_digest=None)
-            is pin.InputDefect.EXPECTED_PLAN_DIGEST_UNAVAILABLE
-        )
+        for registry in (UnavailableSpentIdentities(), Raising(), NonMember()):
+            assert (
+                _acq_refused(acquisition_input_document(), registry=registry)
+                is pin.InputDefect.IDENTITY_STATUS_UNAVAILABLE
+            )
+
+    def test_the_plan_digest_is_checked_against_the_compiled_plan(self) -> None:
+        admitted = _acq(acquisition_input_document())
+        assert pplan.bind_plan(admitted).digest == PLAN_DIGEST
+        with pytest.raises(pin.InputError) as info:
+            pplan.bind_plan(_acq(acquisition_input_document(plan_digest=OTHER_PLAN_DIGEST)))
+        assert info.value.defect is pin.InputDefect.PLAN_DIGEST_MISMATCH
+
+    def test_a_slice_the_compiler_refuses_is_not_compilable(self) -> None:
+        # The slice parses (shape only) but its request count is not what the plan issues.
+        admitted = _acq(acquisition_input_document(slice=slice_document(request_count=5)))
+        with pytest.raises(pin.InputError) as info:
+            pplan.bind_plan(admitted)
+        assert info.value.defect is pin.InputDefect.PLAN_NOT_COMPILABLE
+
+    def test_a_ledger_registry_refuses_malformed_identities_and_names_none(self) -> None:
+        with pytest.raises(ValueError):
+            LedgerSpentIdentities(["../x"])
+        registry = LedgerSpentIdentities([RUN_ID])
+        assert RUN_ID not in repr(registry)
+        assert registry.status(RUN_ID) is SpentStatus.SPENT
+        assert registry.status(OTHER_RUN_ID) is SpentStatus.UNSPENT
+        assert registry.status("../x") is SpentStatus.UNAVAILABLE
 
     @pytest.mark.parametrize(
         "bad_slice",
         [
             {
+                "acquisition_mode": "QUALIFICATION",
+                "datasets": ["actions"],
+                "windows": {"actions": "2025-01-01/2025-12-31"},
+                "request_count": 2,
+                "max_response_bytes": 1,
+            },
+            {
+                "acquisition_mode": "BACKFILL",
                 "datasets": ["tickers", "actions"],
                 "windows": {"tickers": "SNAPSHOT", "actions": "1998-01-01/2026-09-11"},
                 "request_count": 2,
                 "max_response_bytes": 1,
             },
             {
+                "acquisition_mode": "BACKFILL",
                 "datasets": ["actions"],
                 "windows": {"actions": "not-a-window"},
                 "request_count": 1,
                 "max_response_bytes": 1,
             },
-            {"datasets": ["actions"], "windows": {}, "request_count": 1, "max_response_bytes": 1},
             {
+                "acquisition_mode": "BACKFILL",
+                "datasets": ["actions"],
+                "windows": {},
+                "request_count": 1,
+                "max_response_bytes": 1,
+            },
+            {
+                "acquisition_mode": "BACKFILL",
                 "datasets": ["actions"],
                 "windows": {"actions": "SNAPSHOT"},
                 "request_count": 0,
                 "max_response_bytes": 1,
             },
             {
+                "acquisition_mode": "BACKFILL",
                 "datasets": ["actions"],
                 "windows": {"actions": "SNAPSHOT"},
                 "request_count": 97,
                 "max_response_bytes": 1,
             },
             {
+                "acquisition_mode": "BACKFILL",
                 "datasets": ["actions"],
                 "windows": {"actions": "SNAPSHOT"},
                 "request_count": True,
                 "max_response_bytes": 1,
             },
-            {"datasets": [], "windows": {}, "request_count": 1, "max_response_bytes": 1},
+            {
+                "acquisition_mode": "BACKFILL",
+                "datasets": [],
+                "windows": {},
+                "request_count": 1,
+                "max_response_bytes": 1,
+            },
         ],
     )
     def test_slice_defects(self, bad_slice: dict[str, Any]) -> None:

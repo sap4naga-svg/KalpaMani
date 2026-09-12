@@ -8,7 +8,6 @@ produce exactly what they produced before this cycle.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -27,6 +26,7 @@ from fixtures.production_runtime import (
     ledger_row_document,
     locator_document,
     locator_entry,
+    slice_document,
 )
 from kalpamani.data.contracts.errors import UnsafePathComponentError
 from kalpamani.data.contracts.paths import RESERVED_SEGMENTS, path_segment
@@ -85,18 +85,20 @@ class TestProductionBuilders:
     def test_the_four_layouts_are_the_adr_0037_ones(self) -> None:
         payload = pk.production_payload_key(dataset="actions", payload=PAYLOAD)
         record = pk.production_acquisition_key(
-            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, record=RECORDS[0]
+            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, ordinal=3, record=RECORDS[0]
         )
-        claim = pk.production_claim_key(payload_digest=DIGEST, run_id=RUN_ID, claim=b"{}")
+        claim = pk.production_claim_key(
+            payload_digest=DIGEST, run_id=RUN_ID, ordinal=3, claim=b"{}"
+        )
         locator = pk.run_locator_key(run_id=RUN_ID, payload=b"{}")
         assert (
             payload.logical_key
             == f"licensed/bronze/sharadar/actions/production/objects/sha256/{DIGEST}"
         )
         assert record.logical_key == (
-            f"licensed/bronze/sharadar/actions/production/acquisitions/{DIGEST}/{RUN_ID}.json"
+            f"licensed/bronze/sharadar/actions/production/acquisitions/{DIGEST}/{RUN_ID}.03.json"
         )
-        assert claim.logical_key == f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.json"
+        assert claim.logical_key == f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.03.json"
         assert locator.logical_key == f"licensed/bronze/sharadar/_indexes/{RUN_ID}.json"
         assert pk.run_locator_logical_key(RUN_ID) == locator.logical_key
 
@@ -111,7 +113,7 @@ class TestProductionBuilders:
         with pytest.raises(pk.ProductionKeyError):
             pk.run_locator_key_segments(run_id)  # type: ignore[arg-type]
         with pytest.raises(pk.ProductionKeyError):
-            pk.production_claim_key(payload_digest=DIGEST, run_id=run_id, claim=b"{}")  # type: ignore[arg-type]
+            pk.production_claim_key(payload_digest=DIGEST, run_id=run_id, ordinal=0, claim=b"{}")  # type: ignore[arg-type]
 
     def test_a_digest_outside_the_grammar_is_refused(self) -> None:
         for digest in ("ABC", "0" * 63, "g" * 64):
@@ -172,10 +174,10 @@ def _production_keys() -> dict[str, str]:
             dataset="actions", payload=PAYLOAD
         ).logical_key,
         "production record": pk.production_acquisition_key(
-            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, record=RECORDS[0]
+            dataset="actions", payload_digest=DIGEST, run_id=RUN_ID, ordinal=0, record=RECORDS[0]
         ).logical_key,
         "production claim": pk.production_claim_key(
-            payload_digest=DIGEST, run_id=RUN_ID, claim=b"{}"
+            payload_digest=DIGEST, run_id=RUN_ID, ordinal=0, claim=b"{}"
         ).logical_key,
         "production locator": pk.run_locator_logical_key(RUN_ID),
     }
@@ -301,9 +303,13 @@ class TestLocatorClauses:
         document = locator_document()
         document["entries"].reverse()
         locator = _validate(document)
-        assert [entry.ordinal for entry in locator.entries] == [0, 1]
-        assert locator.object_count == 4
-        assert len(locator.exact_references()) == 4
+        assert [entry.ordinal for entry in locator.entries] == [0, 1, 2, 3, 4, 5]
+        assert locator.object_count == 12
+        assert len(locator.exact_references()) == 12
+        # Identical bytes across distinct requests of one dataset (tickers pages 0 and 2):
+        # one payload name, distinct record names.
+        assert locator.entries[2].payload.logical_key == locator.entries[4].payload.logical_key
+        assert locator.entries[2].record.logical_key != locator.entries[4].record.logical_key
         for canary in CANARIES:
             assert canary not in repr(locator)
 
@@ -339,7 +345,7 @@ class TestLocatorClauses:
         [
             f"licensed/bronze/sharadar/actions/objects/sha256/{DIGEST}",
             f"licensed/bronze/_acquisition_claims/{DIGEST}/{RUN_ID}.json",
-            f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.json",
+            f"licensed/bronze/_production_claims/{DIGEST}/{RUN_ID}.00.json",
             f"licensed/bronze/sharadar/_indexes/{RUN_ID}.json",
             f"licensed/bronze/sharadar/actions/qualification/x/requests/00/sha256/{DIGEST}",
             f"licensed/qualification/sharadar/locators/{RUN_ID}.json",
@@ -363,7 +369,16 @@ class TestLocatorClauses:
         document = locator_document()
         entry = document["entries"][0]
         entry["record_key"] = entry["record_key"].replace(
-            f"/{RUN_ID}.json", f"/{OTHER_RUN_ID}.json"
+            f"/{RUN_ID}.00.json", f"/{OTHER_RUN_ID}.00.json"
+        )
+        assert _refused(document) is pl.RunLocatorDefect.PREFIX_NOT_ALLOWED
+
+    def test_a_record_key_carrying_another_requests_ordinal_is_refused(self) -> None:
+        """The record leaf binds this entry's ordinal, so two requests cannot share a record."""
+        document = locator_document()
+        entry = document["entries"][0]
+        entry["record_key"] = entry["record_key"].replace(
+            f"/{RUN_ID}.00.json", f"/{RUN_ID}.02.json"
         )
         assert _refused(document) is pl.RunLocatorDefect.PREFIX_NOT_ALLOWED
 
@@ -392,8 +407,63 @@ class TestLocatorClauses:
 
     def test_a_missing_or_duplicated_ordinal_is_refused(self) -> None:
         document = locator_document()
-        document["entries"][1]["ordinal"] = 0
+        # Entry 2 restated as ordinal 0 with the tickers coordinates: its coordinates are
+        # not the compiled request at ordinal 0, which is the first clause to fire.
+        document["entries"][2] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+        # Two entries that both are ordinal 0, coordinates and all: a duplicated request.
+        document = locator_document()
+        document["entries"][2] = dict(document["entries"][0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_DUPLICATED
+        # An ordinal outside the compiled plan.
+        document = locator_document()
+        document["entries"][5] = locator_entry(
+            6, "tickers", PAYLOADS[1], RECORDS[1], page_offset=30000
+        )
         assert _refused(document) is pl.RunLocatorDefect.ORDINAL_INCONSISTENT
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda e: e["request"].__setitem__("window", "2025-01-01/2025-06-30"),
+            lambda e: e["request"].__setitem__("page_offset", 555),
+            lambda e: e["request"].__setitem__("page_limit", 9999),
+            lambda e: e["request"].__setitem__("window", "SNAPSHOT"),
+        ],
+        ids=["window", "offset", "limit", "snapshot-for-windowed"],
+    )
+    def test_an_entry_whose_coordinates_are_not_the_compiled_requests_is_refused(
+        self, mutate: Any
+    ) -> None:
+        """Containment in the slice's date range is not enough: the entry must equal the
+        compiled request at its ordinal exactly."""
+        document = locator_document()
+        mutate(document["entries"][0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+
+    def test_a_dataset_swapped_between_entries_is_refused(self) -> None:
+        document = locator_document()
+        # Ordinal 0 is an actions request; restate it as a tickers request with keys
+        # consistent for tickers -- the coordinates no longer match the compiled plan.
+        document["entries"][0] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
+
+    def test_a_ledger_row_whose_slice_the_plan_cannot_compile_is_refused(self) -> None:
+        row = _row()
+        broken = LedgerRow(
+            run_identity=row.run_identity,
+            slice=parse_slice(slice_document(request_count=5)),
+            plan_digest=row.plan_digest,
+            outcome=row.outcome,
+            launched_at=row.launched_at,
+            completed_at=row.completed_at,
+        )
+        document = locator_document()
+        document["slice"] = slice_document(request_count=5)
+        document["planned_requests"] = 5
+        document["completed_requests"] = 5
+        document["entries"] = document["entries"][:5]
+        assert _refused(document, row=broken) is pl.RunLocatorDefect.PLAN_NOT_COMPILABLE
 
     def test_a_request_count_disagreeing_with_the_slice_is_refused(self) -> None:
         document = locator_document()
@@ -402,10 +472,10 @@ class TestLocatorClauses:
         document["planned_requests"] = 1
         assert _refused(document) is pl.RunLocatorDefect.REQUEST_COUNT_MISMATCH
 
-    def test_a_window_disagreeing_with_the_slice_is_refused(self) -> None:
+    def test_a_window_disagreeing_with_the_compiled_request_is_refused(self) -> None:
         document = locator_document()
         document["entries"][0]["request"]["window"] = "1999-01-01/2026-09-11"
-        assert _refused(document) is pl.RunLocatorDefect.SLICE_MISMATCH
+        assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
 
     # Clause 4: completeness.
     def test_a_partial_locator_grants_no_build(self) -> None:
@@ -447,26 +517,20 @@ class TestLocatorClauses:
 class TestTheReader:
     def _store(self) -> tuple[FakeS3Get, pl.ProductionLocatorReader]:
         document = locator_document()
-        s3 = FakeS3Get(
-            objects={
-                f"bronze/sharadar/_indexes/{RUN_ID}.json": encode(document),
-                json.loads(json.dumps(document["entries"][0]["payload_key"]))[
-                    len("licensed/") :
-                ]: PAYLOADS[0],
-                document["entries"][0]["record_key"][len("licensed/") :]: RECORDS[0],
-                document["entries"][1]["payload_key"][len("licensed/") :]: PAYLOADS[1],
-                document["entries"][1]["record_key"][len("licensed/") :]: RECORDS[1],
-            }
-        )
+        objects = {f"bronze/sharadar/_indexes/{RUN_ID}.json": encode(document)}
+        for index, entry in enumerate(document["entries"]):
+            objects[entry["payload_key"][len("licensed/") :]] = PAYLOADS[index % 2]
+            objects[entry["record_key"][len("licensed/") :]] = RECORDS[index % 2]
+        s3 = FakeS3Get(objects=objects)
         return s3, pl.ProductionLocatorReader(client=s3, licensed_bucket=BUCKET)
 
     def test_the_locator_is_read_by_name_and_every_object_by_exact_reference(self) -> None:
         s3, reader = self._store()
         locator = reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
         objects = list(reader.iter_locator_objects(locator))
-        assert [entry.ordinal for entry, _, _ in objects] == [0, 1]
-        assert [payload for _, payload, _ in objects] == list(PAYLOADS)
-        assert [record for _, _, record in objects] == list(RECORDS)
+        assert [entry.ordinal for entry, _, _ in objects] == [0, 1, 2, 3, 4, 5]
+        assert [payload for _, payload, _ in objects] == [PAYLOADS[i % 2] for i in range(6)]
+        assert [record for _, _, record in objects] == [RECORDS[i % 2] for i in range(6)]
         # One by-name read plus two per entry: the count the ADR requires.
         assert reader.get_object_count == 1 + locator.object_count == len(s3.calls)
         assert all(call["Bucket"] == BUCKET for call in s3.calls)
@@ -499,6 +563,25 @@ class TestTheReader:
         with pytest.raises(LicensedReadError) as info:
             reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
         assert info.value.failure is ReadFailure.TOO_LARGE
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda d: d["entries"][0]["request"].__setitem__("page_offset", 555),
+            lambda d: d["entries"][0]["request"].__setitem__("window", "2025-01-01/2025-06-30"),
+            lambda d: d["entries"].__setitem__(2, dict(d["entries"][0])),
+            lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 5)),
+        ],
+        ids=["offset", "window", "duplicate", "missing-request"],
+    )
+    def test_the_reader_refuses_before_reading_any_referenced_object(self, mutate: Any) -> None:
+        s3, reader = self._store()
+        document = locator_document()
+        mutate(document)
+        s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"] = encode(document)
+        with pytest.raises(pl.RunLocatorError):
+            reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
+        assert len(s3.calls) == 1  # the by-name locator read, and nothing it names
 
     def test_a_refused_locator_reads_no_object(self) -> None:
         s3, reader = self._store()

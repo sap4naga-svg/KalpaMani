@@ -13,10 +13,16 @@ that **before parsing** -- validated by a closed schema of its own:
 | validity | ``issued_at <= now < expires_at``, ``expires_at - issued_at <= 24 h`` | the same |
 | ceiling | -- | at most 32 run identities, each distinct |
 
-**The compiled plan digest is a parameter here, not a constant.** No production
-acquisition plan exists in this repository yet, so the digest the acquisition task
-will compare against is supplied by the composition that owns the plan when one
-exists; a document cannot supply it, and this module compiles none.
+**The plan digest is verified against the compiled plan, not against a supplied
+number.** :func:`parse_acquisition_input` admits the slice's shape and the digest's
+grammar; :func:`kalpamani.data.production.sharadar.plan.bind_plan` then compiles
+the plan **from that slice** and refuses the input unless the compiled digest
+equals the one the input carries. A document cannot supply the comparison value.
+
+**A spent or unknowable run identity refuses.** The registry is injected and
+answers ``UNSPENT``, ``SPENT`` or ``UNAVAILABLE``; only the first admits the input.
+That is the preliminary check -- the durable guard is the conditional claim write
+(see :mod:`kalpamani.data.production.sharadar.identities`).
 
 **The input digest is over the delivered bytes.** The placement release binds
 ``input_digest`` to "the SHA-256 of the input document the launch tool
@@ -27,13 +33,13 @@ decoding, and never over a re-serialization.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.documents import (
     DocumentDefect,
     DocumentError,
@@ -42,6 +48,11 @@ from kalpamani.data.production.sharadar.documents import (
     exact_str,
     hex_digest,
     instant,
+)
+from kalpamani.data.production.sharadar.identities import (
+    SpentIdentityRegistry,
+    SpentStatus,
+    spent_status_of,
 )
 from kalpamani.data.production.sharadar.keys import PRODUCTION_DATASETS, RUN_ID_RE
 from kalpamani.data.production.sharadar.vocabulary import (
@@ -93,7 +104,13 @@ _BUILD_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 _SLICE_FIELDS: Final[frozenset[str]] = frozenset(
-    {"datasets", "windows", "request_count", "max_response_bytes"}
+    {"acquisition_mode", "datasets", "windows", "request_count", "max_response_bytes"}
+)
+
+#: The two modes a production slice may declare (ADR-0035 §3.1). Declared by the
+#: plan, recorded in every record, never inferred -- and never a qualification.
+SLICE_MODES: Final[frozenset[str]] = frozenset(
+    {AcquisitionMode.BACKFILL.value, AcquisitionMode.UPDATE.value}
 )
 _ROW_FIELDS: Final[frozenset[str]] = frozenset(
     {"run_identity", "slice", "plan_digest", "outcome", "launched_at", "completed_at"}
@@ -120,10 +137,11 @@ class InputDefect(StrEnum):
     FIELD_MALFORMED = "FIELD_MALFORMED"
     IDENTITY_MALFORMED = "IDENTITY_MALFORMED"
     IDENTITY_SPENT = "IDENTITY_SPENT"
+    IDENTITY_STATUS_UNAVAILABLE = "IDENTITY_STATUS_UNAVAILABLE"
     IDENTITY_DUPLICATED = "IDENTITY_DUPLICATED"
     SLICE_MALFORMED = "SLICE_MALFORMED"
     PLAN_DIGEST_MISMATCH = "PLAN_DIGEST_MISMATCH"
-    EXPECTED_PLAN_DIGEST_UNAVAILABLE = "EXPECTED_PLAN_DIGEST_UNAVAILABLE"
+    PLAN_NOT_COMPILABLE = "PLAN_NOT_COMPILABLE"
     VALIDITY_MALFORMED = "VALIDITY_MALFORMED"
     VALIDITY_TOO_LONG = "VALIDITY_TOO_LONG"
     NOT_YET_VALID = "NOT_YET_VALID"
@@ -179,8 +197,9 @@ def decode_input(raw: object) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Slice:
-    """What one acquisition run covers: datasets, their windows, and two ceilings."""
+    """What one acquisition run covers: mode, datasets, their windows, two ceilings."""
 
+    acquisition_mode: str
     datasets: tuple[str, ...]
     windows: tuple[tuple[str, str], ...]
     request_count: int
@@ -193,6 +212,7 @@ class Slice:
     def canonical(self) -> dict[str, Any]:
         """The slice as the closed document it came from, for exact comparison."""
         return {
+            "acquisition_mode": self.acquisition_mode,
             "datasets": list(self.datasets),
             "windows": dict(self.windows),
             "request_count": self.request_count,
@@ -207,6 +227,9 @@ def parse_slice(raw: object) -> Slice:
         InputError: ``SLICE_MALFORMED`` for any structural defect.
     """
     if type(raw) is not dict or set(raw) != _SLICE_FIELDS:
+        raise _refuse(InputDefect.SLICE_MALFORMED) from None
+    mode = exact_str(raw["acquisition_mode"])
+    if mode is None or mode not in SLICE_MODES:
         raise _refuse(InputDefect.SLICE_MALFORMED) from None
     datasets = raw["datasets"]
     if type(datasets) is not list or not datasets:
@@ -229,6 +252,7 @@ def parse_slice(raw: object) -> Slice:
     if ceiling is None or not 1 <= ceiling <= MAX_RESPONSE_BYTES:
         raise _refuse(InputDefect.SLICE_MALFORMED) from None
     return Slice(
+        acquisition_mode=mode,
         datasets=tuple(datasets),
         windows=tuple((dataset, windows[dataset]) for dataset in datasets),
         request_count=request_count,
@@ -300,15 +324,17 @@ def parse_acquisition_input(
     document: object,
     *,
     now: datetime,
-    expected_plan_digest: str | None,
-    is_spent: Callable[[str], bool],
+    registry: SpentIdentityRegistry,
 ) -> AcquisitionInput:
     """Validate an already-decoded acquisition input. **Reads nothing.**
 
-    ``expected_plan_digest`` is the compiled plan's digest, supplied by the caller;
-    ``None`` refuses before any comparison, because a task with no compiled plan
-    has nothing to authorize against. ``is_spent`` answers whether the run identity
-    has already been used; a spent identity refuses.
+    The plan digest is admitted here for grammar only; whether it is the digest of
+    the plan compiled from this slice is decided by
+    :func:`kalpamani.data.production.sharadar.plan.bind_plan`, which every caller
+    that goes on to acquire must call. ``registry`` answers whether the run identity
+    has been used: ``SPENT`` refuses as ``IDENTITY_SPENT``, and ``UNAVAILABLE`` --
+    including a registry that raises or answers with a non-member -- refuses as
+    ``IDENTITY_STATUS_UNAVAILABLE``.
 
     Raises:
         InputError: one closed :class:`InputDefect`; never a value.
@@ -322,17 +348,12 @@ def parse_acquisition_input(
     plan_digest = hex_digest(document["plan_digest"])
     if plan_digest is None:
         raise _refuse(InputDefect.FIELD_MALFORMED) from None
-    if expected_plan_digest is None or hex_digest(expected_plan_digest) is None:
-        raise _refuse(InputDefect.EXPECTED_PLAN_DIGEST_UNAVAILABLE) from None
-    if plan_digest != expected_plan_digest:
-        raise _refuse(InputDefect.PLAN_DIGEST_MISMATCH) from None
     issued_at, expires_at = _validity(document, now=now)
-    try:
-        spent = bool(is_spent(run_identity))
-    except Exception:
+    status = spent_status_of(registry, run_identity)
+    if status is SpentStatus.SPENT:
         raise _refuse(InputDefect.IDENTITY_SPENT) from None
-    if spent:
-        raise _refuse(InputDefect.IDENTITY_SPENT) from None
+    if status is not SpentStatus.UNSPENT:
+        raise _refuse(InputDefect.IDENTITY_STATUS_UNAVAILABLE) from None
     return AcquisitionInput(
         run_identity=run_identity,
         slice=covered,
@@ -476,6 +497,7 @@ __all__ = [
     "MAX_INPUT_VALIDITY",
     "MAX_RESPONSE_BYTES",
     "MAX_SLICE_REQUESTS",
+    "SLICE_MODES",
     "AcquisitionInput",
     "BuildInput",
     "InputDefect",

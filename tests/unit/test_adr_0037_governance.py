@@ -129,6 +129,6 @@ def test_the_production_key_builders_spell_the_amended_namespaces() -> None:
         dataset="tickers", content_sha256=digest
     ).logical_key == (f"licensed/bronze/sharadar/tickers/production/objects/sha256/{digest}")
     assert keys.production_claim_key(
-        payload_digest=digest, run_id="r-1", claim=b"{}"
-    ).logical_key == (f"licensed/bronze/_production_claims/{digest}/r-1.json")
+        payload_digest=digest, run_id="r-1", ordinal=0, claim=b"{}"
+    ).logical_key == (f"licensed/bronze/_production_claims/{digest}/r-1.00.json")
     assert keys.run_locator_logical_key("r-1") == "licensed/bronze/sharadar/_indexes/r-1.json"

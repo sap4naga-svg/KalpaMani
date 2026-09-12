@@ -20,15 +20,21 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.bindings import BINDING_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.compute import CompiledLaunch
-from kalpamani.data.production.sharadar.inputs import INPUT_SCHEMA_VERSION, ledger_digest
+from kalpamani.data.production.sharadar.inputs import (
+    INPUT_SCHEMA_VERSION,
+    ledger_digest,
+    parse_slice,
+)
 from kalpamani.data.production.sharadar.keys import (
     production_acquisition_key,
     production_payload_key,
 )
 from kalpamani.data.production.sharadar.locator import LOCATOR_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.metadata import CompiledTask
+from kalpamani.data.production.sharadar.plan import plan_digest_for
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
 # ---------------------------------------------------------------------------
@@ -42,7 +48,7 @@ BUCKET: Final = "synthetic-licensed-bucket-zz"
 COMMIT: Final = "0123456789abcdef0123456789abcdef01234567"
 TREE: Final = "89abcdef0123456789abcdef0123456789abcdef"
 ENVELOPE: Final = "0123456789abcdef" * 4
-PLAN_DIGEST: Final = "ab" * 32
+#: A digest that is a digest and nothing else -- for release/input-digest cases.
 OTHER_PLAN_DIGEST: Final = "cd" * 32
 IMAGE_DIGEST: Final = "sha256:" + "ef" * 32
 
@@ -76,7 +82,6 @@ CANARIES: Final[tuple[str, ...]] = (
     COMMIT,
     TREE,
     ENVELOPE,
-    PLAN_DIGEST,
     RUN_ID,
     BUILD_ID,
     TASK_ID,
@@ -148,15 +153,27 @@ def binding_document(actor: ProductionActor, **overrides: Any) -> dict[str, Any]
 
 
 def slice_document(**overrides: Any) -> dict[str, Any]:
-    """A valid synthetic slice: two datasets, two requests, a 4 MiB ceiling."""
+    """A valid synthetic slice: one ``actions`` year window (2 pages) and the ``tickers``
+    snapshot (4 pages) -- six compiled requests, a 4 MiB ceiling, BACKFILL."""
     document: dict[str, Any] = {
+        "acquisition_mode": "BACKFILL",
         "datasets": ["actions", "tickers"],
-        "windows": {"actions": "1998-01-01/2026-09-11", "tickers": "SNAPSHOT"},
-        "request_count": 2,
+        "windows": {"actions": "2025-01-01/2025-12-31", "tickers": "SNAPSHOT"},
+        "request_count": 6,
         "max_response_bytes": 4 * 1024 * 1024,
     }
     document.update(overrides)
     return document
+
+
+def compiled_digest(slice_doc: dict[str, Any] | None = None) -> str:
+    """The digest the compiled plan of a slice carries -- what a valid input must name."""
+    covered = parse_slice(slice_document() if slice_doc is None else slice_doc)
+    return plan_digest_for(covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode))
+
+
+#: The compiled digest of the default slice. Computed, never typed.
+PLAN_DIGEST: Final = compiled_digest()
 
 
 def acquisition_input_document(**overrides: Any) -> dict[str, Any]:
@@ -228,32 +245,48 @@ RECORDS: Final[tuple[bytes, ...]] = (
 
 
 def locator_entry(
-    ordinal: int, dataset: str, payload: bytes, record: bytes, run_id: str = RUN_ID
+    ordinal: int,
+    dataset: str,
+    payload: bytes,
+    record: bytes,
+    run_id: str = RUN_ID,
+    *,
+    page_offset: int = 0,
+    disposition: str = "WRITTEN",
 ) -> dict[str, Any]:
     """One valid locator entry, with keys built by the real production builders."""
     payload_key = production_payload_key(dataset=dataset, payload=payload)
     record_key = production_acquisition_key(
-        dataset=dataset, payload_digest=payload_key.content_sha256, run_id=run_id, record=record
+        dataset=dataset,
+        payload_digest=payload_key.content_sha256,
+        run_id=run_id,
+        ordinal=ordinal,
+        record=record,
     )
-    window = "SNAPSHOT" if dataset == "tickers" else "1998-01-01/2026-09-11"
+    window = "SNAPSHOT" if dataset == "tickers" else "2025-01-01/2025-12-31"
     return {
         "ordinal": ordinal,
         "dataset": dataset,
         "payload_key": payload_key.logical_key,
         "payload_sha256": payload_key.content_sha256,
         "payload_bytes": len(payload),
+        "payload_disposition": disposition,
         "record_key": record_key.logical_key,
         "record_sha256": record_key.content_sha256,
         "record_bytes": len(record),
-        "request": {"window": window, "page_offset": 0, "page_limit": 10000},
+        "request": {"window": window, "page_offset": page_offset, "page_limit": 10000},
     }
 
 
 def locator_document(run_id: str = RUN_ID, **overrides: Any) -> dict[str, Any]:
-    """A complete, valid synthetic run locator over two entries."""
+    """A complete, valid synthetic run locator over the six compiled requests."""
     entries = [
         locator_entry(0, "actions", PAYLOADS[0], RECORDS[0], run_id),
-        locator_entry(1, "tickers", PAYLOADS[1], RECORDS[1], run_id),
+        locator_entry(1, "actions", PAYLOADS[1], RECORDS[1], run_id, page_offset=10000),
+        locator_entry(2, "tickers", PAYLOADS[0], RECORDS[0], run_id),
+        locator_entry(3, "tickers", PAYLOADS[1], RECORDS[1], run_id, page_offset=10000),
+        locator_entry(4, "tickers", PAYLOADS[0], RECORDS[0], run_id, page_offset=20000),
+        locator_entry(5, "tickers", PAYLOADS[1], RECORDS[1], run_id, page_offset=30000),
     ]
     document: dict[str, Any] = {
         "schema_version": LOCATOR_SCHEMA_VERSION,
@@ -265,8 +298,8 @@ def locator_document(run_id: str = RUN_ID, **overrides: Any) -> dict[str, Any]:
         "completed_at": (NOW - timedelta(days=2, hours=-1)).isoformat(),
         "completeness": "COMPLETE",
         "publication_state_unknown": False,
-        "planned_requests": 2,
-        "completed_requests": 2,
+        "planned_requests": 6,
+        "completed_requests": 6,
         "entries": entries,
     }
     document.update(overrides)
