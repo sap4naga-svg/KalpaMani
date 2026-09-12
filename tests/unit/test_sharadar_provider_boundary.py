@@ -55,9 +55,14 @@ PROVIDER_PACKAGE = DATA_ROOT / "ingest" / "sharadar"
 #: path stays parser-free.
 QUALIFY_PACKAGE = DATA_ROOT / "qualify" / "sharadar"
 
+#: The ADR-0036 / ADR-0037 production runtime foundations. A **third** vendor-scoped
+#: package: the accepted production data plane is Sharadar's, so its key layout,
+#: datasets and contracts name the vendor -- and nothing else may.
+PRODUCTION_PACKAGE = DATA_ROOT / "production" / "sharadar"
+
 #: Every package permitted to name the vendor or import the provider package.
-#: Named, so a **third** appearing anywhere else still fails.
-VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE)
+#: Named, so a **fourth** appearing anywhere else still fails.
+VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE, PRODUCTION_PACKAGE)
 SCRIPTS = PROJECT_ROOT / "scripts"
 TESTS = PROJECT_ROOT / "tests"
 
@@ -157,8 +162,9 @@ def test_only_the_vendor_scoped_packages_import_the_provider_package() -> None:
     Narrowed rather than relaxed. The rule was "only the provider package", correct
     while it was the only vendor-scoped one. The empirical qualification package is
     the second -- it builds plans from the accepted plan model and parses what that
-    provider returned -- so both are named, and a **third** importer outside them
-    still fails here.
+    provider returned -- and the production runtime foundations are the third, which
+    take the dataset vocabulary and the provider name from it. All three are named,
+    and a **fourth** importer outside them still fails here.
     """
     offenders = [
         str(path.relative_to(PROJECT_ROOT))
@@ -180,6 +186,7 @@ def test_no_production_module_outside_the_provider_package_names_the_vendor() ->
         DATA_ROOT / "__init__.py",
         DATA_ROOT / "ingest" / "__init__.py",
         DATA_ROOT / "qualify" / "__init__.py",
+        DATA_ROOT / "production" / "__init__.py",
     }
     offenders = [
         str(path.relative_to(PROJECT_ROOT))

@@ -9,6 +9,17 @@ is not to be rewritten as though this decision had authority before it was accep
 becomes **ACCEPTED / IN FORCE** as **a narrow amendment of ADR-0036's production Bronze prefixes and
 nothing else**, effective together with the offline declaration that implements it.
 
+**The condition above has since been satisfied.** **PR #94 merged** — merged **2026-09-12T12:16:47Z**, merge
+commit **`7d7cad34454a670c701e615bb7d26a70533118ee`**, ordered parents **`066a93d8780aa6fc06354ed096fa69c34496b10d`** then
+**`70e365554fa8ad3b8aa5a4b37bbf56ad2b61bc4c`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`3f312e359d4f8e655f44dd57df3d4cfbd9bf8b94`). ADR-0037 is therefore **ACCEPTED / IN FORCE** as a narrow amendment of
+ADR-0036's production Bronze prefixes, effective together with the offline declaration merged beside it.
+While the pull request was open it was proposed and carried no authority — true then, and not rewritten.
+**Acceptance applied nothing and materialized nothing**: the declaration it amends stays
+**DECLARED / OFFLINE-VALIDATED / NOT PLANNED / NOT APPLIED / NOT AUTHORIZED TO APPLY**, and the production
+key builders that spell these namespaces in code were written afterwards, under their own authorization,
+exercised only on synthetic inputs.
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no read of any
 licensed object. The evidence is the merged key builders in the repository and the accepted ADRs that
 describe them.

@@ -1,10 +1,11 @@
-"""ADR-0037 governance: a narrow, proposed amendment of ADR-0036's production prefixes.
+"""ADR-0037 governance: a narrow amendment of ADR-0036's production prefixes, accepted on PR #94.
 
 The amendment moves production Bronze under namespaces no earlier package writes. These
-checks hold the document to its own claims -- proposed and not in force, a narrow amendment
-that rewrites nothing, the traced layouts named, the disjoint prefixes stated -- and hold the
-offline declaration to the amended prefixes. The proof that the prefixes are disjoint from
-the merged key builders' output lives in ``test_production_infrastructure.py``.
+checks hold the document to its own claims -- the preserved conditional status beside the
+post-merge note, a narrow amendment that rewrites nothing, the traced layouts named, the
+disjoint prefixes stated -- and hold the offline declaration to the amended prefixes. The
+proof that the prefixes are disjoint from the merged key builders' output lives in
+``test_production_infrastructure.py`` and ``test_production_runtime_locator.py``.
 """
 
 from __future__ import annotations
@@ -40,13 +41,21 @@ def test_the_adr_exists_and_is_the_only_0037() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0037-*.md"))] == [ADR.name]
 
 
-def test_the_adr_carries_a_conditional_acceptance_status() -> None:
+def test_the_adr_keeps_its_conditional_status_and_records_the_merge() -> None:
+    """The pre-merge condition is preserved as written; the note beside it records the event."""
     assert "Status: PROPOSED — NOT IN FORCE" in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
     assert (
         "a narrow amendment of ADR-0036's production Bronze prefixes and nothing else" in ADR_FLAT
     )
     assert "Nothing was run to produce this decision" in ADR_FLAT
+    assert "The condition above has since been satisfied." in ADR_FLAT
+    assert "PR #94 merged" in ADR_FLAT and "2026-09-12T12:16:47Z" in ADR_FLAT
+    assert "7d7cad34454a670c701e615bb7d26a70533118ee" in ADR_TEXT
+    assert "066a93d8780aa6fc06354ed096fa69c34496b10d" in ADR_TEXT
+    assert "70e365554fa8ad3b8aa5a4b37bbf56ad2b61bc4c" in ADR_TEXT
+    assert "ADR-0037 is therefore ACCEPTED / IN FORCE" in ADR_FLAT.replace("**", "")
+    assert "Acceptance applied nothing and materialized nothing" in ADR_FLAT
 
 
 def test_the_amendment_names_the_traced_layouts_and_the_disjoint_prefixes() -> None:
@@ -101,6 +110,25 @@ def test_the_adr_carries_no_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_pr_94(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search(r"ADR-0037[^\n]{0,200}PROPOSED — NOT IN FORCE", text) is not None
+    assert (
+        re.search(r"ADR-0037[^\n]{0,200}ACCEPTED / IN FORCE[^\n]{0,80}PR #94 merged", text)
+        is not None
+    )
+    assert re.search(r"ADR-0037[^\n]{0,200}PROPOSED — NOT IN FORCE", text) is None
+    assert "NOT PLANNED / NOT APPLIED" in text
+    assert "HALTED_PROCESSING_NOT_IMPLEMENTED" in text
+
+
+def test_the_production_key_builders_spell_the_amended_namespaces() -> None:
+    from kalpamani.data.production.sharadar import keys
+
+    digest = "ab" * 32
+    assert keys.production_payload_key_for_digest(
+        dataset="tickers", content_sha256=digest
+    ).logical_key == (f"licensed/bronze/sharadar/tickers/production/objects/sha256/{digest}")
+    assert keys.production_claim_key(
+        payload_digest=digest, run_id="r-1", claim=b"{}"
+    ).logical_key == (f"licensed/bronze/_production_claims/{digest}/r-1.json")
+    assert keys.run_locator_logical_key("r-1") == "licensed/bronze/sharadar/_indexes/r-1.json"

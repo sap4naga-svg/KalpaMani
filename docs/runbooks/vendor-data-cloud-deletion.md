@@ -159,6 +159,21 @@ qualification/sharadar/reports/
 already deletes wholesale. They are listed here so their first appearance is not recorded as an
 unexpected prefix.
 
+**Expected prefixes inside `bronze/`.** Three are reserved by
+[ADR-0036](../decisions/ADR-0036-production-data-plane-principals-and-trust-model.md) as amended by
+[ADR-0037](../decisions/ADR-0037-disjoint-production-bronze-namespaces.md) for the production data plane,
+and are **expected, not findings**, if they ever appear:
+
+```text
+bronze/sharadar/<dataset>/production/
+bronze/sharadar/_indexes/
+bronze/_production_claims/
+```
+
+**Deletion behaviour is unchanged by naming these either.** All three sit inside `bronze/`, which
+prefix-based deletion already covers wholesale; the run locator under `_indexes/` is, like the
+qualification locator, a convenience this runbook never trusts as an inventory.
+
 **A locator may be absent, and this procedure must never depend on one to discover licensed
 objects.** Deletion is prefix-wide and stays prefix-wide: an object whose locator was never
 published, or whose locator is incomplete, is still deleted with everything else under its prefix.

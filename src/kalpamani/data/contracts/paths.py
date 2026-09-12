@@ -66,7 +66,14 @@ INTERNAL_FILENAMES: Final[frozenset[str]] = frozenset(
 #: never spell one of these -- the collision is refused by grammar rather than by a
 #: check somebody has to remember to write. A reserved segment is therefore a name
 #: only this package can occupy.
-RESERVED_SEGMENTS: Final[frozenset[str]] = frozenset({"_acquisition_claims"})
+#:
+#: ``_acquisition_claims`` is the general Bronze claim namespace. ``_indexes`` is
+#: the ADR-0036 production run-locator namespace and ``_production_claims`` the
+#: ADR-0037 production claim namespace; both are production-only, and neither is
+#: written by the general bridge or by the qualification package.
+RESERVED_SEGMENTS: Final[frozenset[str]] = frozenset(
+    {"_acquisition_claims", "_indexes", "_production_claims"}
+)
 
 #: Maximum length of one component. Not a security boundary -- a legibility one,
 #: and a guard against a name that would break a filesystem somewhere.
