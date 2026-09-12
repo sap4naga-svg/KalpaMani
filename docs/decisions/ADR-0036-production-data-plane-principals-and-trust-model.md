@@ -79,7 +79,8 @@ encryption. A *human bootstrap policy* (2.6) is attached only to the permission 
 creation and deletion and scoped data-key generation, and an explicit deny on every binding-parameter read.
 Neither bootstrap policy is attached to the other kind of principal, so a task can never materialize an input
 and a human profile never reads a task binding. Each actor also has a **per-actor launcher permission set**
-(2.9), which holds no data-plane, SSM or KMS statement at all.
+(2.9), which holds no data-plane statement; its only SSM and KMS statements are the ones that write and
+delete the **placement release** of 2.9, and nothing else.
 
 **Complete effective permissions, per principal.** This is the whole of what each principal can do once every
 attached policy is evaluated together; anything not listed is an implicit deny.
@@ -87,11 +88,11 @@ attached policy is evaluated together; anything not listed is an implicit deny.
 | Principal | Policies attached | Effective allows | Explicit denies |
 |---|---|---|---|
 | acquisition permission set `KalpaManiProductionAcquire` | data-plane (acq) + human bootstrap (acq) | one `GetSecretValue`; conditional `PutObject` under the four production Bronze prefixes; `ssm:PutParameter` (no overwrite) and `ssm:DeleteParameter` on `/kalpamani/production/acquisition/input`; `kms:GenerateDataKey` on `kalpamani-task-bindings` for that parameter's encryption context via Parameter Store | every S3 read, list, delete, copy, ACL, retention and multipart action on the licensed bucket; copy-shaped and unconditional puts; CONTROL and state buckets; qualification prefixes; every other Secrets Manager action; `iam:*`, `sts:AssumeRole`, `ec2:*`, `ecs:*`; `ssm:PutParameter` with overwrite; `ssm:GetParameter*` on any binding parameter |
-| acquisition task role `kalpamani-production-acquire-task` | data-plane (acq) + task bootstrap (acq) | the same S3 and secret allows; `ssm:GetParameter` on its binding and input parameters; `kms:Decrypt` for those two encryption contexts via Parameter Store | the same S3, secret and service denies; `ssm:PutParameter`, `ssm:DeleteParameter`, `kms:Encrypt`, `kms:GenerateDataKey`; `ssm:GetParameters`, `GetParametersByPath`, `DescribeParameters`, `GetParameterHistory` |
+| acquisition task role `kalpamani-production-acquire-task` | data-plane (acq) + task bootstrap (acq) | the same S3 and secret allows; `ssm:GetParameter` on its binding, input and release parameters; `kms:Decrypt` for those three encryption contexts via Parameter Store | the same S3, secret and service denies; `ssm:PutParameter`, `ssm:DeleteParameter`, `kms:Encrypt`, `kms:GenerateDataKey`; `ssm:GetParameters`, `GetParametersByPath`, `DescribeParameters`, `GetParameterHistory` |
 | build permission set `KalpaManiResearchBuild` | data-plane (build) + human bootstrap (build) | `GetObject` under production Bronze and its own output prefixes; conditional `PutObject` under `silver/`, `gold/`, `manifests/`; `ssm:PutParameter` (no overwrite) and `ssm:DeleteParameter` on `/kalpamani/production/research-build/input`; `kms:GenerateDataKey` for that context via Parameter Store | list, delete, copy, ACL, retention and multipart actions; copy-shaped and unconditional puts; claim reads; CONTROL and state buckets; qualification prefixes; `secretsmanager:*`; `iam:*`, `sts:AssumeRole`, `ec2:*`, `ecs:*`; overwrite; binding-parameter reads |
-| build task role `kalpamani-research-build-task` | data-plane (build) + task bootstrap (build) | the same S3 allows; `ssm:GetParameter` on its two parameters; `kms:Decrypt` for those contexts via Parameter Store | the same denies; parameter writes and encryption; parameter enumeration |
-| acquisition launcher `KalpaManiAcquireLauncher` | launcher (acq) | `ecs:RunTask` on the acquisition `family:revision` in the one cluster; `iam:PassRole` on the acquisition task role and the execution role to `ecs-tasks.amazonaws.com`; `ecs:DescribeTasks`, `ecs:StopTask` in the cluster; `ec2:DescribeNetworkInterfaces` | `iam:PassRole` on any other resource; task-definition registration, services, clusters, capacity providers; `ecs:ExecuteCommand`; no S3, secret, SSM or KMS statement exists |
-| build launcher `KalpaManiBuildLauncher` | launcher (build) | the same shape on the build `family:revision` and the build task role | the same |
+| build task role `kalpamani-research-build-task` | data-plane (build) + task bootstrap (build) | the same S3 allows; `ssm:GetParameter` on its three parameters; `kms:Decrypt` for those contexts via Parameter Store | the same denies; parameter writes and encryption; parameter enumeration |
+| acquisition launcher `KalpaManiAcquireLauncher` | launcher (acq) | `ecs:RunTask` on the acquisition `family:revision` in the one cluster; `iam:PassRole` on the acquisition task role and the execution role to `ecs-tasks.amazonaws.com`; `ecs:DescribeTasks`, `ecs:StopTask` in the cluster; `ec2:DescribeNetworkInterfaces`; `ssm:PutParameter` (create only) and `ssm:DeleteParameter` on `/kalpamani/production/acquisition/release`; `kms:GenerateDataKey` for that parameter's encryption context via Parameter Store | `iam:PassRole` on any other resource; task-definition registration, services, clusters, capacity providers; `ecs:ExecuteCommand`; `ssm:PutParameter` with overwrite; `ssm:GetParameter*` on every production parameter; `ssm:PutParameter`/`DeleteParameter` on any other parameter; `kms:Decrypt`, `kms:Encrypt`; no S3 or secret statement exists |
+| build launcher `KalpaManiBuildLauncher` | launcher (build) | the same shape on the build `family:revision`, the build task role and `/kalpamani/production/research-build/release` | the same |
 | task execution role `<prefix>-task-execution` | foundation, unchanged | scoped ECR pull; `ecr:GetAuthorizationToken`; scoped log-stream write | none needed: no other grant exists |
 | deletion role | foundation, unchanged | list and delete under the widened prefixes | read anywhere |
 
@@ -246,6 +247,8 @@ ALLOW  kms:Decrypt                        on exactly ONE key ARN: kalpamani-task
                                           StringEquals kms:ViaService = ssm.<region>.amazonaws.com
 ALLOW  ssm:GetParameter                   on exactly ONE parameter ARN: this actor's input parameter (2.6)
 ALLOW  kms:Decrypt                        the same key, EncryptionContext:PARAMETER_ARN = <the input parameter's ARN>
+ALLOW  ssm:GetParameter                   on exactly ONE parameter ARN: this actor's placement-release parameter (2.9)
+ALLOW  kms:Decrypt                        the same key, EncryptionContext:PARAMETER_ARN = <the release parameter's ARN>
 DENY   ssm:GetParameters, ssm:GetParametersByPath, ssm:DescribeParameters, ssm:GetParameterHistory
 DENY   ssm:PutParameter, ssm:DeleteParameter, kms:Encrypt, kms:GenerateDataKey   (a task never writes a parameter)
 ```
@@ -263,8 +266,9 @@ carries `kms:ViaService = ssm.<region>.amazonaws.com`:
 | Statement | Principal | Actions | Condition |
 |---|---|---|---|
 | administration and binding materialization | the Terraform-apply principal | key administration; `kms:Encrypt` | `kms:EncryptionContext:PARAMETER_ARN` ∈ {the two binding-parameter ARNs} — the bindings are **standard-tier** `SecureString` parameters, which Parameter Store encrypts directly with `Encrypt` |
-| task decryption | the two task roles, by exact role ARN | `kms:Decrypt` | `kms:EncryptionContext:PARAMETER_ARN` = that actor's binding or input parameter ARN |
+| task decryption | the two task roles, by exact role ARN | `kms:Decrypt` | `kms:EncryptionContext:PARAMETER_ARN` = that actor's binding, input or release parameter ARN |
 | human input materialization | the account, with `aws:PrincipalArn` `StringLike` the actor's generated-role prefix `…:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_<permission-set>_*` — the suffix rotates (ADR-0021), so the prefix is matched and no full ARN is pinned | `kms:GenerateDataKey` | `kms:EncryptionContext:PARAMETER_ARN` = that actor's **input** parameter ARN — the inputs are **advanced-tier** parameters, which Parameter Store envelope-encrypts with a data key, so the writer needs `GenerateDataKey`, not `Encrypt` |
+| launcher release materialization | the account, with `aws:PrincipalArn` `StringLike` the actor's **launcher** generated-role prefix (`AWSReservedSSO_KalpaManiAcquireLauncher_*` / `AWSReservedSSO_KalpaManiBuildLauncher_*`) | `kms:GenerateDataKey` | `kms:EncryptionContext:PARAMETER_ARN` = that actor's **release** parameter ARN (advanced tier, 2.9) |
 | nothing else | — | — | no `kms:*` for any other principal; rotation enabled; no grants |
 
 The two tiers are why the two writer permissions differ: standard-tier values are encrypted with `Encrypt`
@@ -368,8 +372,8 @@ header fail with `403` and with one fail with `501 Not Implemented`
 one governed sequence — saved plan, apply, independent post-apply verification — and it is **not complete** until
 the verification proves, with a single refused request, that an object-creating `PutObject` **without**
 `If-None-Match` to a production prefix is rejected by S3 (`403`), and that a copy-shaped put is rejected. A
-refused request creates nothing; the accepting side of the mechanism is already established on this bucket by
-Run A and Run B, whose 290 conditional `PutObject` requests all carried `If-None-Match: *`. **If the refusal
+refused request creates nothing; the accepting side of the mechanism is demonstrated in the same session by
+R-3's fresh positive control (§3, row 1), and by nothing older. **If the refusal
 cannot be demonstrated** — because a condition key is not honoured, the pinned provider will not express the
 statement, or the verification cannot be run — **the production principals are not established**: no
 account assignment is created, no launcher permission set is assigned, no profile or binding is materialized,
@@ -504,7 +508,41 @@ owner's workstation over the public ECS and EC2 endpoints (no VPC dependency), u
 
 This is a **detective** control on the launcher side; the **preventive** control is the launch tool sending
 only the compiled `networkConfiguration`. A misplaced build task remains IAM-bounded and secret-less (A-8), so
-the consequence of a missed check is bounded by the data-plane policy, not by the network alone.
+the consequence of a missed check is bounded by the data-plane policy, not by the network alone. **The task
+does not, however, proceed on the strength of that bound**: it holds at the barrier below until the launcher
+has verified placement and said so.
+
+**The placement release barrier — an application-level gate the task cannot pass on its own.** A task performs
+**no S3, secret or provider operation** until it has read and validated a *placement release* that the launch
+tool writes only after the placement verification above has passed. The release is delivered through the
+same channel as the binding and the input — a per-actor SSM parameter — so the task needs no new channel and
+the launcher needs no data-plane permission.
+
+```text
+/kalpamani/production/acquisition/release          kalpamani-placement-release/v1
+/kalpamani/production/research-build/release       (the same contract; the actor field differs)
+tier      advanced   ·   type SecureString under kalpamani-task-bindings   ·   size <= 8 KiB
+```
+
+| | |
+|---|---|
+| **content** | `schema_version`; `contract_id`; `actor`; `task_arn` (the exact task the launcher verified); `task_definition_arn` (the exact revision); `run_identity` (acquisition) or `build_identity` (build); `input_digest` (SHA-256 of the input document the launch tool materialized for this run); `network_interface_id`, `subnet_id`; `verified_at`; `expires_at` |
+| **writer** | the actor's **launcher permission set only**: `ssm:PutParameter` on exactly this parameter with `Bool ssm:Overwrite = false` (create only), `ssm:DeleteParameter` on it, `kms:GenerateDataKey` on the key with this parameter's encryption context and `kms:ViaService`; an `Expiration` policy of **one hour** rides in the same `PutParameter` call |
+| **reader** | the actor's **task role only** (task bootstrap policy: `ssm:GetParameter` + scoped `kms:Decrypt` on this ARN) |
+| **who may not** | the actor's human permission set — its bootstrap policy denies `ssm:PutParameter`/`DeleteParameter` on any parameter other than its input and `ssm:GetParameter*` on the other production parameters, and the release is not its input, so the create-only input rule and the release rule never meet in one policy; the launcher — denied every `ssm:GetParameter*` and `kms:Decrypt`, so it can write a release it cannot read back; the task — denied every parameter write |
+| **binding to the exact task and run** | the task accepts a release only if `task_arn` equals its own `TaskARN` from task metadata v4 (a documented field), `task_definition_arn` equals its own `Family`/`Revision`, `actor` equals the compiled actor, `run_identity`/`build_identity` equals the identity in the input it read, `input_digest` equals the digest it computed over that input, `verified_at <= now`, and `expires_at > now` with `expires_at - verified_at <= 10 min`; anything else is a **mismatched or stale release** and refuses |
+| **bounded waiting** | after the identity proof (2.12 step 6) the task polls `ssm:GetParameter` on the release ARN at a compiled interval (5 s) up to a compiled ceiling (**300 s**, at most 60 reads, each counted); `ParameterNotFound` means *not yet released* and is the only tolerated failure; any other error refuses at once |
+| **stop conditions** | no release by the ceiling → `REFUSED_NO_RELEASE`; a mismatched or stale release → `REFUSED_RELEASE_MISMATCH`; the launcher's placement verification failing → no release is ever written, the launcher issues `StopTask`, and the task — if it is still running — exits by the ceiling; in every case **zero** S3, secret and provider operations have occurred |
+| **expiry** | the release is valid for at most ten minutes after `verified_at`; the parameter's lifecycle `Expiration` deletes it after one hour if cleanup does not |
+| **cleanup** | after the task's terminal state the launch tool, still under the launcher profile, issues one `ssm:DeleteParameter` on the release; because the parameter is create-only, a leftover release makes the next launch's release write fail — the stale-release guard on the writer's side, mirroring the task's `task_arn` check on the reader's side |
+
+**Why this is not a circular dependency with the input.** The input (2.6) is written by the actor's human
+principal before launch and names the run; the release is written by the launcher after launch and names the
+task **and** the input's digest. The task reads both, and the release must agree with the input it already
+holds. Neither parameter's writer can write the other's — the human bootstrap policy names only the input,
+the launcher policy names only the release — so the create-only input rule of 2.6 and the release rule here
+are enforced by disjoint statements on disjoint principals, and no policy contains a deny that another
+principal's allow depends on.
 
 **What IAM enforces at `RunTask`, and what it cannot.** `RunTask` is resource-scoped to the task-definition
 ARN and conditioned on the cluster, so **the family, the exact revision and the cluster are IAM-enforced**; a
@@ -578,6 +616,10 @@ objects. The binding and input parameters carry no vendor data; their deletion i
                        Family/Revision == compiled (2.9); placement is the launcher's check (1a), not the task's
  6  identity proof     one sts:GetCallerIdentity over the regional sts endpoint; account == binding,
                        role name == compiled task-role name; refusal = exit (2.5)
+ 6a release barrier    task polls its placement-release parameter (<= 60 reads, <= 300 s); the release must
+                       name this task ARN, this revision, this run identity and this input digest and be
+                       unexpired (2.9); no release / mismatch / timeout = exit with zero S3, secret or
+                       provider operations
  7  data operations    acquisition: one GetSecretValue; 48 provider requests over the SG-allowlisted origin;
                        conditional PutObject per artifact; locator last (2.2, 2.4, 2.7)
                        build: locator by exact name, validated (2.4); exact reads with digest + byte count
@@ -588,13 +630,22 @@ objects. The binding and input parameters carry no vendor data; their deletion i
  9  termination        runner exits with its closed code; ephemeral storage does not outlive the task and
                        the runner deletes its working directory before exit regardless; no volume exists
 10  cleanup            launch tool: records terminal state + counts beside the input; writes the ledger row
-                       (acquisition) on the workstation; then, back under the actor's human profile, one
-                       ssm:DeleteParameter on the input parameter; the lifecycle Expiration policy deletes
-                       it anyway at 24 h (2.6)
+                       (acquisition) on the workstation; one ssm:DeleteParameter on the release parameter
+                       under the launcher profile; then, back under the actor's human profile, one
+                       ssm:DeleteParameter on the input parameter; the lifecycle Expiration policies delete
+                       both anyway (release 1 h, input 24 h) (2.6, 2.9)
 ```
 
-Every refusal between steps 4 and 6 happens before any S3, secret or provider operation; every count in step 7
+Every refusal between steps 4 and 6a happens before any S3, secret or provider operation; every count in step 7
 is reported as observed, never as planned.
+
+**The same run when placement fails.** Steps 0–1 as above; at 1a the launch tool finds a subnet, security
+group or public-IP mismatch: it issues `StopTask`, records the incident, and **writes no release**. The task,
+if it started, passes steps 2–6 (bootstrap and identity proof touch no data), reaches 6a, polls until the
+ceiling and exits `REFUSED_NO_RELEASE` — or is stopped first. At 10 the launch tool deletes the input
+parameter (there is no release to delete) and records the run as **misplaced, zero data operations**. A
+launcher that skipped 1a cannot release either: the release contract requires the verified interface and
+subnet identifiers, which only the verification produces.
 
 ---
 
@@ -622,10 +673,10 @@ is separately authorized and counted.
 | A-3 | permission-set names (`KalpaManiProductionAcquire`, `KalpaManiResearchBuild`, `KalpaManiAcquireLauncher`, `KalpaManiBuildLauncher`) are 1–32 characters under the pinned provider's validator (ADR-0022's guard, reused) |
 | A-4 | task-role trust policies name only `ecs-tasks.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` conditions; no `AWS` principal; the execution role's policy holds exactly the actions of 2.9 and no `ssm`, `secretsmanager` or `kms` action |
 | A-5 | the identity gate accepts exactly the two human role-prefix shapes and the two task-role names, per actor, and refuses the other actor's, the qualification actors', the foundation profile's and role's, and a default-chain identity (synthetic fixtures) |
-| A-6 | the four binding/input contracts refuse each other and every qualification binding on the field set; the SSM-delivered document passes the same parser; an expired, oversize, or spent-identity input is refused (synthetic) |
-| A-7 | the bootstrap policies: each task role's `ssm:GetParameter` and `kms:Decrypt` name exactly its two parameter ARNs and the one key with `kms:EncryptionContext:PARAMETER_ARN` and `kms:ViaService` conditions, and each task bootstrap policy denies `ssm:PutParameter`, `ssm:DeleteParameter`, `kms:Encrypt` and `kms:GenerateDataKey`; each human bootstrap policy allows `ssm:PutParameter` (with `ssm:Overwrite = false`), `ssm:DeleteParameter` and `kms:GenerateDataKey` on exactly its input parameter and denies every binding-parameter read; the data-plane policies carry no `ssm:*` or `kms:*` statement of either effect (**no shared deny can override a bootstrap allow**); no principal holds `ssm:PutParameter` on a binding parameter; the key policy names the apply principal (`Encrypt`, binding contexts), the two task roles (`Decrypt`) and the two human generated-role prefixes (`GenerateDataKey`, input contexts), and nothing else |
+| A-6 | the four binding/input contracts and the release contract refuse each other and every qualification binding on the field set; the SSM-delivered document passes the same parser; an expired, oversize, or spent-identity input is refused (synthetic); a release naming another task ARN, another revision, another identity, another input digest, or one that is expired or older than ten minutes is refused, and the barrier exits at the polling ceiling with zero data operations (synthetic clock and parameter store) |
+| A-7 | the bootstrap policies: each task role's `ssm:GetParameter` and `kms:Decrypt` name exactly its two parameter ARNs and the one key with `kms:EncryptionContext:PARAMETER_ARN` and `kms:ViaService` conditions, and each task bootstrap policy denies `ssm:PutParameter`, `ssm:DeleteParameter`, `kms:Encrypt` and `kms:GenerateDataKey`; each human bootstrap policy allows `ssm:PutParameter` (with `ssm:Overwrite = false`), `ssm:DeleteParameter` and `kms:GenerateDataKey` on exactly its input parameter and denies every binding-parameter read; each task bootstrap policy's third `ssm:GetParameter`/`kms:Decrypt` pair names exactly its release parameter; each launcher policy allows `ssm:PutParameter` (with `ssm:Overwrite = false`), `ssm:DeleteParameter` and `kms:GenerateDataKey` on exactly its release parameter and denies every `ssm:GetParameter*` and `kms:Decrypt`; no two policies grant a write on the same parameter; the data-plane policies carry no `ssm:*` or `kms:*` statement of either effect (**no shared deny can override a bootstrap allow**); no principal holds `ssm:PutParameter` on a binding parameter; the key policy names the apply principal (`Encrypt`, binding contexts), the two task roles (`Decrypt`, binding/input/release contexts), the two human generated-role prefixes (`GenerateDataKey`, input contexts) and the two launcher generated-role prefixes (`GenerateDataKey`, release contexts), and nothing else |
 | A-8 | static import guards: the acquisition runner imports no read surface; the build runner imports no credential, secrets boundary or provider transport; neither reads an environment variable other than the metadata URI |
-| A-9 | task definitions: image reference is a digest, `secrets` absent, no `environment` entry, no volumes, no port mappings, `command` equals the runner entrypoint, each names its own actor's task role; each launcher policy's `ecs:RunTask` resource is exactly its actor's `family:revision` ARN Terraform records, its `iam:PassRole` allows exactly its actor's task role and the execution role with `iam:PassedToService` and denies `iam:PassRole` on `NotResource` those two, it carries no other `iam:*` statement of either effect (**the PassRole grant is never overridden**), `ecs:ExecuteCommand` is denied, and it carries no `s3`, `secretsmanager`, `ssm` or `kms` statement |
+| A-9 | task definitions: image reference is a digest, `secrets` absent, no `environment` entry, no volumes, no port mappings, `command` equals the runner entrypoint, each names its own actor's task role; each launcher policy's `ecs:RunTask` resource is exactly its actor's `family:revision` ARN Terraform records, its `iam:PassRole` allows exactly its actor's task role and the execution role with `iam:PassedToService` and denies `iam:PassRole` on `NotResource` those two, it carries no other `iam:*` statement of either effect (**the PassRole grant is never overridden**), `ecs:ExecuteCommand` is denied, and it carries no `s3` or `secretsmanager` statement and no `ssm`/`kms` statement other than the release parameter's |
 | A-10 | network declarations: the build subnet's route table has no `0.0.0.0/0` route; the build security group's egress names only the S3 prefix list, the endpoint security group and VPC-resolver DNS; the acquisition security group's egress names those plus the provider CIDR set and no `0.0.0.0/0`; the S3 endpoint policy names only the two buckets |
 
 **L1 — offline Terraform:** A-11 — `terraform validate` in an isolated external copy under the pinned provider,
@@ -646,7 +697,7 @@ is recorded as the simulation's decision, **not** as proof that S3 refused or ac
 
 | Cell | Actor | Must succeed | Must be refused |
 |---|---|---|---|
-| R-1 | acquisition (task) | task reaches step 6 of 2.12 and exits with the closed "verification only" code: image pulled by digest over the endpoints, log stream written, both parameters decrypted, metadata self-check passed, `GetCallerIdentity` over the regional endpoint | — |
+| R-1 | acquisition (task) | task reaches step 6a of 2.12 and exits with the closed "verification only" code: image pulled by digest over the endpoints, log stream written, binding and input decrypted, metadata self-check passed, `GetCallerIdentity` over the regional endpoint, a matching release read and accepted | a second launch of the same verification image with **no release written** exits `REFUSED_NO_RELEASE` at the ceiling with zero S3, secret and provider operations; a release naming a different task ARN exits `REFUSED_RELEASE_MISMATCH` |
 | R-2 | build (task) | the same for the build task | any provider-origin connection attempt from the build subnet **times out or is refused at the network layer** (a deliberate probe in the verification image, not in the production image) |
 | R-3 | the **otherwise-authorized control principal** — see the R-3 procedure below | the positive control: one conditional `PutObject` of a synthetic object succeeds | the negative controls: unconditional, copy-shaped and multipart creation under the same prefix are refused **with an explicit deny in a resource-based policy** (2.7, **the application-gate prerequisite**) |
 | R-4 | acquisition (human and task) | `GetSecretValue` on the one secret; conditional `PutObject` to each production Bronze prefix and to `_indexes/` (synthetic object, deleted by the deletion role afterwards under its own runbook step) | `GetObject` on its own write; `ListBucket`; `DeleteObject`; `PutObject` to `silver/`, `gold/`, `manifests/`, any qualification prefix, the CONTROL bucket; `GetSecretValue` on the qualification secret; `DescribeSecret`; `ssm:GetParameter` on the other actor's parameters; `ssm:PutParameter` on any binding parameter |
@@ -676,7 +727,8 @@ refused; R-3 is designed so that the refusal is attributable to the bucket polic
   `with an explicit deny in a resource-based policy` (S3 access-denied troubleshooting documentation). The
   verification records **only the classification** of the error context — resource-based explicit deny,
   identity-based, other, or absent — and never the message text, which names the caller ARN.
-- **Operations, in order, each counted (one `GetCallerIdentity` first; nine S3 operations):**
+- **Expected-path operations, in order, each counted (one `GetCallerIdentity` first; nine S3 operations — the
+  expected-path count; failure-path operations are counted separately below):**
 
 | # | Operation | Expected | Establishes |
 |---|---|---|---|
@@ -694,6 +746,30 @@ refused; R-3 is designed so that the refusal is attributable to the bucket polic
   context, a `200` on row 2, 4, 5 or 6, an object found on row 3, 7 or 9 — is recorded as **not verified**, and
   the gate closes as 2.7 says. A row that cannot be executed is recorded as **not exercised**, and the gate
   stays closed.
+
+- **Failure-path cleanup — runs after any failed row, before the result is recorded.** A failed negative
+  control may have *created* something: an object (row 2, 4 or 5 returning `200`) or an in-progress multipart
+  upload (row 6 returning `200` with an `UploadId`). The verification captures every returned `UploadId` and
+  every key it attempted, and the **same control principal**, under the same authorization, performs the
+  cleanup below; its identity policy already grants `s3:DeleteObject`, `s3:AbortMultipartUpload`,
+  `s3:ListMultipartUploadParts` and `s3:GetObject`, and the bucket policy's statements govern `PutObject`
+  only, so none of these operations is refused by it. The verification result is computed **after** cleanup.
+
+| Trigger | Cleanup operation | Confirmation | Budget |
+|---|---|---|---|
+| row 2 returned `200` | `DeleteObject` `…/unconditional` | `HeadObject` → `404` | 1 + 1 |
+| row 4 or 5 returned `200` | `DeleteObject` `…/copied` | `HeadObject` → `404` | 1 + 1 |
+| row 6 returned `200` with `UploadId` | `AbortMultipartUpload` `…/multipart` with that `UploadId` | `ListParts` with that `UploadId` → `NoSuchUpload` (no part was ever uploaded, so an empty parts list is not expected and is also a failure); AWS documents that an abort may need repeating while part uploads are in progress — none is, and at most **one** repeat is permitted | 1 + 1 (+ 1 + 1 on a repeat) |
+| row 8 failed or row 9 found the object | `DeleteObject` `…/positive` once more | `HeadObject` → `404` | 1 + 1 |
+
+  Failure-path budget: **at most 10 S3 operations** in addition to the nine of the expected path, and no
+  other operation of any kind. **Unresolved cleanup keeps the gate closed**: if any confirmation fails, or a
+  cleanup operation is refused, or the budget is exhausted, R-3 is recorded **not verified — cleanup
+  unresolved**, the residue is recorded by its synthetic key (no private value is in a `_verification/` key
+  or in an `UploadId`), and its removal is a separately authorized runbook step; the bucket's existing
+  `AbortIncompleteMultipartUpload` lifecycle rule is a backstop for an unaborted upload, not the cleanup.
+  A resolved cleanup after a failed row leaves R-3 **not verified** all the same — cleanup restores the bucket,
+  it does not restore the result.
 
 A cell that cannot be exercised is recorded as **not exercised**, never as passed; a cell decided by
 simulation only is recorded as **simulated**, never as verified. **R-3 is the gate**: until it is verified,
@@ -750,6 +826,11 @@ nothing in R-4 to R-9 is reached, because no production assignment exists.
 - **Verify placement from inside the task through task metadata.** Rejected: the documented metadata fields
   do not include a subnet identifier or a public-IP association; the launcher-side `DescribeTasks` /
   `DescribeNetworkInterfaces` check uses documented fields.
+- **Let the task proceed on the launcher's verification without a release.** Rejected: a check the task cannot
+  observe is a check the task cannot depend on; the release binds the verified placement to the exact task,
+  revision, identity and input, and a task that never sees one does nothing.
+- **Leave R-3 residue to the lifecycle rule.** Rejected: an unexpected write is evidence of a failed control and
+  is removed under the same authorization, confirmed, and counted; a lifecycle rule is a backstop.
 - **Simulate the bucket policy with `SimulatePrincipalPolicy`.** Rejected: resource-based policy simulation is
   documented as unsupported for IAM roles; the bucket policy is proved only by R-3's live controls.
 - **Read a generic `403` as bucket-policy enforcement.** Rejected: a `403` can be an implicit or identity-policy
@@ -784,6 +865,7 @@ production policies / bucket-policy statements /
   KMS key / SSM parameters / endpoints / subnets /
   task definitions / two launcher sets:       DESIGNED HERE -- NOT DECLARED, NOT APPLIED, NOT AUTHORIZED
 server-side conditional-write refusal (R-3):  NOT VERIFIED -- the application-gate prerequisite
+placement release barrier:                    DESIGNED -- NOT IMPLEMENTED
 governed production profiles and bindings:    NOT MATERIALIZED / NOT AUTHORIZED
 production run locator:                       DESIGNED -- NOT IMPLEMENTED
 first bounded ingestion:                      NOT AUTHORIZED / NOT RUN
@@ -806,4 +888,5 @@ context; Parameter Store parameter policies; ECS identity-based policy examples 
 and the regional-endpoint requirement; Fargate task ephemeral storage; the Fargate task metadata endpoint v4;
 `SimulatePrincipalPolicy` (resource-based simulation unsupported for roles); the ECS `Task` and `Attachment`
 API types (ENI attachment details); S3 access-denied troubleshooting (same-account explicit-deny context by
-policy type); Parameter Store parameter versions.
+policy type); Parameter Store parameter versions; S3 `AbortMultipartUpload` (repeat while parts are in flight;
+`ListParts` to confirm; `NoSuchUpload`).

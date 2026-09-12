@@ -261,6 +261,74 @@ def test_the_acceptance_procedure_is_executable_and_attributes_the_refusal() -> 
     assert "a `403` without the resource-based context" in ADR_FLAT
 
 
+def test_the_placement_release_barrier_holds_the_task_until_the_launcher_releases_it() -> None:
+    # Amendment (this cycle) 1: an application-level barrier bound to the exact task and run.
+    assert (
+        "**The placement release barrier — an application-level gate the task cannot pass"
+        in ADR_FLAT
+    )
+    for name in (
+        "/kalpamani/production/acquisition/release",
+        "/kalpamani/production/research-build/release",
+        "kalpamani-placement-release/v1",
+    ):
+        assert name in ADR_TEXT, name
+    for row in (
+        "| **content** |",
+        "| **writer** |",
+        "| **reader** |",
+        "| **who may not** |",
+        "| **binding to the exact task and run** |",
+        "| **bounded waiting** |",
+        "| **stop conditions** |",
+        "| **expiry** |",
+        "| **cleanup** |",
+    ):
+        assert ADR_TEXT.count(row) >= 1, row
+    assert "`task_arn` equals its own `TaskARN` from task metadata v4" in ADR_FLAT
+    assert "`input_digest` equals the digest it computed over that input" in ADR_FLAT
+    assert "**300 s**, at most 60 reads, each counted" in ADR_FLAT
+    assert "`REFUSED_NO_RELEASE`" in ADR_TEXT and "`REFUSED_RELEASE_MISMATCH`" in ADR_TEXT
+    assert "**zero** S3, secret and provider operations have occurred" in ADR_FLAT
+    # writer/reader permissions are disjoint from the create-only input rule
+    assert "**Why this is not a circular dependency with the input.**" in ADR_FLAT
+    assert "enforced by disjoint statements on disjoint principals" in ADR_FLAT
+    assert "this actor's placement-release parameter (2.9)" in ADR_FLAT
+    assert "| launcher release materialization |" in ADR_TEXT
+    assert " 6a release barrier" in ADR_TEXT
+    assert "**The same run when placement fails.**" in ADR_FLAT
+    assert "**writes no release**" in ADR_FLAT
+    assert "placement release barrier:                    DESIGNED -- NOT IMPLEMENTED" in ADR_TEXT
+
+
+def test_r3_failure_path_cleanup_is_defined_budgeted_and_confirmed() -> None:
+    # Amendment (this cycle) 2: failure-path cleanup, counted separately from the expected path.
+    assert (
+        "the expected-path count; failure-path operations are counted separately below" in ADR_FLAT
+    )
+    assert (
+        "**Failure-path cleanup — runs after any failed row, before the result is recorded.**"
+        in ADR_FLAT
+    )
+    assert "captures every returned `UploadId`" in ADR_FLAT
+    assert "`AbortMultipartUpload` `…/multipart` with that `UploadId`" in ADR_FLAT
+    assert "`ListParts` with that `UploadId` → `NoSuchUpload`" in ADR_FLAT
+    assert "at most **one** repeat is permitted" in ADR_FLAT
+    assert "**at most 10 S3 operations** in addition to the nine of the expected path" in ADR_FLAT
+    assert "**Unresolved cleanup keeps the gate closed**" in ADR_FLAT
+    assert "not verified — cleanup unresolved" in ADR_FLAT
+    assert "cleanup restores the bucket, it does not restore the result" in ADR_FLAT
+    assert "The verification result is computed **after** cleanup" in ADR_FLAT
+    assert "`AbortIncompleteMultipartUpload` lifecycle rule is a backstop" in ADR_FLAT
+
+
+def test_the_historical_qualification_write_claim_is_gone_from_the_prerequisite() -> None:
+    # Amendment (this cycle) 3.
+    assert "Run A and Run B, whose 290" not in ADR_FLAT
+    assert "290 conditional `PutObject`" not in ADR_FLAT
+    assert "demonstrated in the same session by R-3's fresh positive control" in ADR_FLAT
+
+
 def test_network_dependencies_are_a_per_actor_matrix_with_named_mechanisms() -> None:
     # Finding 1.
     assert "### 2.8 Network dependencies" in ADR_TEXT
@@ -337,7 +405,7 @@ def test_one_run_is_walked_end_to_end() -> None:
     ):
         assert step in ADR_TEXT, step
     assert (
-        "Every refusal between steps 4 and 6 happens before any S3, secret or provider operation"
+        "Every refusal between steps 4 and 6a happens before any S3, secret or provider operation"
         in ADR_FLAT
     )
 
