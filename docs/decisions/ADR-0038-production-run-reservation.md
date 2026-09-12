@@ -9,6 +9,16 @@ is not to be rewritten as though this decision had authority before it was accep
 becomes **ACCEPTED / IN FORCE** as **a narrow amendment of ADR-0037 §2's claim namespace — one additional
 object class under it — and nothing else**.
 
+**The condition above has since been satisfied.** **PR #96 merged** — merged **2026-09-12T15:10:12Z**, merge
+commit **`6ddfa3601a8b14d4e0768ddd823f2c5a34927bdd`**, ordered parents **`7c83da07308eca69b9484c09edd1769ca4055abe`** then
+**`61b501cfbb8b1105e11363e41b2767de5cc2aa0a`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`4e581c8b1f565d0a86f6c80d9d2279518beb7ea4`). ADR-0038 is therefore **ACCEPTED / IN FORCE** as a narrow amendment of
+ADR-0037 §2's claim namespace, effective together with the offline implementation merged beside it. While the
+pull request was open it was proposed and carried no authority — true then, and not rewritten. **Acceptance
+authorizes no run**: every gate ADR-0036 leaves closed stays closed, the reservation has been written only by
+synthetic fakes, and no IAM statement, bucket-policy statement, Terraform declaration or deployed resource
+changed on the merge.
+
 **Nothing was run to produce this decision.** No AWS call, no Terraform plan or apply, no read of any
 licensed object, no provider request. The evidence is the merged production key builders and the accepted
 ADRs that describe them.
