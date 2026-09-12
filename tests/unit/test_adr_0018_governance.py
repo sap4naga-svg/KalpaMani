@@ -592,8 +592,9 @@ class TestTheArchitectureIsStillOnlyAnArchitecture:
                         f"{path.name} declares {resource_type}.{name}. Designing a role is "
                         "not creating one, and infrastructure mutation is a separate gate."
                     )
-        sources = {path.name: path.read_text(encoding="utf-8") for path in infra.rglob("*.tf")}
-        assert GUARD.role_policy_attachment_violations(sources) == []
+        # The audit's own collector, keyed by repository-relative path: a dictionary
+        # built here by basename let two files share one key and hide each other.
+        assert GUARD.role_policy_attachment_violations(GUARD.infra_terraform_sources()) == []
 
     def test_the_offline_permission_set_candidate_exists_and_creates_no_identity(self) -> None:
         """The reverse-drift half. Deleting the candidate must fail too.

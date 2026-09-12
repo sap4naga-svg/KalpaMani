@@ -4307,56 +4307,256 @@ def _subject_shaped_literals(path: Path) -> list[str]:
     return found
 
 
+# ---------------------------------------------------------------------------
+# A parser for the HCL subset the infrastructure files use
+# ---------------------------------------------------------------------------
+#
+# Relocated here from tests/unit/test_qualification_infrastructure.py (which now
+# aliases it), because the attachment guard below must run in this standalone
+# script and a regular expression over raw text proved unable to see a block whose
+# closing brace is indented. Blocks, labels, attributes, nested blocks, strings and
+# heredocs -- structure is found on a blanked copy and content read from the
+# original, so a brace inside a comment or a string cannot open a block.
+
+
+@dataclass
+class Block:
+    """One HCL block: a type, its labels, its attributes and its child blocks."""
+
+    type: str
+    labels: tuple[str, ...]
+    attributes: dict[str, str] = field(default_factory=dict)
+    blocks: list[Block] = field(default_factory=list)
+
+    def children(self, block_type: str) -> list[Block]:
+        return [child for child in self.blocks if child.type == block_type]
+
+
+class HclSyntaxError(Exception):
+    """The document could not be parsed. Never silently treated as empty."""
+
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_HEREDOC = re.compile(r"<<-?([A-Za-z_][A-Za-z0-9_]*)\r?\n")
+
+
+def _strip_noise(text: str) -> str:
+    """Blank out comments, string bodies and heredoc bodies, preserving offsets.
+
+    Structure is found on the blanked copy and content is read from the original,
+    so a brace inside a comment or a string cannot open a block. Offsets are
+    preserved exactly -- every removed character becomes a space or is left as a
+    newline -- which is what lets the two copies be indexed interchangeably.
+    """
+    out = list(text)
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "#" or text.startswith("//", index):
+            while index < length and text[index] != "\n":
+                out[index] = " "
+                index += 1
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = length if end == -1 else end + 2
+            for position in range(index, end):
+                if text[position] != "\n":
+                    out[position] = " "
+            index = end
+            continue
+        heredoc = _HEREDOC.match(text, index)
+        if heredoc is not None:
+            marker = heredoc.group(1)
+            body = heredoc.end()
+            terminator = re.compile(rf"^[ \t]*{re.escape(marker)}[ \t]*$", re.MULTILINE)
+            found = terminator.search(text, body)
+            if found is None:
+                raise HclSyntaxError(f"unterminated heredoc {marker}")
+            for position in range(index, found.end()):
+                if text[position] != "\n":
+                    out[position] = " "
+            index = found.end()
+            continue
+        if char == '"':
+            index += 1
+            while index < length:
+                if text[index] == "\\":
+                    out[index] = " "
+                    if index + 1 < length:
+                        out[index + 1] = " "
+                    index += 2
+                    continue
+                if text[index] == '"':
+                    break
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            if index >= length:
+                raise HclSyntaxError("unterminated string")
+            index += 1
+            continue
+        index += 1
+    return "".join(out)
+
+
+def _matching(masked: str, start: int, opening: str, closing: str) -> int:
+    """The index of the delimiter closing the one at ``start``."""
+    depth = 0
+    for position in range(start, len(masked)):
+        if masked[position] == opening:
+            depth += 1
+        elif masked[position] == closing:
+            depth -= 1
+            if depth == 0:
+                return position
+    raise HclSyntaxError(f"unbalanced {opening!r}")
+
+
+def _parse_body(text: str, masked: str, start: int, end: int) -> tuple[dict[str, str], list[Block]]:
+    attributes: dict[str, str] = {}
+    blocks: list[Block] = []
+    index = start
+    while index < end:
+        if masked[index] in " \t\r\n":
+            index += 1
+            continue
+        identifier = _IDENT.match(masked, index)
+        if identifier is None:
+            raise HclSyntaxError(f"unexpected character {masked[index]!r} at {index}")
+        name = identifier.group(0)
+        cursor = identifier.end()
+        while cursor < end and masked[cursor] in " \t":
+            cursor += 1
+        if cursor < end and masked[cursor] == "=":
+            cursor += 1
+            value_start = cursor
+            value_end = _expression_end(masked, cursor, end)
+            attributes[name] = text[value_start:value_end].strip()
+            index = value_end
+            continue
+        labels: list[str] = []
+        while cursor < end and masked[cursor] == '"':
+            close = masked.index('"', cursor + 1)
+            labels.append(text[cursor + 1 : close])
+            cursor = close + 1
+            while cursor < end and masked[cursor] in " \t":
+                cursor += 1
+        if cursor >= end or masked[cursor] != "{":
+            raise HclSyntaxError(f"block {name!r} has no body")
+        close = _matching(masked, cursor, "{", "}")
+        child_attributes, child_blocks = _parse_body(text, masked, cursor + 1, close)
+        blocks.append(Block(name, tuple(labels), child_attributes, child_blocks))
+        index = close + 1
+    return attributes, blocks
+
+
+def _expression_end(masked: str, start: int, end: int) -> int:
+    """Where one attribute expression stops: a newline outside any bracket."""
+    depth = 0
+    index = start
+    while index < end:
+        char = masked[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "\n" and depth <= 0:
+            return index
+        index += 1
+    return end
+
+
+def parse_hcl(text: str) -> list[Block]:
+    """Every top-level block in ``text``.
+
+    Raises:
+        HclSyntaxError: on anything this subset cannot represent. A parse failure
+            is never rounded down to an empty document -- that is how a suite
+            starts passing against a file it no longer understands.
+    """
+    masked = _strip_noise(text)
+    _, blocks = _parse_body(text, masked, 0, len(masked))
+    return blocks
+
+
 #: The ONLY ``aws_iam_role_policy_attachment`` resources this repository may declare,
-#: as exact ``(file, role, policy)`` triples: ADR-0036 s.2.1 attaches each production
-#: task role's data-plane policy and its task-bootstrap policy, in
-#: ``production_principals.tf``, and nothing else. A name-based exemption (anything
-#: labelled ``production_``) was replaced by this table because a label proves
-#: nothing about what is attached to what: an attachment of the acquisition policy
-#: to the build role, of a production policy to the foundation task role, or of
-#: anything at all in another file, is a violation however it is labelled.
+#: as exact ``(repository-relative path, role, policy)`` triples: ADR-0036 s.2.1
+#: attaches each production task role's data-plane policy and its task-bootstrap
+#: policy, in ``production_principals.tf``, and nothing else. A name-based exemption
+#: (anything labelled ``production_``) was replaced by this table because a label
+#: proves nothing about what is attached to what; and the path is the full
+#: repository-relative path, not a basename, because two files in different
+#: directories can share a basename and a basename-keyed scan let one hide the other.
+ADR_0036_ATTACHMENT_FILE: Final = "infra/aws/research-data-plane/production_principals.tf"
+
 ADR_0036_APPROVED_ATTACHMENTS: Final[frozenset[tuple[str, str, str]]] = frozenset(
     {
-        ("production_principals.tf", "production_acquire_task", "production_acquisition"),
-        (
-            "production_principals.tf",
-            "production_acquire_task",
-            "production_acquire_task_bootstrap",
-        ),
-        ("production_principals.tf", "production_build_task", "production_build"),
-        ("production_principals.tf", "production_build_task", "production_build_task_bootstrap"),
+        (ADR_0036_ATTACHMENT_FILE, "production_acquire_task", "production_acquisition"),
+        (ADR_0036_ATTACHMENT_FILE, "production_acquire_task", "production_acquire_task_bootstrap"),
+        (ADR_0036_ATTACHMENT_FILE, "production_build_task", "production_build"),
+        (ADR_0036_ATTACHMENT_FILE, "production_build_task", "production_build_task_bootstrap"),
     }
 )
 
-_ROLE_POLICY_ATTACHMENT_BLOCK: Final = re.compile(
-    r'resource\s+"aws_iam_role_policy_attachment"\s+"([^"]+)"\s*\{(.*?)\n\}', re.DOTALL
-)
+#: An attachment must name a stage-gated role and a stage-gated policy BY RESOURCE
+#: REFERENCE, exactly: no literal ARN, no ungated reference, no expression around it.
+_ATTACHMENT_ROLE_REF: Final = re.compile(r"aws_iam_role\.([A-Za-z0-9_]+)\[0\]\.name")
+_ATTACHMENT_POLICY_REF: Final = re.compile(r"aws_iam_policy\.([A-Za-z0-9_]+)\[0\]\.arn")
+
+
+def infra_terraform_sources(repo_root: Path = REPO_ROOT) -> dict[str, str]:
+    """Every ``*.tf`` under ``<repo_root>/infra``, keyed by repository-relative POSIX path.
+
+    The key is the full relative path -- ``infra/aws/research-data-plane/iam.tf`` --
+    never the basename, so two files that share a name in different directories are
+    both retained and both scanned. ``repo_root`` is a parameter so a test can point
+    the real collector at a synthetic tree and prove that property rather than
+    assume it.
+    """
+    infra = repo_root / "infra"
+    if not infra.is_dir():
+        return {}
+    return {
+        path.relative_to(repo_root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(infra.rglob("*.tf"))
+    }
 
 
 def role_policy_attachment_violations(sources: Mapping[str, str]) -> list[str]:
     """Every ``aws_iam_role_policy_attachment`` that is not an approved triple.
 
-    Pure over ``sources`` (file name -> HCL), so the same rule runs against the
-    tracked tree and against deliberately mutated copies. Each attachment must
-    reference a stage-gated ``aws_iam_role.<role>[0].name`` and a stage-gated
-    ``aws_iam_policy.<policy>[0].arn`` by resource reference -- a literal ARN or an
-    ungated reference is refused -- and the ``(file, role, policy)`` triple must be
-    in :data:`ADR_0036_APPROVED_ATTACHMENTS`, exactly once. A missing or duplicated
-    approved triple is reported too, so deleting the declaration cannot pass.
+    Pure over ``sources`` (repository-relative path -> HCL), so the same rule runs
+    against the tracked tree and against deliberately mutated copies. Each file is
+    PARSED, not pattern-matched: a file this parser cannot read is reported as a
+    violation rather than skipped, and an attachment block is judged by its parsed
+    ``role`` and ``policy_arn`` attributes compared exactly against
+    :data:`ADR_0036_APPROVED_ATTACHMENTS`. Each approved triple must appear exactly
+    once, so a deleted or duplicated declaration is reported too.
     """
     seen: dict[tuple[str, str, str], int] = {}
     found: list[str] = []
     for filename in sorted(sources):
-        hcl = strip_hcl_comments(sources[filename])
-        for label, body in _ROLE_POLICY_ATTACHMENT_BLOCK.findall(hcl):
-            role = re.search(r"\brole\s*=\s*aws_iam_role\.([A-Za-z0-9_]+)\[0\]\.name\b", body)
-            policy = re.search(
-                r"\bpolicy_arn\s*=\s*aws_iam_policy\.([A-Za-z0-9_]+)\[0\]\.arn\b", body
+        try:
+            blocks = parse_hcl(sources[filename])
+        except HclSyntaxError as exc:
+            found.append(
+                f"{filename}: could not be parsed ({exc}); an unparsed file is refused, not skipped"
+            )
+            continue
+        for block in blocks:
+            if block.type != "resource" or block.labels[:1] != ("aws_iam_role_policy_attachment",):
+                continue
+            label = block.labels[1] if len(block.labels) > 1 else "<unlabelled>"
+            role = _ATTACHMENT_ROLE_REF.fullmatch(block.attributes.get("role", "").strip())
+            policy = _ATTACHMENT_POLICY_REF.fullmatch(
+                block.attributes.get("policy_arn", "").strip()
             )
             if role is None or policy is None:
                 found.append(
                     f"{filename}:aws_iam_role_policy_attachment.{label} does not attach a "
-                    "stage-gated aws_iam_policy to a stage-gated aws_iam_role by reference"
+                    "stage-gated aws_iam_policy to a stage-gated aws_iam_role by exact reference"
                 )
                 continue
             triple = (filename, role.group(1), policy.group(1))
@@ -4374,13 +4574,6 @@ def role_policy_attachment_violations(sources: Mapping[str, str]) -> list[str]:
                 f"approved attachment {triple} is declared {count} times; expected exactly once"
             )
     return found
-
-
-def _infra_sources() -> dict[str, str]:
-    infra = REPO_ROOT / "infra"
-    if not infra.is_dir():
-        return {}
-    return {path.name: read(path) for path in sorted(infra.rglob("*.tf"))}
 
 
 def _qualification_role_declarations() -> list[str]:
@@ -4419,7 +4612,7 @@ def _qualification_role_declarations() -> list[str]:
                 offenders.append(f"{path.name}:{resource_type}.{name}")
     # Role-policy attachments are judged by exact (file, role, policy) triple, not
     # by label: ADR-0036's four approved attachments and nothing else.
-    offenders.extend(role_policy_attachment_violations(_infra_sources()))
+    offenders.extend(role_policy_attachment_violations(infra_terraform_sources()))
     return offenders
 
 

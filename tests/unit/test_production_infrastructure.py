@@ -1330,17 +1330,154 @@ class TestQualificationArtifactsStayOutsideProduction:
 # ---------------------------------------------------------------------------
 
 
+#: The approved acquisition data-plane attachment line, reused by the malformed cases.
+APPROVED_POLICY_LINE = "  policy_arn = aws_iam_policy.production_acquisition[0].arn\n"
+
+
 class TestAttachmentGuardIsExact:
-    def test_the_real_tree_has_exactly_the_four_approved_attachments(
-        self, sources: dict[str, str]
-    ) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        assert GUARD.role_policy_attachment_violations(all_tf) == []
+    """Finding 3: the attachment guard judges by exact (repository-relative path, role,
+    policy) triple, parses Terraform rather than pattern-matching it, and its collector
+    keys every file by relative path so no two files can hide each other."""
+
+    PRINCIPALS = "infra/aws/research-data-plane/production_principals.tf"
+    IAM = "infra/aws/research-data-plane/iam.tf"
+    QUALIFICATION = "infra/aws/research-data-plane/qualification_principals.tf"
+
+    @staticmethod
+    def _real() -> dict[str, str]:
+        collected: dict[str, str] = GUARD.infra_terraform_sources()
+        return collected
+
+    def test_the_collector_keys_every_file_by_repository_relative_path(self) -> None:
+        collected = self._real()
+        on_disk = sorted(
+            p.relative_to(PROJECT_ROOT).as_posix() for p in (PROJECT_ROOT / "infra").rglob("*.tf")
+        )
+        assert sorted(collected) == on_disk, "the collector must retain every scanned file"
+        assert on_disk, "there are Terraform files to scan"
+        assert all(key.startswith("infra/") and "\\" not in key for key in collected)
+        assert self.PRINCIPALS in collected
+
+    def test_the_real_tree_has_exactly_the_four_approved_attachments(self) -> None:
+        assert GUARD.role_policy_attachment_violations(self._real()) == []
         assert len(GUARD.ADR_0036_APPROVED_ATTACHMENTS) == 4
+        assert {t[0] for t in GUARD.ADR_0036_APPROVED_ATTACHMENTS} == {self.PRINCIPALS}
+
+    @pytest.mark.parametrize("other_directory", ["infra/aaa-before", "infra/zzz-after"])
+    def test_a_same_basename_file_in_another_directory_is_scanned_in_either_ordering(
+        self, tmp_path: Path, other_directory: str
+    ) -> None:
+        """The REAL collector on a synthetic tree: two `production_principals.tf` files, one
+        authorized (the real one, at its real relative path) and one unauthorized, in a
+        directory that sorts before or after. Both must be retained and the unauthorized
+        one detected -- a basename-keyed scan kept only the later of the two."""
+        real = self._real()
+        authorized_dir = tmp_path / "infra" / "aws" / "research-data-plane"
+        authorized_dir.mkdir(parents=True)
+        for relative, text in real.items():
+            (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / relative).write_text(text, encoding="utf-8")
+        other = tmp_path / other_directory
+        other.mkdir(parents=True)
+        (other / "production_principals.tf").write_text(
+            'resource "aws_iam_role_policy_attachment" "production_acquire_task_data_plane" {\n'
+            "  count      = local.production_count_a\n"
+            "  role       = aws_iam_role.task.name\n"
+            "  policy_arn = aws_iam_policy.production_acquisition[0].arn\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        collected = GUARD.infra_terraform_sources(tmp_path)
+        assert len(collected) == len(real) + 1, "both same-basename files must be retained"
+        assert f"{other_directory}/production_principals.tf" in collected
+        assert self.PRINCIPALS in collected
+        found = GUARD.role_policy_attachment_violations(collected)
+        assert any(
+            f"{other_directory}/production_principals.tf:aws_iam_role_policy_attachment."
+            "production_acquire_task_data_plane" in f
+            for f in found
+        ), found
+        # the authorized file is still judged authorized: no message names the real path
+        assert not any(f.startswith(self.PRINCIPALS + ":") for f in found), found
+
+    def test_an_unauthorized_attachment_with_an_indented_closing_brace_is_detected(self) -> None:
+        """A regular expression that required an unindented `}` missed this block."""
+        all_tf = self._real()
+        all_tf[self.PRINCIPALS] += (
+            '\nresource "aws_iam_role_policy_attachment" "production_indented_widening" {\n'
+            "    count      = local.production_count_a\n"
+            "    role       = aws_iam_role.task.name\n"
+            "    policy_arn = aws_iam_policy.production_acquisition[0].arn\n"
+            "    }\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any("production_indented_widening" in f for f in found), found
+
+    def test_the_parser_reads_an_indented_closing_brace_block(self) -> None:
+        blocks = GUARD.parse_hcl(
+            'resource "aws_iam_role_policy_attachment" "x" {\n'
+            "    role       = aws_iam_role.task.name\n"
+            "    policy_arn = aws_iam_policy.p[0].arn\n"
+            "    }\n"
+        )
+        assert [b.labels for b in blocks] == [("aws_iam_role_policy_attachment", "x")]
+        assert blocks[0].attributes["role"].strip() == "aws_iam_role.task.name"
+        assert blocks[0].attributes["policy_arn"].strip() == "aws_iam_policy.p[0].arn"
+
+    def test_an_authorized_attachment_with_an_indented_closing_brace_is_still_accepted(
+        self,
+    ) -> None:
+        all_tf = self._real()
+        text = all_tf[self.PRINCIPALS]
+        start = text.index(
+            'resource "aws_iam_role_policy_attachment" "production_build_task_bootstrap"'
+        )
+        end = text.index("\n}\n", start)
+        all_tf[self.PRINCIPALS] = text[:end] + "\n    }\n" + text[end + 3 :]
+        assert GUARD.role_policy_attachment_violations(all_tf) == []
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            (
+                "literal-arn",
+                '  role       = "arn:aws:iam::000000000000:role/x"\n' + APPROVED_POLICY_LINE,
+            ),
+            (
+                "ungated-role",
+                "  role       = aws_iam_role.production_acquire_task.name\n" + APPROVED_POLICY_LINE,
+            ),
+            ("missing-policy", "  role       = aws_iam_role.production_acquire_task[0].name\n"),
+            (
+                "expression",
+                "  role       = aws_iam_role.production_acquire_task[0].name\n"
+                "  policy_arn = lower(aws_iam_policy.production_acquisition[0].arn)\n",
+            ),
+        ],
+    )
+    def test_a_malformed_or_unsupported_attachment_is_a_violation_not_a_silence(
+        self, label: str, body: str
+    ) -> None:
+        all_tf = self._real()
+        name = "production_" + label.replace("-", "_")
+        all_tf[self.PRINCIPALS] += (
+            f'\nresource "aws_iam_role_policy_attachment" "{name}" {{\n' + body + "}\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any(name in f and "exact reference" in f for f in found), found
+
+    def test_an_unparseable_file_is_a_violation_not_a_silence(self) -> None:
+        all_tf = self._real()
+        all_tf[self.IAM] += (
+            '\nresource "aws_iam_role_policy_attachment" "production_broken" {\n'
+            "  role = aws_iam_role.task.name\n"
+        )
+        found = GUARD.role_policy_attachment_violations(all_tf)
+        assert any(f.startswith(self.IAM + ": could not be parsed") for f in found), found
 
     def test_a_production_labelled_attachment_to_the_foundation_role_is_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        all_tf["production_principals.tf"] += (
+        all_tf = self._real()
+        all_tf[self.PRINCIPALS] += (
             '\nresource "aws_iam_role_policy_attachment" "production_foundation_widening" {\n'
             "  count      = local.production_count_a\n"
             "  role       = aws_iam_role.task.name\n"
@@ -1350,8 +1487,8 @@ class TestAttachmentGuardIsExact:
         assert any("production_foundation_widening" in f for f in found), found
 
     def test_swapped_actor_policies_are_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        text = all_tf["production_principals.tf"]
+        all_tf = self._real()
+        text = all_tf[self.PRINCIPALS]
         text = text.replace(
             "policy_arn = aws_iam_policy.production_acquisition[0].arn",
             "policy_arn = aws_iam_policy.__swap__[0].arn",
@@ -1364,14 +1501,14 @@ class TestAttachmentGuardIsExact:
             "policy_arn = aws_iam_policy.__swap__[0].arn",
             "policy_arn = aws_iam_policy.production_build[0].arn",
         )
-        all_tf["production_principals.tf"] = text
+        all_tf[self.PRINCIPALS] = text
         found = GUARD.role_policy_attachment_violations(all_tf)
         assert any("production_build to production_acquire_task" in f for f in found), found
         assert any("production_acquisition to production_build_task" in f for f in found), found
 
     def test_an_extra_attachment_in_another_file_is_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        all_tf["iam.tf"] += (
+        all_tf = self._real()
+        all_tf[self.IAM] += (
             '\nresource "aws_iam_role_policy_attachment" "production_acquire_task_extra" {\n'
             "  count      = local.production_count_a\n"
             "  role       = aws_iam_role.production_acquire_task[0].name\n"
@@ -1379,13 +1516,13 @@ class TestAttachmentGuardIsExact:
         )
         found = GUARD.role_policy_attachment_violations(all_tf)
         assert any(
-            "iam.tf:aws_iam_role_policy_attachment.production_acquire_task_extra" in f
+            f"{self.IAM}:aws_iam_role_policy_attachment.production_acquire_task_extra" in f
             for f in found
         ), found
 
     def test_a_duplicated_approved_attachment_is_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        all_tf["production_principals.tf"] += (
+        all_tf = self._real()
+        all_tf[self.PRINCIPALS] += (
             '\nresource "aws_iam_role_policy_attachment" "production_acquire_task_again" {\n'
             "  count      = local.production_count_a\n"
             "  role       = aws_iam_role.production_acquire_task[0].name\n"
@@ -1395,19 +1532,19 @@ class TestAttachmentGuardIsExact:
         assert any("declared 2 times" in f for f in found), found
 
     def test_a_deleted_approved_attachment_is_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        text = all_tf["production_principals.tf"]
+        all_tf = self._real()
+        text = all_tf[self.PRINCIPALS]
         start = text.index(
             'resource "aws_iam_role_policy_attachment" "production_build_task_bootstrap"'
         )
         end = text.index("\n}\n", start) + 3
-        all_tf["production_principals.tf"] = text[:start] + text[end:]
+        all_tf[self.PRINCIPALS] = text[:start] + text[end:]
         found = GUARD.role_policy_attachment_violations(all_tf)
         assert any("declared 0 times" in f for f in found), found
 
     def test_a_qualification_labelled_attachment_is_still_refused(self) -> None:
-        all_tf = {p.name: p.read_text(encoding="utf-8") for p in INFRA.glob("*.tf")}
-        all_tf["qualification_principals.tf"] += (
+        all_tf = self._real()
+        all_tf[self.QUALIFICATION] += (
             '\nresource "aws_iam_role_policy_attachment" "qualification_acquisition_attach" {\n'
             "  role       = aws_iam_role.task.name\n"
             "  policy_arn = aws_iam_policy.qualification_acquisition.arn\n}\n"

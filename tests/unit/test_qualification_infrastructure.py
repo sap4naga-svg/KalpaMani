@@ -30,10 +30,11 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol
+from typing import Any, Protocol, TypeAlias
 
 import pytest
 
@@ -97,166 +98,41 @@ CREDENTIAL_ACTIONS = frozenset(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class Block:
-    """One HCL block: a type, its labels, its attributes and its child blocks."""
-
-    type: str
-    labels: tuple[str, ...]
-    attributes: dict[str, str] = field(default_factory=dict)
-    blocks: list[Block] = field(default_factory=list)
-
-    def children(self, block_type: str) -> list[Block]:
-        return [child for child in self.blocks if child.type == block_type]
+# ---------------------------------------------------------------------------
+# The HCL-subset parser lives in the audit (scripts/phase3_docs_audit.py), where
+# the attachment guard that must parse Terraform runs standalone. It is aliased
+# here so every structural check in this module, and its own parser tests below,
+# exercise the one implementation rather than a copy.
+# ---------------------------------------------------------------------------
 
 
-class HclSyntaxError(Exception):
-    """The document could not be parsed. Never silently treated as empty."""
+def _audit_module() -> ModuleType:
+    """Load the audit by path, to *run* its guards rather than restate them.
 
+    ``scripts`` is not an importable package. The module is registered in
+    ``sys.modules`` before execution because the audit defines a ``@dataclass``,
+    and ``dataclasses`` resolves the defining module through that entry.
 
-_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
-_HEREDOC = re.compile(r"<<-?([A-Za-z_][A-Za-z0-9_]*)\r?\n")
-
-
-def _strip_noise(text: str) -> str:
-    """Blank out comments, string bodies and heredoc bodies, preserving offsets.
-
-    Structure is found on the blanked copy and content is read from the original,
-    so a brace inside a comment or a string cannot open a block. Offsets are
-    preserved exactly -- every removed character becomes a space or is left as a
-    newline -- which is what lets the two copies be indexed interchangeably.
+    Importing it defines constants and functions. It runs no check, opens no
+    socket and reaches no service -- ``main()`` is behind the usual guard.
     """
-    out = list(text)
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if char == "#" or text.startswith("//", index):
-            while index < length and text[index] != "\n":
-                out[index] = " "
-                index += 1
-            continue
-        if text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            end = length if end == -1 else end + 2
-            for position in range(index, end):
-                if text[position] != "\n":
-                    out[position] = " "
-            index = end
-            continue
-        heredoc = _HEREDOC.match(text, index)
-        if heredoc is not None:
-            marker = heredoc.group(1)
-            body = heredoc.end()
-            terminator = re.compile(rf"^[ \t]*{re.escape(marker)}[ \t]*$", re.MULTILINE)
-            found = terminator.search(text, body)
-            if found is None:
-                raise HclSyntaxError(f"unterminated heredoc {marker}")
-            for position in range(index, found.end()):
-                if text[position] != "\n":
-                    out[position] = " "
-            index = found.end()
-            continue
-        if char == '"':
-            index += 1
-            while index < length:
-                if text[index] == "\\":
-                    out[index] = " "
-                    if index + 1 < length:
-                        out[index + 1] = " "
-                    index += 2
-                    continue
-                if text[index] == '"':
-                    break
-                if text[index] != "\n":
-                    out[index] = " "
-                index += 1
-            if index >= length:
-                raise HclSyntaxError("unterminated string")
-            index += 1
-            continue
-        index += 1
-    return "".join(out)
+    spec = importlib.util.spec_from_file_location("kalpamani_phase3_docs_audit", AUDIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-def _matching(masked: str, start: int, opening: str, closing: str) -> int:
-    """The index of the delimiter closing the one at ``start``."""
-    depth = 0
-    for position in range(start, len(masked)):
-        if masked[position] == opening:
-            depth += 1
-        elif masked[position] == closing:
-            depth -= 1
-            if depth == 0:
-                return position
-    raise HclSyntaxError(f"unbalanced {opening!r}")
+GUARD = _audit_module()
 
-
-def _parse_body(text: str, masked: str, start: int, end: int) -> tuple[dict[str, str], list[Block]]:
-    attributes: dict[str, str] = {}
-    blocks: list[Block] = []
-    index = start
-    while index < end:
-        if masked[index] in " \t\r\n":
-            index += 1
-            continue
-        identifier = _IDENT.match(masked, index)
-        if identifier is None:
-            raise HclSyntaxError(f"unexpected character {masked[index]!r} at {index}")
-        name = identifier.group(0)
-        cursor = identifier.end()
-        while cursor < end and masked[cursor] in " \t":
-            cursor += 1
-        if cursor < end and masked[cursor] == "=":
-            cursor += 1
-            value_start = cursor
-            value_end = _expression_end(masked, cursor, end)
-            attributes[name] = text[value_start:value_end].strip()
-            index = value_end
-            continue
-        labels: list[str] = []
-        while cursor < end and masked[cursor] == '"':
-            close = masked.index('"', cursor + 1)
-            labels.append(text[cursor + 1 : close])
-            cursor = close + 1
-            while cursor < end and masked[cursor] in " \t":
-                cursor += 1
-        if cursor >= end or masked[cursor] != "{":
-            raise HclSyntaxError(f"block {name!r} has no body")
-        close = _matching(masked, cursor, "{", "}")
-        child_attributes, child_blocks = _parse_body(text, masked, cursor + 1, close)
-        blocks.append(Block(name, tuple(labels), child_attributes, child_blocks))
-        index = close + 1
-    return attributes, blocks
-
-
-def _expression_end(masked: str, start: int, end: int) -> int:
-    """Where one attribute expression stops: a newline outside any bracket."""
-    depth = 0
-    index = start
-    while index < end:
-        char = masked[index]
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "\n" and depth <= 0:
-            return index
-        index += 1
-    return end
-
-
-def parse_hcl(text: str) -> list[Block]:
-    """Every top-level block in ``text``.
-
-    Raises:
-        HclSyntaxError: on anything this subset cannot represent. A parse failure
-            is never rounded down to an empty document -- that is how a suite
-            starts passing against a file it no longer understands.
-    """
-    masked = _strip_noise(text)
-    _, blocks = _parse_body(text, masked, 0, len(masked))
-    return blocks
+# The parser's block type is resolved at import from a module mypy cannot see, so
+# annotations use ``Any`` and the runtime aliases are typed as such.
+Block: TypeAlias = Any
+HclSyntaxError: type[Exception] = GUARD.HclSyntaxError
+parse_hcl: Callable[[str], list[Any]] = GUARD.parse_hcl
+_strip_noise: Callable[[str], str] = GUARD._strip_noise
+_matching: Callable[[str, int, str, str], int] = GUARD._matching
 
 
 def string_list(expression: str) -> list[str]:
@@ -717,7 +593,7 @@ class TestTheCandidate:
                     "aws_iam_group_policy_attachment",
                 ):
                     offenders.append(f"{path.name}: {block.labels}")
-        offenders.extend(GUARD.role_policy_attachment_violations(_sources()))
+        offenders.extend(GUARD.role_policy_attachment_violations(GUARD.infra_terraform_sources()))
         assert offenders == [], f"an identity or attachment appeared: {offenders}"
 
     def test_no_trust_policy_is_declared_for_either_permission_set(self) -> None:
@@ -1715,26 +1591,6 @@ class TestCanonicalFormatting:
 # phrase the guard actually looks for, and every mutation below is applied to
 # in-memory text: no tracked file is written, and no private material is read.
 
-
-def _audit_module() -> ModuleType:
-    """Load the audit by path, to *run* its guards rather than restate them.
-
-    ``scripts`` is not an importable package. The module is registered in
-    ``sys.modules`` before execution because the audit defines a ``@dataclass``,
-    and ``dataclasses`` resolves the defining module through that entry.
-
-    Importing it defines constants and functions. It runs no check, opens no
-    socket and reaches no service -- ``main()`` is behind the usual guard.
-    """
-    spec = importlib.util.spec_from_file_location("kalpamani_phase3_docs_audit", AUDIT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-GUARD = _audit_module()
 
 REQUIRED: tuple[tuple[str, str], ...] = GUARD.QUALIFICATION_IAM_STATUS_REQUIRED
 FORBIDDEN: tuple[str, ...] = GUARD.QUALIFICATION_IAM_STATUS_FORBIDDEN
