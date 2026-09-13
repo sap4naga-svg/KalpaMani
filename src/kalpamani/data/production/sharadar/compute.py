@@ -24,6 +24,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
+from kalpamani.data.production.sharadar.metadata_grammar import (
+    CONFIGURATION_DIGEST_RE,
+    IMAGE_DIGEST_RE,
+)
 from kalpamani.data.production.sharadar.release import (
     NETWORK_INTERFACE_ID_RE,
     SUBNET_ID_RE,
@@ -156,6 +160,8 @@ class CompiledLaunch:
     actor: ProductionActor
     cluster_arn: str
     task_definition_arn: str
+    image_digest: str
+    configuration_digest: str
     task_role_arn: str
     execution_role_arn: str
     subnet_id: str
@@ -208,6 +214,10 @@ class CompiledLaunch:
             raise ValueError("the platform version must be pinned")
         if not KMS_KEY_ARN_RE.fullmatch(self.binding_key_arn or ""):
             raise ValueError("the compiled binding key ARN does not match its grammar")
+        if not IMAGE_DIGEST_RE.fullmatch(self.image_digest or ""):
+            raise ValueError("the registered image digest must be sha256:<64 hex>")
+        if not CONFIGURATION_DIGEST_RE.fullmatch(self.configuration_digest or ""):
+            raise ValueError("the registered configuration digest must be 64 lowercase hex")
 
     def __repr__(self) -> str:
         """The actor only. **Never an ARN or an identifier.**"""
@@ -260,6 +270,8 @@ class TaskDescription:
     last_status: str
     attachment: TaskAttachment | None
     exit_codes: tuple[int | None, ...]
+    #: Each container's documented ``imageDigest`` once ECS has pulled it; absent until then.
+    image_digests: tuple[str | None, ...]
 
     def __repr__(self) -> str:
         """Status only. **Never an ARN.**"""
@@ -356,17 +368,23 @@ def _parse_task(entry: object, *, cluster_name: str) -> TaskDescription:
             break
 
     exit_codes: list[int | None] = []
+    image_digests: list[str | None] = []
     containers = entry.get("containers")
     if isinstance(containers, list):
         for container in containers:
             code = container.get("exitCode") if isinstance(container, Mapping) else None
             exit_codes.append(code if type(code) is int else None)
+            digest = container.get("imageDigest") if isinstance(container, Mapping) else None
+            image_digests.append(
+                digest if type(digest) is str and IMAGE_DIGEST_RE.fullmatch(digest) else None
+            )
     return TaskDescription(
         task_arn=task_arn,
         task_definition_arn=definition,
         last_status=status,
         attachment=attachment,
         exit_codes=tuple(exit_codes),
+        image_digests=tuple(image_digests),
     )
 
 

@@ -13,7 +13,7 @@ factories are called -- SSM, STS, S3 -- and the accepted
 :func:`~kalpamani.data.production.sharadar.build_processing.run_production_build`
 runs: bootstrap, barrier, verified inputs, Silver, Gold, manifest last. Nothing about
 that path is reimplemented here; it is composed. The spent-identity registry is not a
-build concern and the accepted ``UnavailableSpentIdentities`` is passed, unconsulted.
+build concern and none is passed.
 
 **Mocked results are not AWS verification.**
 """
@@ -40,7 +40,6 @@ from kalpamani.data.production.sharadar.entry import (
     refusal_receipt,
     run_cleanup,
 )
-from kalpamani.data.production.sharadar.identities import UnavailableSpentIdentities
 from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
 from kalpamani.data.production.sharadar.parameters import SsmLikeClient, SsmParameterAdapter
 from kalpamani.data.production.sharadar.runner import RunnerAdapters
@@ -126,20 +125,24 @@ def run_build_entry(*, configuration: EntryConfiguration, factories: BuildFactor
         environment=factories.environment,
     )
     if refused is not None:
-        return refusal_receipt(entry, refused, cleanup=cleanup)
+        return refusal_receipt(entry, refused, cleanup=cleanup, configuration=configuration)
     if configuration.build_configuration is None:
-        return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup)
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup, configuration=configuration
+        )
 
     try:
         bootstrap, processing = _compose(configuration, factories)
     except Exception:
-        return refusal_receipt(entry, TaskOutcome.REFUSED_DEPENDENCY, cleanup=cleanup)
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_DEPENDENCY, cleanup=cleanup, configuration=configuration
+        )
 
     try:
         report = run_production_build(
             compiled=configuration.compiled,
             bootstrap=bootstrap,
-            registry=UnavailableSpentIdentities(),
+            registry=None,
             processing=processing,
         )
     except Exception:
@@ -150,6 +153,8 @@ def run_build_entry(*, configuration: EntryConfiguration, factories: BuildFactor
             counts=OperationCounts(),
             counts_observed=False,
             cleanup_failures=run_cleanup(cleanup),
+            code_commit=configuration.compiled.code_commit,
+            configuration_digest=configuration.compiled.configuration_digest,
         )
 
     runner: RunnerOutcome = report.bootstrap.outcome
@@ -164,6 +169,9 @@ def run_build_entry(*, configuration: EntryConfiguration, factories: BuildFactor
         counts=report.counts,
         counts_observed=True,
         cleanup_failures=run_cleanup(cleanup),
+        code_commit=configuration.compiled.code_commit,
+        configuration_digest=configuration.compiled.configuration_digest,
+        evidence=report.bootstrap.evidence,
     )
 
 

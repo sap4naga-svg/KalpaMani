@@ -13,6 +13,16 @@ is — and nothing else**, effective together with the offline entrypoints merge
 §4 record proposals the owner has not decided; acceptance of this ADR decides neither.** **Acceptance
 authorizes no execution** (§6).
 
+**The condition above has since been satisfied.** **PR #100 merged** — merged **2026-09-12T19:55:44Z**, merge
+commit **`2b956c05d1aa171b571f6739d3d5756a00479847`**, ordered parents **`9d2bacc0095ad540bfc5b0bc351f51bfb09582dc`** then
+**`59f814ede3410a12eb84c7e02871886ec6116d17`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`56b0c7bcc45e4752bd70ccc9e957352a364a27cc`). ADR-0043's entrypoint-composition decision is therefore
+**ACCEPTED / IN FORCE**, effective together with the offline entrypoints merged beside it. While the pull
+request was open it was proposed and carried no authority — true then, and not rewritten. **Its §3 and §4 were
+not decided by that merge**: they remained proposals, and are resolved — as a proposal of its own — by
+[ADR-0044](ADR-0044-production-delivery-contracts-and-packaging.md), which also retires the fourth-parameter
+spent-identity document §3 sketched. **Acceptance authorizes no execution.**
+
 **Nothing was run to produce this decision.** No AWS call, no ECS metadata call, no Terraform plan or
 apply, no credential retrieval, no provider request, no image build. The evidence is the merged
 acquisition, build, provider and pagination implementations composed on synthetic fixtures, and the

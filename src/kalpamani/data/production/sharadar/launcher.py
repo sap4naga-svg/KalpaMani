@@ -271,6 +271,19 @@ def _placement_incident(
     return None
 
 
+def _image_incident(compiled: CompiledLaunch, task: TaskDescription) -> PlacementIncident | None:
+    """Every container must report the registered image digest (ADR-0044 §2).
+
+    ``DescribeTasks`` reports a container's ``imageDigest`` only once the image is
+    pulled; a missing digest is *unresolved*, not a mismatch, and the caller waits.
+    """
+    if not task.image_digests or any(digest is None for digest in task.image_digests):
+        return PlacementIncident.IMAGE_UNRESOLVED
+    if any(digest != compiled.image_digest for digest in task.image_digests):
+        return PlacementIncident.IMAGE_MISMATCH
+    return None
+
+
 def launch_authorized_run(
     *,
     compiled: CompiledLaunch,
@@ -415,6 +428,29 @@ def launch_authorized_run(
             raise _AbortedError(LaunchOutcome.MISPLACED, found)
         assert task.attachment.network_interface_id is not None
         assert task.attachment.subnet_id is not None
+        # The placement the launcher verified is what the release names, whatever a
+        # later description reports.
+        verified_interface = task.attachment.network_interface_id
+        verified_subnet = task.attachment.subnet_id
+        # Step 1b: the image, once ECS has pulled it and reports its digest. Bounded
+        # by the same ceiling as placement; an unresolved digest at the ceiling is a
+        # refusal to release, and a digest other than the registered one is misplaced.
+        while _image_incident(compiled, task) is PlacementIncident.IMAGE_UNRESOLVED:
+            if task.stopped:
+                exit_codes = task.exit_codes
+                raise _AbortedError(LaunchOutcome.TASK_TERMINAL)
+            if elapsed_since(started) + PLACEMENT_POLL_INTERVAL_SECONDS > PLACEMENT_CEILING_SECONDS:
+                stop_own_task(STOP_REASON_MISPLACED)
+                raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED)
+            sleep(PLACEMENT_POLL_INTERVAL_SECONDS)
+            try:
+                task = adapters.ecs.describe_task(task_arn)
+            except ComputeError:
+                raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED) from None
+        found = _image_incident(compiled, task)
+        if found is not None:
+            stop_own_task(STOP_REASON_MISPLACED)
+            raise _AbortedError(LaunchOutcome.MISPLACED, found)
         if task.stopped:
             # Placement verified, but the task is already terminal: a release
             # would name a task that can no longer read it, so none is written.
@@ -428,10 +464,12 @@ def launch_authorized_run(
                 actor=compiled.actor,
                 task_arn=task_arn,
                 task_definition_arn=task.task_definition_arn,
+                image_digest=compiled.image_digest,
+                configuration_digest=compiled.configuration_digest,
                 identity=authorization.identity,
                 input_digest=digest,
-                network_interface_id=task.attachment.network_interface_id,
-                subnet_id=task.attachment.subnet_id,
+                network_interface_id=verified_interface,
+                subnet_id=verified_subnet,
                 verified_at=verified_at,
             )
         except ReleaseError:

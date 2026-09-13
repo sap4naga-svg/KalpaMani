@@ -163,7 +163,7 @@ def run_production_build(
     *,
     compiled: CompiledTask,
     bootstrap: RunnerAdapters,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None,
     processing: BuildAdapters,
 ) -> BuildReport:
     """Bootstrap, barrier, then one bounded build and one manifest last.

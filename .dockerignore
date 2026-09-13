@@ -1,0 +1,17 @@
+# The production image build context is an allowlist (ADR-0044 s.6). Everything is
+# excluded, then only what an image needs is admitted: the package source, the one
+# task entrypoint, the packaging files and the git-ignored compiled-configuration
+# staging directory. No tests, docs, infra, LEAN, logs, private runtime area, git
+# metadata or workstation files can reach a build.
+*
+!pyproject.toml
+!src/
+!src/**
+!scripts/production_task_entrypoint.py
+!docker/production/constraints.txt
+!docker/production/entry/
+!docker/production/entry/**
+!docker/production/build/
+!docker/production/build/**
+**/__pycache__/
+**/*.pyc

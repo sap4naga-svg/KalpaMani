@@ -73,7 +73,9 @@ EXPECTED_REGION: Final = "us-east-1"
 GENERATED_ROLE_PREFIX: Final = "AWSReservedSSO_"
 
 #: The placement-release contract, shared by both actors; the actor field differs.
-RELEASE_CONTRACT_ID: Final = "kalpamani-placement-release/v1"
+#: Version 2 (ADR-0044 §2): the release also binds the observed image digest and the
+#: registered compiled-configuration digest, because neither can be compiled into an image.
+RELEASE_CONTRACT_ID: Final = "kalpamani-placement-release/v2"
 
 #: SSM parameter tiers and their value ceilings, from the Parameter Store limits:
 #: standard tier 4 KiB, advanced tier 8 KiB. A binding is standard tier; inputs and
@@ -95,7 +97,8 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         binding_contract_id="kalpamani-production-acquisition-runtime-binding/v1",
         binding_env_var="KALPAMANI_PRODUCTION_ACQUISITION_RUNTIME_BINDING_FILE",
         binding_parameter="/kalpamani/production/acquisition/runtime-binding",
-        input_contract_id="kalpamani-production-acquisition-input/v1",
+        # Version 2 (ADR-0044 §3): the input carries the owner ledger's spent identities.
+        input_contract_id="kalpamani-production-acquisition-input/v2",
         input_parameter="/kalpamani/production/acquisition/input",
         release_parameter="/kalpamani/production/acquisition/release",
         identity_field="run_identity",

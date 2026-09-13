@@ -193,3 +193,6 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Production image staging: the generated compiled configuration never enters Git.
+docker/production/build/

@@ -108,6 +108,26 @@ class RunnerAdapters:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class BootstrapEvidence:
+    """What a released bootstrap proved about *which* task ran: for the receipt.
+
+    Every field was compared against a source the task did not write -- the metadata
+    document, the release, the input bytes -- before the barrier passed. **Never
+    rendered**; the receipt carries them as a machine-readable line.
+    """
+
+    task_id: str
+    task_definition_arn: str
+    image_digest: str
+    identity: str
+    input_digest: str
+
+    def __repr__(self) -> str:
+        """A fixed token."""
+        return "BootstrapEvidence(<redacted>)"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RunnerReport:
     """The sanitized task-side result: outcome, stage, counts, barrier verdict.
 
@@ -123,6 +143,7 @@ class RunnerReport:
     binding: ProductionRuntimeBinding | None = None
     admitted_input: AcquisitionInput | BuildInput | None = None
     plan: CompiledPlan | None = None
+    evidence: BootstrapEvidence | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers; the bootstrap performs no data-plane operation."""
@@ -139,6 +160,8 @@ class RunnerReport:
             raise ValueError("the binding and the input are carried exactly when released")
         if self.plan is not None and type(self.admitted_input) is not AcquisitionInput:
             raise ValueError("a plan is carried only with an admitted acquisition input")
+        if released != (self.evidence is not None):
+            raise ValueError("bootstrap evidence is carried exactly when released")
 
     def __repr__(self) -> str:
         """Outcome and stage only."""
@@ -150,7 +173,7 @@ def _admit_input(
     document: dict[str, Any],
     *,
     now: datetime,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None,
 ) -> tuple[str, AcquisitionInput | BuildInput, CompiledPlan | None]:
     """The identity, the admitted input and (acquisition) the plan compiled from its slice."""
     if actor is ProductionActor.ACQUISITION:
@@ -165,12 +188,14 @@ def run_task_bootstrap(
     actor: ProductionActor,
     compiled: CompiledTask,
     adapters: RunnerAdapters,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None,
 ) -> RunnerReport:
     """The task-side sequence through the release barrier; one sanitized report.
 
-    ``registry`` serves the acquisition input contract's spent-identity clause and
-    is not consulted for a build. The acquisition plan is compiled **from the
+    ``registry`` is the **supplementary** spent-identity source for the acquisition
+    input contract (a workstation ledger on the human path; ``None`` on a task, whose
+    source is the input's own spent-identity block, ADR-0044 §3) and is not
+    consulted for a build. The acquisition plan is compiled **from the
     admitted input's own slice** and its digest compared to the input's; a
     mismatch refuses the input.
     """
@@ -253,6 +278,8 @@ def run_task_bootstrap(
             actor=actor,
             task_arn=metadata.task_arn,
             task_definition_arn=metadata.task_definition_arn(),
+            image_digest=metadata.image_ids[0],
+            configuration_digest=compiled.configuration_digest,
             identity=identity,
             input_digest=digest,
         )
@@ -291,6 +318,13 @@ def run_task_bootstrap(
         binding=binding,
         admitted_input=admitted,
         plan=plan,
+        evidence=BootstrapEvidence(
+            task_id=metadata.task_id,
+            task_definition_arn=metadata.task_definition_arn(),
+            image_digest=metadata.image_ids[0],
+            identity=identity,
+            input_digest=digest,
+        ),
     )
 
 
@@ -298,7 +332,7 @@ def run_build_task(
     *,
     compiled: CompiledTask,
     adapters: RunnerAdapters,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None,
 ) -> RunnerReport:
     """The build actor's bootstrap-only task: the bootstrap, then the honest halt.
 
@@ -390,6 +424,7 @@ def human_bootstrap(
 
 
 __all__ = [
+    "BootstrapEvidence",
     "HumanBootstrapOutcome",
     "HumanBootstrapReport",
     "RunnerAdapters",

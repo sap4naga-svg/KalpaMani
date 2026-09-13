@@ -10,24 +10,24 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import sys
 import tempfile
-import types
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 
 from fixtures.production_entry import ORIGIN_ADDRESSES
-from fixtures.production_runtime import compiled_task
+from fixtures.production_runtime import COMMIT, NOW, TREE
+from kalpamani.data.production.sharadar.compiled import (
+    COMPILED_CONFIGURATION_PATH,
+    build_compiled_configuration,
+)
 from kalpamani.data.production.sharadar.entry import (
     EXIT_STATUS,
-    EntryConfiguration,
     TaskEntry,
     TaskOutcome,
     task_sentence,
 )
-from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
 pytestmark = pytest.mark.unit
 
@@ -121,27 +121,42 @@ def _fail(what: str) -> Any:
 def test_an_absent_compiled_configuration_refuses_before_any_factory(
     entry: TaskEntry, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delitem(sys.modules, entrypoint.COMPILED_CONFIGURATION_MODULE, raising=False)
+    assert not Path(entrypoint.COMPILED_CONFIGURATION_PATH).exists()
     monkeypatch.setattr(entrypoint, "_factories", _fail("factories"))
     assert entrypoint.main([entry.value]) == EXIT_STATUS[TaskOutcome.REFUSED_CONFIGURATION] == 3
     assert capsys.readouterr().out.strip() == task_sentence(TaskOutcome.REFUSED_CONFIGURATION)
 
 
-def test_a_compiled_module_without_the_builder_or_raising_refuses(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"{not json", b"[]", b"\xef\xbb\xbf{}", b"{" + b" " * (256 * 1024) + b"}"],
+    ids=["empty", "not-json", "not-an-object", "bom", "oversize"],
+)
+def test_a_malformed_compiled_configuration_file_refuses(
+    content: bytes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    file = tmp_path / "compiled-configuration.json"
+    file.write_bytes(content)
+    monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
     monkeypatch.setattr(entrypoint, "_factories", _fail("factories"))
-    empty = types.ModuleType(entrypoint.COMPILED_CONFIGURATION_MODULE)
-    monkeypatch.setitem(sys.modules, entrypoint.COMPILED_CONFIGURATION_MODULE, empty)
-    assert entrypoint.main([TaskEntry.BUILD.value]) == 3
-    raising = types.ModuleType(entrypoint.COMPILED_CONFIGURATION_MODULE)
-    raising.entry_configuration = _fail("builder")  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, entrypoint.COMPILED_CONFIGURATION_MODULE, raising)
     assert entrypoint.main([TaskEntry.BUILD.value]) == 3
 
 
-def test_the_compiled_module_is_absent_from_this_repository() -> None:
-    assert importlib.util.find_spec(entrypoint.COMPILED_CONFIGURATION_MODULE) is None
+def test_a_file_compiled_for_the_other_entry_refuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cross-actor configuration: a build image must not run the acquisition entry."""
+    file = tmp_path / "compiled-configuration.json"
+    file.write_bytes(_compiled_bytes(TaskEntry.BUILD))
+    monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
+    monkeypatch.setattr(entrypoint, "_factories", _fail("factories"))
+    assert entrypoint.main([TaskEntry.ACQUISITION.value]) == 3
+
+
+def test_the_compiled_file_is_absent_from_this_repository_and_this_workstation() -> None:
+    assert not Path(entrypoint.COMPILED_CONFIGURATION_PATH).exists()
+    assert entrypoint.COMPILED_CONFIGURATION_PATH == COMPILED_CONFIGURATION_PATH
+    assert not list(REPO_ROOT.rglob("compiled-configuration.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -149,19 +164,25 @@ def test_the_compiled_module_is_absent_from_this_repository() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _compiled(entry: TaskEntry) -> EntryConfiguration:
-    actor = ProductionActor.ACQUISITION if entry is TaskEntry.ACQUISITION else ProductionActor.BUILD
-    if entry is TaskEntry.ACQUISITION:
-        return EntryConfiguration(
-            entry=entry,
-            compiled=compiled_task(actor),
-            secret_identifier="synthetic/production/sharadar",  # noqa: S106 - an identifier
-            origin_addresses=ORIGIN_ADDRESSES,
-        )
+def _compiled_bytes(entry: TaskEntry) -> bytes:
+    """A synthetic compiled configuration file for ``entry``, as the image gate would write."""
     from fixtures.production_build import configuration
 
-    return EntryConfiguration(
-        entry=entry, compiled=compiled_task(actor), build_configuration=configuration()
+    if entry is TaskEntry.ACQUISITION:
+        return build_compiled_configuration(
+            entry=entry,
+            code_commit=COMMIT,
+            code_tree=TREE,
+            generated_at=NOW,
+            secret_name="synthetic/production/sharadar",  # noqa: S106 - a name, not a value
+            origin_addresses=sorted(ORIGIN_ADDRESSES),
+        )
+    return build_compiled_configuration(
+        entry=entry,
+        code_commit=COMMIT,
+        code_tree=TREE,
+        generated_at=NOW,
+        build_configuration=configuration(),
     )
 
 
@@ -173,9 +194,9 @@ def test_on_a_workstation_the_credential_environment_refuses_before_any_client(
     tmp_path: Path,
 ) -> None:
     """The real factories are built; none is called: the environment refuses first."""
-    compiled = types.ModuleType(entrypoint.COMPILED_CONFIGURATION_MODULE)
-    compiled.entry_configuration = _compiled  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, entrypoint.COMPILED_CONFIGURATION_MODULE, compiled)
+    file = tmp_path / "compiled-configuration.json"
+    file.write_bytes(_compiled_bytes(entry))
+    monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
     monkeypatch.setattr(entrypoint, "_client", _fail("client construction"))
     monkeypatch.setattr(entrypoint, "_transport", _fail("transport construction"))
     monkeypatch.setattr(entrypoint, "_metadata_fetch", _fail("metadata fetch"))
@@ -191,6 +212,7 @@ def test_on_a_workstation_the_credential_environment_refuses_before_any_client(
     lines = capsys.readouterr().out.strip().splitlines()
     assert lines[0] == task_sentence(TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT)
     assert "counts_observed=true" in lines and "s3_operations=0" in lines
+    assert lines[-1].startswith("receipt: ") and '"binding_digest":null' in lines[-1]
     assert "synthetic-profile" not in "\n".join(lines)
     assert not (tmp_path / "work").exists()  # the working directory was cleaned up
 

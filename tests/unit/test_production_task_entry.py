@@ -38,9 +38,14 @@ from fixtures.production_entry import (
     resolve_outside,
 )
 from fixtures.production_runtime import (
+    ACCOUNT,
+    BUILD_ID,
     CANARIES,
+    COMMIT,
     OTHER_ACCOUNT,
     OTHER_TASK_ARN,
+    TASK_ARN,
+    TASK_ID,
     FakeClientError,
     build_input_document,
     compiled_task,
@@ -88,10 +93,20 @@ def rendered(receipt: TaskReceipt) -> str:
 
 
 def assert_sanitized(receipt: TaskReceipt) -> None:
-    text = rendered(receipt)
+    # The public code commit is the one value a receipt carries in the clear, and the
+    # synthetic task id happens to be a substring of it.
+    text = rendered(receipt).replace(COMMIT, "")
     for canary in CANARIES:
-        assert canary not in text
+        if canary == COMMIT:
+            continue
+        assert canary not in text, canary
     assert SECRET_VALUE not in text and METADATA_URI not in text
+    # The receipt line binds by digest and discloses no identifier (ADR-0044).
+    line = receipt.render()[-1]
+    assert line.startswith("receipt: ")
+    stripped = line.replace(COMMIT, "")  # the synthetic task id is a substring of the commit
+    for private in (ACCOUNT, TASK_ID, RUN_1, RUN_2, BUILD_ID, TASK_ARN):
+        assert private not in stripped
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +359,7 @@ class TestAcquisitionComposition:
         assert lines[0] == "production task completed: every operation confirmed"
         assert lines[1] == "bootstrap: production runner: release verified; processing may begin"
         assert lines[2] == "counts_observed=true"
-        assert lines[3:] == tuple(
+        expected_counts = tuple(
             f"{name}={value}"
             for name, value in {
                 "parameter_reads": 3,
@@ -360,14 +375,38 @@ class TestAcquisitionComposition:
                 "provider_requests": 16,
             }.items()
         )
+        assert lines[3:] == (*expected_counts, lines[-1])
+        assert lines[-1].startswith("receipt: ") and '"outcome":"COMPLETED"' in lines[-1]
 
-    def test_a_missing_spent_identity_source_stays_unavailable_and_refuses(self) -> None:
+    def test_the_input_carries_the_spent_identities_and_no_supplementary_source_is_needed(
+        self,
+    ) -> None:
+        """ADR-0044: the task's source is the input's own block; `None` is not unavailable."""
         harness = AcquisitionHarness(spent=None)
+        assert harness.run().outcome is TaskOutcome.COMPLETED
+
+    def test_an_input_whose_block_lists_its_own_identity_refuses(self) -> None:
+        harness = AcquisitionHarness(spent=None, spent_before=(RUN_1,))
         receipt = harness.run()
         assert receipt.outcome is TaskOutcome.REFUSED_INPUT and receipt.exit_code == 12
         assert receipt.runner is RunnerOutcome.REFUSED_INPUT
         assert harness.data_plane_calls() == (0, 0, 0) and harness.sts.calls == 0
         assert receipt.counts.data_plane_operations == 0
+
+    def test_an_input_without_the_spent_block_is_malformed_never_an_empty_ledger(self) -> None:
+        harness = AcquisitionHarness(spent=None)
+        document = json.loads(harness.input_bytes)
+        del document["spent_identities"]
+        harness.ssm.values[constants_for(ACQ).input_parameter] = encode(document)
+        assert harness.run().outcome is TaskOutcome.REFUSED_INPUT
+        assert harness.data_plane_calls() == (0, 0, 0)
+
+    def test_a_stale_spent_block_digest_refuses(self) -> None:
+        harness = AcquisitionHarness(spent=None)
+        document = json.loads(harness.input_bytes)
+        document["spent_identities"]["spent"] = [RUN_2]  # the list moved, the digest did not
+        harness.ssm.values[constants_for(ACQ).input_parameter] = encode(document)
+        assert harness.run().outcome is TaskOutcome.REFUSED_INPUT
 
     def test_a_spent_identity_from_the_configured_source_refuses(self) -> None:
         harness = AcquisitionHarness(spent=LedgerSpentIdentities([RUN_1]))
@@ -475,7 +514,8 @@ class TestAcquisitionComposition:
         receipt = harness.run(cleanup=failing_cleanup)
         assert receipt.outcome is TaskOutcome.REFUSED_NO_RELEASE and receipt.exit_code == 15
         assert [f.stage for f in receipt.cleanup_failures] == [CleanupStage.WORKING_DIRECTORY]
-        assert receipt.render()[-1] == "cleanup_failure=WORKING_DIRECTORY:CLEANUP_RAISED"
+        assert receipt.render()[-2] == "cleanup_failure=WORKING_DIRECTORY:CLEANUP_RAISED"
+        assert receipt.render()[-1].startswith("receipt: ")
         assert "/private/path" not in rendered(receipt)
         assert harness.data_plane_calls() == (0, 0, 0)
 

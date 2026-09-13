@@ -767,7 +767,7 @@ def token_violations(source: str, tokens: tuple[str, ...]) -> list[str]:
 
 
 #: Modules that name a profile-file variable only to **refuse** its presence by name
-#: (ADR-0043: a task holds the container credential provider and nothing else). The
+#: (ADR-0043, accepted: a task holds the container credential provider and nothing else). The
 #: refusal reads no value and opens no file; a test in the task-entry suite proves
 #: that naming these variables is what makes the environment refuse.
 PROFILE_REFUSING_MODULES: Final[frozenset[str]] = frozenset({"task_clients.py"})

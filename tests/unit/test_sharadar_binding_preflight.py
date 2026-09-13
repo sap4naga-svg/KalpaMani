@@ -2333,7 +2333,7 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
     Narrowed rather than relaxed, four times now. The earliest rule was 'this
     entry point and nowhere else', correct while it was the only operator surface;
     then two; the empirical qualification package adds its two operator entry
-    points; and the production task image entrypoint proposed by ADR-0043 is the
+    points; and the production task image entrypoint accepted with ADR-0043 is the
     fifth, constructing a client only after a closed entry is selected, a compiled
     configuration exists and the credential environment is a task's. Every one is
     named here, so a **sixth** arriving anywhere under ``src/``, ``scripts/`` or

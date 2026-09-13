@@ -827,6 +827,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0041", "PR #98 merged"),
     # ADR-0042 merged as PR #99 on 2026-09-12, with the build-side pagination admission gate.
     ("ADR-0042", "PR #99 merged"),
+    # ADR-0043 merged as PR #100 on 2026-09-12, with the two offline task entrypoints.
+    ("ADR-0043", "PR #100 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -6484,7 +6486,7 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 
 #: Every file permitted to construct an AWS SDK client or session. All five are
 #: entry points under ``scripts/`` that refuse by default -- four operator commands,
-#: and the production task image entrypoint proposed by ADR-0043, which builds a
+#: and the production task image entrypoint accepted with ADR-0043, which builds a
 #: client only after a closed entry is selected, a compiled configuration exists and
 #: the credential environment is a task's, and does so from a fresh botocore session
 #: whose credential resolver holds only the container provider (never ``boto3.client``

@@ -18,8 +18,11 @@ import pytest
 from fixtures.production_runtime import (
     BUILD_ID,
     CANARIES,
+    CONFIGURATION_DIGEST,
+    IMAGE_DIGEST,
     INTERFACE_ID,
     NOW,
+    OTHER_CONFIGURATION_DIGEST,
     OTHER_PLAN_DIGEST,
     OTHER_RUN_ID,
     OTHER_TASK_ARN,
@@ -27,6 +30,7 @@ from fixtures.production_runtime import (
     RUN_ID,
     SUBNET_ID,
     TASK_ARN,
+    TASK_ID,
     FakeClock,
     FakeSsm,
     acquisition_input_document,
@@ -87,6 +91,8 @@ class _Task:
             "actor": self.actor,
             "task_arn": TASK_ARN,
             "task_definition_arn": revision_arn(self.actor),
+            "image_digest": IMAGE_DIGEST,
+            "configuration_digest": CONFIGURATION_DIGEST,
             "identity": RUN_ID if self.actor is ACQ else BUILD_ID,
             "input_digest": input_digest(self.input_bytes),
             "network_interface_id": INTERFACE_ID,
@@ -247,11 +253,13 @@ class TestTheTaskSequence:
         [
             None,
             {"TaskARN": TASK_ARN},
-            metadata_document(ACQ, Revision="8"),
             metadata_document(ACQ, Family=constants_for(BLD).task_family),
-            metadata_document(ACQ, Containers=[{"ImageID": "sha256:" + "00" * 32}]),
+            metadata_document(
+                ACQ,
+                Containers=[{"ImageID": IMAGE_DIGEST}, {"ImageID": "sha256:" + "00" * 32}],
+            ),
         ],
-        ids=["absent", "partial", "revision", "family", "image"],
+        ids=["absent", "partial", "family", "sidecar"],
     )
     def test_a_failed_self_check_refuses_before_identity(self, metadata: object) -> None:
         task = _Task()
@@ -259,6 +267,44 @@ class TestTheTaskSequence:
         report = task.run()
         assert report.outcome is po.RunnerOutcome.REFUSED_SELF_CHECK
         assert task.identity_calls == 0
+
+    @pytest.mark.parametrize(
+        ("overrides", "defect"),
+        [
+            ({"Revision": "8"}, ReleaseDefect.REVISION_MISMATCH),
+            ({"Containers": [{"ImageID": "sha256:" + "00" * 32}]}, ReleaseDefect.IMAGE_MISMATCH),
+        ],
+        ids=["revision", "image"],
+    )
+    def test_a_revision_or_image_other_than_the_released_one_refuses_at_the_barrier(
+        self, overrides: dict[str, Any], defect: ReleaseDefect
+    ) -> None:
+        """ADR-0044: not compiled, so not a self-check; bound against the release."""
+        task = _Task()
+        task.metadata = metadata_document(ACQ, **overrides)
+        report = task.run()
+        assert report.outcome is po.RunnerOutcome.REFUSED_RELEASE_MISMATCH
+        assert task.identity_calls == 1 and report.counts.data_plane_operations == 0
+        assert report.barrier is not None and report.barrier.defect is defect
+
+    def test_a_configuration_other_than_the_released_one_refuses_at_the_barrier(self) -> None:
+        task = _Task()
+        task.write_release(configuration_digest=OTHER_CONFIGURATION_DIGEST)
+        report = task.run()
+        assert report.outcome is po.RunnerOutcome.REFUSED_RELEASE_MISMATCH
+        assert report.barrier is not None
+        assert report.barrier.defect is ReleaseDefect.CONFIGURATION_MISMATCH
+
+    def test_a_released_report_carries_bootstrap_evidence_and_a_refused_one_none(self) -> None:
+        released = _Task().run()
+        assert released.outcome is po.RunnerOutcome.RELEASED and released.evidence is not None
+        assert released.evidence.task_id == TASK_ID
+        assert released.evidence.image_digest == IMAGE_DIGEST
+        assert released.evidence.identity == RUN_ID
+        assert released.evidence.input_digest == input_digest(_Task().input_bytes)
+        assert "TASK" not in repr(released.evidence) and TASK_ID not in repr(released.evidence)
+        refused = _Task(release=False).run()
+        assert refused.evidence is None
 
     def test_a_raising_metadata_source_refuses(self) -> None:
         task = _Task()

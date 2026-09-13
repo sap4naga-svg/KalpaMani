@@ -47,10 +47,14 @@ cannot redirect a link-local read. The provider transport is the accepted origin
 one at the production response ceiling.
 
 **The compiled configuration does not exist in this repository.** The values an image
-needs beyond the code -- its own digest and revision, the acquisition secret
-identifier, the compiled origin address set, the build configuration -- are produced
-at the image gate (ADR-0043 proposes how) and imported here from a module that is
-absent until then. A missing module is ``REFUSED_CONFIGURATION`` with zero operations.
+needs beyond the code -- the acquisition secret name, the compiled origin address set,
+the build configuration, the code commit -- are generated at the image gate as one
+closed file (ADR-0044 §2) and copied into the image at a fixed path. This entrypoint
+reads that file, and only that file: it is absent on any workstation and in this
+repository, so the entry refuses ``REFUSED_CONFIGURATION`` with zero operations. The
+file's SHA-256 is the configuration digest the launch tool binds into the release; the
+image's own digest and its task-definition revision are never read from the image,
+because an image cannot know them -- the release attests both.
 
 **No workstation ledger integration.** The task writes its receipt to stdout (the
 allowlisted lines) and exits with the closed code; the launch tool records what it can
@@ -71,8 +75,8 @@ from typing import Any, Final
 #: The one refusal exit code this file emits on its own, before any entry exists.
 NO_ENTRY_EXIT_STATUS: Final = 2
 
-#: The module the image gate generates. Absent in this repository, by design.
-COMPILED_CONFIGURATION_MODULE: Final = "kalpamani_production_compiled"
+#: Where the image carries its compiled configuration. Absent on a workstation, by design.
+COMPILED_CONFIGURATION_PATH: Final = "/etc/kalpamani/compiled-configuration.json"
 
 
 def _environment_names() -> list[str]:
@@ -214,21 +218,33 @@ def _working_directory_cleanup(path: Any) -> Any:
     return cleanup
 
 
-def _compiled_configuration(entry: Any) -> Any:
-    """The image-gate module's configuration for ``entry``, or ``None`` if absent."""
-    import importlib
+def _compiled_configuration(entry: Any, *, path: Any = None) -> Any:
+    """The compiled configuration file's entry configuration, or ``None``.
 
+    ``None`` for an absent, unreadable, oversize, malformed or otherwise refused file,
+    and for a file compiled for the other entry: the entry then refuses
+    ``REFUSED_CONFIGURATION`` before anything else exists. ``path`` is a test seam; the
+    image reads the one fixed path.
+    """
+    from kalpamani.data.production.sharadar.compiled import (
+        MAX_COMPILED_CONFIGURATION_BYTES,
+        CompiledConfigurationError,
+        parse_compiled_configuration,
+    )
+
+    location = COMPILED_CONFIGURATION_PATH if path is None else path
     try:
-        module = importlib.import_module(COMPILED_CONFIGURATION_MODULE)
-    except ImportError:
-        return None
-    builder = getattr(module, "entry_configuration", None)
-    if not callable(builder):
+        with open(location, "rb") as handle:
+            raw = handle.read(MAX_COMPILED_CONFIGURATION_BYTES + 1)
+    except OSError:
         return None
     try:
-        return builder(entry)
-    except Exception:
+        configuration, _digest = parse_compiled_configuration(raw)
+    except CompiledConfigurationError:
         return None
+    if configuration.entry is not entry:
+        return None
+    return configuration
 
 
 def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> Any:
@@ -333,7 +349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return receipt.exit_code
 
 
-__all__ = ["COMPILED_CONFIGURATION_MODULE", "NO_ENTRY_EXIT_STATUS", "main"]
+__all__ = ["COMPILED_CONFIGURATION_PATH", "NO_ENTRY_EXIT_STATUS", "main"]
 
 
 if __name__ == "__main__":  # pragma: no cover - the image's process entry

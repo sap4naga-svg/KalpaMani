@@ -7,8 +7,7 @@ or provider verification.**
 from __future__ import annotations
 
 import ast
-import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -19,20 +18,13 @@ from fixtures.production_runtime import (
     ACCOUNT,
     OTHER_TASK_ARN,
     TASK_ARN,
-    FakeSsm,
     encode,
     metadata_document,
     task_identity_arn,
 )
 from kalpamani.data.ingest.sharadar.transport import ALLOWED_HOST
-from kalpamani.data.production.sharadar import spent_source, task_clients
-from kalpamani.data.production.sharadar.identities import (
-    SpentStatus,
-    UnavailableSpentIdentities,
-    spent_status_of,
-)
+from kalpamani.data.production.sharadar import task_clients
 from kalpamani.data.production.sharadar.metadata import parse_task_metadata
-from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
 from kalpamani.data.production.sharadar.task_clients import (
     CONTAINER_CREDENTIAL_VARIABLE,
     IdentityUnavailableError,
@@ -434,102 +426,3 @@ class TestOrigin:
         for bad in (["not-an-address"], [7], ["::1"]):
             with pytest.raises(ValueError):
                 compiled_origin_addresses(bad)
-
-
-# ---------------------------------------------------------------------------
-# The proposed spent-identity document
-# ---------------------------------------------------------------------------
-
-
-class TestSpentIdentityDocument:
-    def _document(self, **overrides: Any) -> dict[str, Any]:
-        document = spent_source.build_spent_identity_document(
-            ["synthetic-production-run-0002", "synthetic-production-run-0001"],
-            issued_at=NOW - timedelta(hours=1),
-            expires_at=NOW + timedelta(hours=1),
-        )
-        document.update(overrides)
-        return document
-
-    def test_a_valid_document_yields_the_ledger_registry(self) -> None:
-        parsed = spent_source.parse_spent_identity_document(self._document(), now=NOW)
-        registry = parsed.registry()
-        assert registry.status("synthetic-production-run-0001") is SpentStatus.SPENT
-        assert registry.status("synthetic-production-run-0009") is SpentStatus.UNSPENT
-        assert "synthetic" not in repr(parsed)
-
-    @pytest.mark.parametrize(
-        ("overrides", "defect"),
-        [
-            ({"extra": 1}, spent_source.SpentDocumentDefect.FIELD_UNKNOWN),
-            ({"schema_version": 2}, spent_source.SpentDocumentDefect.SCHEMA_VERSION),
-            ({"contract_id": "other"}, spent_source.SpentDocumentDefect.CONTRACT_ID),
-            ({"actor": "build"}, spent_source.SpentDocumentDefect.ACTOR),
-            ({"issued_at": "yesterday"}, spent_source.SpentDocumentDefect.TIMESTAMP_MALFORMED),
-            (
-                {"expires_at": (NOW + timedelta(hours=30)).isoformat()},
-                spent_source.SpentDocumentDefect.VALIDITY_TOO_LONG,
-            ),
-            (
-                {"expires_at": (NOW - timedelta(minutes=1)).isoformat()},
-                spent_source.SpentDocumentDefect.STALE,
-            ),
-            ({"spent": ["b", "a"]}, spent_source.SpentDocumentDefect.SPENT_MALFORMED),
-            (
-                {"spent": ["synthetic-production-run-0001"]},
-                spent_source.SpentDocumentDefect.DIGEST_MISMATCH,
-            ),
-        ],
-    )
-    def test_each_defect_refuses(
-        self, overrides: dict[str, Any], defect: spent_source.SpentDocumentDefect
-    ) -> None:
-        with pytest.raises(spent_source.SpentDocumentError) as refusal:
-            spent_source.parse_spent_identity_document(self._document(**overrides), now=NOW)
-        assert refusal.value.defect is defect
-
-    def test_a_missing_field_refuses(self) -> None:
-        document = self._document()
-        del document["spent_digest"]
-        with pytest.raises(spent_source.SpentDocumentError) as refusal:
-            spent_source.parse_spent_identity_document(document, now=NOW)
-        assert refusal.value.defect is spent_source.SpentDocumentDefect.FIELD_MISSING
-
-    def test_every_load_failure_is_unavailable_never_unspent(self) -> None:
-        ssm = FakeSsm()
-        parameter = "/synthetic/spent"
-        for value in (
-            None,
-            b"",
-            b"{not json",
-            encode(self._document(actor="build")),
-            encode(self._document(expires_at=(NOW - timedelta(minutes=1)).isoformat())),
-        ):
-            if value is None:
-                ssm.values.pop(parameter, None)
-            else:
-                ssm.values[parameter] = value
-            registry = spent_source.load_spent_identities(
-                reader=SsmParameterAdapter(ssm=ssm), parameter=parameter, now=lambda: NOW
-            )
-            assert type(registry) is UnavailableSpentIdentities
-            assert (
-                spent_status_of(registry, "synthetic-production-run-0001")
-                is SpentStatus.UNAVAILABLE
-            )
-        ssm.values[parameter] = encode(self._document())
-        registry = spent_source.load_spent_identities(
-            reader=SsmParameterAdapter(ssm=ssm), parameter=parameter, now=lambda: NOW
-        )
-        assert spent_status_of(registry, "synthetic-production-run-0001") is SpentStatus.SPENT
-
-    def test_the_proposed_source_is_wired_to_nothing(self) -> None:
-        production = PROJECT_ROOT / "src" / "kalpamani" / "data" / "production" / "sharadar"
-        for path in sorted(production.glob("*.py")):
-            if path.name == "spent_source.py":
-                continue
-            assert "spent_source" not in path.read_text(encoding="utf-8"), path.name
-        script = PROJECT_ROOT / "scripts" / "production_task_entrypoint.py"
-        assert "spent_source" not in script.read_text(encoding="utf-8")
-        assert "spent_identities=None" in script.read_text(encoding="utf-8")
-        assert json.dumps(self._document())  # the document is plain JSON

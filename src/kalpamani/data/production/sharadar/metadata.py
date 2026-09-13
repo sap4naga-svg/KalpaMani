@@ -6,6 +6,14 @@ earlier claim that the endpoint exposes a subnet CIDR or a public IP is withdraw
 by ADR-0036; placement is the launcher's check, not the task's, and nothing here
 pretends otherwise.
 
+**What an image can and cannot know about itself** (ADR-0044 §2). An image cannot embed
+its own content digest, and the task-definition revision that pins that digest is
+registered only after the image exists -- so neither is a compiled constant. The
+self-check here compares what the image *can* know (its family) and requires every
+container to report one image; the image digest and the revision the metadata
+reports are bound at the release barrier against what the launch tool observed
+through ``DescribeTasks`` and Terraform's registered values.
+
 The metadata source is injected -- a zero-argument callable returning the decoded
 task document -- so this module opens no socket and reads no environment
 variable. The production caller reads ``ECS_CONTAINER_METADATA_URI_V4`` and
@@ -26,6 +34,11 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from kalpamani.data.production.sharadar.documents import exact_int, exact_str
+from kalpamani.data.production.sharadar.metadata_grammar import (
+    CODE_COMMIT_RE,
+    CONFIGURATION_DIGEST_RE,
+    IMAGE_DIGEST_RE,
+)
 from kalpamani.data.production.sharadar.release import TASK_ARN_RE, TASK_DEFINITION_ARN_RE
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
@@ -34,8 +47,6 @@ from kalpamani.data.production.sharadar.vocabulary import ProductionActor, const
 METADATA_URI_ENV_VAR: Final = "ECS_CONTAINER_METADATA_URI_V4"
 PRIVATE_ENV_PREFIX: Final = "KALPAMANI_"
 
-#: An image digest as the metadata reports it: ``sha256:`` and 64 lowercase hex.
-IMAGE_DIGEST_RE: Final = re.compile(r"sha256:[0-9a-f]{64}")
 
 #: A task-definition family and a registered revision.
 FAMILY_RE: Final = re.compile(r"[A-Za-z0-9_-]{1,255}")
@@ -43,12 +54,18 @@ FAMILY_RE: Final = re.compile(r"[A-Za-z0-9_-]{1,255}")
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompiledTask:
-    """What the image compiles about itself: family, exact revision, own digest."""
+    """What the image compiles about itself: actor, family, code commit, configuration digest.
+
+    ``code_commit`` is the commit the image was built from and ``configuration_digest``
+    the SHA-256 of the compiled configuration file baked beside the code -- both exist
+    before the image does. The image digest and the task-definition revision do not,
+    and are attested by the release instead (ADR-0044 §2).
+    """
 
     actor: ProductionActor
     family: str
-    revision: int
-    image_digest: str
+    code_commit: str
+    configuration_digest: str
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing."""
@@ -60,10 +77,16 @@ class CompiledTask:
             raise ValueError("actor must be an exact ProductionActor member")
         if self.family != constants_for(self.actor).task_family:
             raise ValueError("the compiled family is not this actor's family")
-        if type(self.revision) is not int or self.revision < 1:
-            raise ValueError("the compiled revision must be a positive integer")
-        if type(self.image_digest) is not str or not IMAGE_DIGEST_RE.fullmatch(self.image_digest):
-            raise ValueError("the compiled image digest must be sha256:<64 hex>")
+        if type(self.code_commit) is not str or not CODE_COMMIT_RE.fullmatch(self.code_commit):
+            raise ValueError("the compiled code commit must be 40 lowercase hex characters")
+        if type(self.configuration_digest) is not str or not CONFIGURATION_DIGEST_RE.fullmatch(
+            self.configuration_digest
+        ):
+            raise ValueError("the compiled configuration digest must be 64 lowercase hex")
+
+    def __repr__(self) -> str:
+        """The actor only. **Never a digest.**"""
+        return f"CompiledTask(actor={self.actor.value!r})"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -149,18 +172,17 @@ def parse_task_metadata(document: object) -> TaskMetadata | None:
 def self_check_refusal(metadata: TaskMetadata, compiled: CompiledTask) -> str | None:
     """Why the task is not the one its image was compiled for, or ``None``.
 
-    Family and revision must equal the compiled ones; every container's image must
-    be the compiled digest (a sidecar with another image would be a container this
-    image did not compile). Value-free reasons only.
+    The family must equal the compiled one, and every container must report the
+    same image (a sidecar with another image would be a container this image did
+    not compile). The image digest itself and the revision are bound at the release
+    barrier (ADR-0044 §2). Value-free reasons only.
     """
     if type(metadata) is not TaskMetadata or type(compiled) is not CompiledTask:
         return "the self-check received no usable metadata"
     if metadata.family != compiled.family:
         return "the task family is not the compiled family"
-    if metadata.revision != compiled.revision:
-        return "the task-definition revision is not the compiled revision"
-    if any(image_id != compiled.image_digest for image_id in metadata.image_ids):
-        return "a container image is not the compiled image digest"
+    if len(set(metadata.image_ids)) != 1:
+        return "the containers do not report one image"
     return None
 
 
@@ -178,6 +200,8 @@ def task_environment_refusal(variable_names: Iterable[str]) -> str | None:
 
 
 __all__ = [
+    "CODE_COMMIT_RE",
+    "CONFIGURATION_DIGEST_RE",
     "FAMILY_RE",
     "IMAGE_DIGEST_RE",
     "METADATA_URI_ENV_VAR",

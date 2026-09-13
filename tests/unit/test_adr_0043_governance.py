@@ -1,8 +1,8 @@
-"""ADR-0043 governance: a proposed, narrow completion fixing the task entrypoint composition.
+"""ADR-0043 governance: the accepted narrow completion fixing the task entrypoint composition.
 
-These checks hold the document to its own claims -- proposed and not in force, the closed
-entries, the refusal order, what is proposed rather than decided, the gates -- and hold the
-offline entrypoints to the shape the document describes.
+These checks hold the document to its own claims -- the preserved conditional status and the
+merge that satisfied it, the closed entries, the refusal order, what was proposed rather than
+decided, the gates -- and hold the offline entrypoints to the shape the document describes.
 """
 
 from __future__ import annotations
@@ -39,9 +39,19 @@ def test_the_adr_exists_and_is_the_only_0043() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0043-*.md"))] == [ADR.name]
 
 
-def test_the_adr_carries_a_conditional_acceptance_status_and_the_gates() -> None:
+def test_the_adr_keeps_its_conditional_status_and_records_the_merge() -> None:
+    """The pre-merge condition is preserved as written; the note beside it records the event."""
     assert "Status: " + PROPOSED in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
+    assert "The condition above has since been satisfied." in ADR_FLAT
+    assert "PR #100 merged" in ADR_FLAT and "2026-09-12T19:55:44Z" in ADR_FLAT
+    assert "2b956c05d1aa171b571f6739d3d5756a00479847" in ADR_TEXT
+    assert "9d2bacc0095ad540bfc5b0bc351f51bfb09582dc" in ADR_TEXT
+    assert "59f814ede3410a12eb84c7e02871886ec6116d17" in ADR_TEXT
+    assert "entrypoint-composition decision is therefore ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert f"Its {SECTION}3 and {SECTION}4 were not decided by that merge" in ADR_PLAIN
+    assert "resolved" in ADR_PLAIN and "ADR-0044" in ADR_TEXT
+    assert "Acceptance authorizes no execution." in ADR_PLAIN
     assert f"a narrow completion of ADR-0036 {SECTION}2.9 and {SECTION}2.12" in ADR_FLAT
     assert "Nothing was run to produce this decision" in ADR_FLAT
     assert "## 6. Effectiveness and execution gates" in ADR_TEXT
@@ -104,12 +114,29 @@ def test_the_adr_carries_no_private_value() -> None:
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_the_merge(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search("ADR-0043[^\\n]{0,200}" + re.escape(PROPOSED), text) is not None
-    assert "ADR-0043 (production task entrypoint composition): " + PROPOSED in text
+    rows = [
+        line
+        for line in text.splitlines()
+        if line.startswith("| ")
+        and "ADR-0043](" in line
+        and "production task entrypoint composition" in line.split("|")[1]
+    ]
+    assert len(rows) == 1
+    flat = " ".join(rows[0].replace("**", "").replace("`", "").split())
+    assert "ACCEPTED / IN FORCE" in flat and "PR #100 merged 2026-09-12T19:55:44Z" in flat
+    assert "2b956c05d1aa171b571f6739d3d5756a00479847" in flat
+    assert "while PR #100 was open it was proposed and carried no authority" in flat
+    assert (
+        "the merge did not decide" in flat
+        and "resolved, as a proposal of its own, by ADR-0044" in flat
+    )
+    assert "acceptance authorized no image, launch or run" in flat
+    assert "ADR-0043 (production task entrypoint composition): ACCEPTED / IN FORCE" in text
     assert (
         "ADR-0043 task entrypoints (code):                 "
         "OFFLINE / SYNTHETIC-ONLY / NO IMAGE / NEVER RUN" in text
     )
     assert "production image:                                  NONE" in text
+    assert re.search("ADR-0043[^\\n]{0,200}" + re.escape(PROPOSED), text) is None
