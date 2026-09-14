@@ -390,5 +390,5 @@ the barrier and a tool that can launch it.** Concretely:
 **Can proceed independently alongside it** (no dependency on G-1/G-2): G-4 (the production
 human-binding materializer), G-5 (the R-3 tool — it needs only the foundation profile and stage a),
 the owner's S0 inputs (secret creation outside the repository, origin address resolution, the release
-commit choice, I-8/I-9), and G-8's calendar-source decision. **Not before the cycle above:** any
-AWS, Terraform, image, registry, launch or provider operation.
+commit choice, I-8/I-9), and G-8's calendar-source decision. **Not before the cycle above:** any AWS,
+Terraform, image, registry, launch or provider operation.
