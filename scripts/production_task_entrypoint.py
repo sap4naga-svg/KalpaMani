@@ -56,6 +56,14 @@ file's SHA-256 is the configuration digest the launch tool binds into the releas
 image's own digest and its task-definition revision are never read from the image,
 because an image cannot know them -- the release attests both.
 
+**Every outcome ends in the same receipt, the early refusals included.** An invocation
+that selects no entry, and an entry whose compiled configuration is absent, malformed
+or compiled for the other actor, each print the allowlisted sentence, the zero counts
+the process can prove and exactly one closing ``receipt:`` line (ADR-0044 §4) -- with
+no actor invented for an invalid invocation, and the configuration, bootstrap and
+binding evidence reported as absent rather than as a placeholder. Neither path
+constructs a client, reads the environment or opens a socket.
+
 **No workstation ledger integration.** The task writes its receipt to stdout (the
 allowlisted lines) and exits with the closed code; the launch tool records what it can
 observe. Completing the ledger row from a task's counts is a later, separately gated
@@ -72,7 +80,8 @@ import sys
 from collections.abc import Iterable, Sequence
 from typing import Any, Final
 
-#: The one refusal exit code this file emits on its own, before any entry exists.
+#: The exit code of an invocation that selects no entry. The receipt that carries it is
+#: rendered by the platform (``no_entry_receipt``), and a test holds the two equal.
 NO_ENTRY_EXIT_STATUS: Final = 2
 
 #: Where the image carries its compiled configuration. Absent on a workstation, by design.
@@ -318,24 +327,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
 
     from kalpamani.data.production.sharadar.entry import (
-        EXIT_STATUS,
         TaskOutcome,
+        no_entry_receipt,
+        refusal_receipt,
         run_task_entry,
         select_entry,
-        task_sentence,
     )
 
     entry = select_entry(arguments)
     if entry is None:
-        # Nothing above this line looked anything up or constructed anything.
-        print(task_sentence(TaskOutcome.REFUSED_ENTRY))
-        return NO_ENTRY_EXIT_STATUS
+        # Nothing above this line looked anything up or constructed anything. The
+        # receipt names no entry and no actor, carries no configuration, bootstrap or
+        # binding evidence, and reports the zero counts this process can prove
+        # (ADR-0044 s.4): the same one machine-readable line, last, as every outcome.
+        receipt = no_entry_receipt()
+        _emit(receipt.render())
+        return receipt.exit_code
 
     configuration = _compiled_configuration(entry)
     if configuration is None:
-        # No compiled configuration, no working directory, no factory, no client.
-        print(task_sentence(TaskOutcome.REFUSED_CONFIGURATION))
-        return EXIT_STATUS[TaskOutcome.REFUSED_CONFIGURATION]
+        # No compiled configuration, no working directory, no factory, no client. The
+        # receipt names the selected entry and nothing the file would have supplied:
+        # code commit and configuration digest are null, never a placeholder.
+        receipt = refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
+        _emit(receipt.render())
+        return receipt.exit_code
 
     import tempfile
 

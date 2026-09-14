@@ -9,13 +9,13 @@ workstation collector can read the task's terminal evidence from its log stream 
 complete the owner ledger without inferring anything from prose. The line carries no
 key, bucket, credential, identifier, subject or vendor row -- ADR-0036 §2.9's output rule
 holds -- and binds itself to the run through one **binding digest**: a SHA-256 over the
-values the launch tool already holds from its own launch record (task id, task-definition
-ARN, image digest, run or build identity, input digest, configuration digest, code
-commit). The collector recomputes the digest from its record and compares; the task
-discloses nothing it did not already prove, and a receipt from another task, image,
-configuration or run cannot bind. The public code commit and the registered configuration
-digest travel in the clear so a collector can tell *which* build refused before it knows
-the run.
+values the launch tool already holds from its own launch record: the task id, the
+task-definition ARN, the image digest, the run or build identity, the input digest, the
+configuration digest and the code commit. The collector recomputes the digest from its
+record and compares; the task discloses nothing it did not already prove, and a receipt
+from another task, image, configuration or run cannot bind. The public code commit and
+the registered configuration digest travel in the clear so a collector can tell *which*
+build refused before it knows the run.
 
 **A receipt states what it can prove.** Counts are present exactly when the task
 observed them; ``counts_observed = false`` (an unclassified failure) carries ``null``
@@ -45,7 +45,11 @@ from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
-from kalpamani.data.production.sharadar.documents import hex_digest
+from kalpamani.data.production.sharadar.documents import (
+    contains_surrogate_text,
+    hex_digest,
+    is_json_shaped,
+)
 from kalpamani.data.production.sharadar.entry import (
     BOOTSTRAP_OUTCOME,
     ENTRY_ACTOR,
@@ -131,7 +135,9 @@ class ReceiptDefect(StrEnum):
     NO_RECEIPT = "NO_RECEIPT"
     DUPLICATE_RECEIPT = "DUPLICATE_RECEIPT"
     TOO_LARGE = "TOO_LARGE"
+    ENCODING_INVALID = "ENCODING_INVALID"
     DOCUMENT_MALFORMED = "DOCUMENT_MALFORMED"
+    DUPLICATE_KEY = "DUPLICATE_KEY"
     SCHEMA_VERSION_UNKNOWN = "SCHEMA_VERSION_UNKNOWN"
     CONTRACT_ID_UNKNOWN = "CONTRACT_ID_UNKNOWN"
     FIELD_UNKNOWN = "FIELD_UNKNOWN"
@@ -163,6 +169,21 @@ class ReceiptError(Exception):
 
 def _refuse(defect: ReceiptDefect) -> ReceiptError:
     return ReceiptError(defect)
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Refuse a repeated key anywhere in the document -- nested objects included.
+
+    ``json.loads`` keeps the last of two values for one key, so a line carrying
+    ``"outcome":"REFUSED_INPUT","outcome":"COMPLETED"`` would otherwise decode to a
+    document that says ``COMPLETED`` and still carries a matching digest.
+    """
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise _refuse(ReceiptDefect.DUPLICATE_KEY)
+        seen[key] = value
+    return seen
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +237,9 @@ def receipt_document(receipt: TaskReceipt) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "contract_id": RECEIPT_CONTRACT_ID,
-        "entry": receipt.entry.value,
-        "actor": ENTRY_ACTOR[receipt.entry].value,
+        # An invalid invocation selected no entry and names no actor (ADR-0044 s.4).
+        "entry": None if receipt.entry is None else receipt.entry.value,
+        "actor": None if receipt.entry is None else ENTRY_ACTOR[receipt.entry].value,
         "outcome": receipt.outcome.value,
         "exit_code": receipt.exit_code,
         "runner": None if receipt.runner is None else receipt.runner.value,
@@ -312,9 +334,13 @@ class ReceiptExpectation:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class VerifiedReceipt:
-    """One receipt that passed every clause and is bound to the launch record."""
+    """One receipt that passed every clause and is bound to the launch record.
 
-    entry: TaskEntry
+    ``entry`` is ``None`` exactly for ``REFUSED_ENTRY``: the process selected no entry,
+    and the receipt invents no actor for it.
+    """
+
+    entry: TaskEntry | None
     outcome: TaskOutcome
     runner: RunnerOutcome | None
     counts: OperationCounts | None
@@ -337,7 +363,8 @@ class VerifiedReceipt:
 
     def __repr__(self) -> str:
         """Entry and outcome only."""
-        return f"VerifiedReceipt(entry={self.entry.value!r}, outcome={self.outcome.value!r})"
+        entry = None if self.entry is None else self.entry.value
+        return f"VerifiedReceipt(entry={entry!r}, outcome={self.outcome.value!r})"
 
 
 def collect_receipt_line(lines: Iterable[str]) -> str:
@@ -355,14 +382,23 @@ def decode_receipt_line(line: str) -> dict[str, Any]:
     if type(line) is not str or not line.startswith(RECEIPT_LINE_PREFIX):
         raise _refuse(ReceiptDefect.NO_RECEIPT)
     body = line[len(RECEIPT_LINE_PREFIX) :]
-    if len(body.encode("utf-8")) > MAX_RECEIPT_BYTES:
+    try:
+        encoded = body.encode("utf-8")
+    except UnicodeEncodeError:
+        # A line carrying a lone surrogate has no byte form at all.
+        raise _refuse(ReceiptDefect.ENCODING_INVALID) from None
+    if len(encoded) > MAX_RECEIPT_BYTES:
         raise _refuse(ReceiptDefect.TOO_LARGE)
     try:
-        document = json.loads(body)
-    except ValueError:
+        document = json.loads(body, object_pairs_hook=_no_duplicate_keys)
+    except ReceiptError:
+        raise
+    except (ValueError, RecursionError):
         raise _refuse(ReceiptDefect.DOCUMENT_MALFORMED) from None
     if type(document) is not dict:
         raise _refuse(ReceiptDefect.DOCUMENT_MALFORMED)
+    if contains_surrogate_text(document):
+        raise _refuse(ReceiptDefect.ENCODING_INVALID)
     return document
 
 
@@ -372,11 +408,20 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
         raise _refuse(ReceiptDefect.FIELD_MALFORMED)
     if type(document) is not dict:
         raise _refuse(ReceiptDefect.DOCUMENT_MALFORMED)
+    if not all(type(name) is str for name in document):
+        raise _refuse(ReceiptDefect.DOCUMENT_MALFORMED)
     names = set(document)
     if names - _FIELDS:
         raise _refuse(ReceiptDefect.FIELD_UNKNOWN)
     if _FIELDS - names:
         raise _refuse(ReceiptDefect.FIELD_MISSING)
+    # Every value must be JSON-shaped (no float, no foreign type) and free of lone
+    # surrogates before a digest is computed over the document: the serializer's own
+    # refusals must never be the answer to malformed evidence.
+    if contains_surrogate_text(document):
+        raise _refuse(ReceiptDefect.ENCODING_INVALID)
+    if not is_json_shaped(document):
+        raise _refuse(ReceiptDefect.FIELD_MALFORMED)
     if document["schema_version"] != RECEIPT_SCHEMA_VERSION:
         raise _refuse(ReceiptDefect.SCHEMA_VERSION_UNKNOWN)
     if document["contract_id"] != RECEIPT_CONTRACT_ID:
@@ -385,24 +430,39 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
     if declared is None:
         raise _refuse(ReceiptDefect.FIELD_MALFORMED)
     unsigned = {name: value for name, value in document.items() if name != "receipt_digest"}
-    if sha256_hex(canonical_bytes(unsigned)) != declared:
+    try:
+        computed = sha256_hex(canonical_bytes(unsigned))
+    except RecursionError:
+        # A value nested past what the serializer can walk is malformed evidence.
+        raise _refuse(ReceiptDefect.DOCUMENT_MALFORMED) from None
+    if computed != declared:
         raise _refuse(ReceiptDefect.DIGEST_MISMATCH)
 
-    if document["entry"] not in {member.value for member in TaskEntry}:
-        raise _refuse(ReceiptDefect.FIELD_MALFORMED)
-    entry = TaskEntry(document["entry"])
-    if document["actor"] != ENTRY_ACTOR[entry].value:
-        raise _refuse(ReceiptDefect.FIELD_MALFORMED)
-    if document["outcome"] not in {member.value for member in TaskOutcome}:
+    # Exact type before membership, everywhere: an unhashable value in a membership
+    # test is the interpreter's exception, not a closed refusal.
+    raw_outcome = document["outcome"]
+    if type(raw_outcome) is not str or raw_outcome not in {m.value for m in TaskOutcome}:
         raise _refuse(ReceiptDefect.OUTCOME_UNKNOWN)
-    outcome = TaskOutcome(document["outcome"])
+    outcome = TaskOutcome(raw_outcome)
+    raw_entry = document["entry"]
+    entry: TaskEntry | None = None
+    if outcome is TaskOutcome.REFUSED_ENTRY:
+        # No entry was selected, so the receipt names none and invents no actor.
+        if raw_entry is not None or document["actor"] is not None:
+            raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+    else:
+        if type(raw_entry) is not str or raw_entry not in {m.value for m in TaskEntry}:
+            raise _refuse(ReceiptDefect.FIELD_MALFORMED)
+        entry = TaskEntry(raw_entry)
+        if document["actor"] != ENTRY_ACTOR[entry].value:
+            raise _refuse(ReceiptDefect.FIELD_MALFORMED)
     if type(document["exit_code"]) is not int or document["exit_code"] != EXIT_STATUS[outcome]:
         raise _refuse(ReceiptDefect.EXIT_CODE_CONTRADICTS_OUTCOME)
 
     raw_runner = document["runner"]
     runner: RunnerOutcome | None = None
     if raw_runner is not None:
-        if raw_runner not in {member.value for member in RunnerOutcome}:
+        if type(raw_runner) is not str or raw_runner not in {m.value for m in RunnerOutcome}:
             raise _refuse(ReceiptDefect.FIELD_MALFORMED)
         runner = RunnerOutcome(raw_runner)
     if outcome in PRE_BOOTSTRAP_OUTCOMES:
@@ -422,12 +482,16 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
     raw_counts = document["counts"]
     counts: OperationCounts | None = None
     if observed:
-        if type(raw_counts) is not dict or set(raw_counts) != set(_COUNT_FIELDS):
+        if raw_counts is None:
             raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
-        try:
-            counts = OperationCounts(**raw_counts)
-        except TypeError:
-            raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION) from None
+        # A present but malformed count block -- wrong shape, a missing or foreign
+        # name, a non-integer or negative count -- is a malformed field, not an
+        # observation contradiction: the task claimed a count it could not spell.
+        if type(raw_counts) is not dict or set(raw_counts) != set(_COUNT_FIELDS):
+            raise _refuse(ReceiptDefect.FIELD_MALFORMED)
+        if any(type(value) is not int or value < 0 for value in raw_counts.values()):
+            raise _refuse(ReceiptDefect.FIELD_MALFORMED)
+        counts = OperationCounts(**raw_counts)
         if runner is not RunnerOutcome.RELEASED and counts.data_plane_operations != 0:
             raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
     elif raw_counts is not None:
@@ -440,7 +504,7 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
     for raw in raw_failures:
         if type(raw) is not dict or set(raw) != {"stage", "failure"}:
             raise _refuse(ReceiptDefect.FIELD_MALFORMED)
-        if raw["stage"] not in {member.value for member in CleanupStage}:
+        if type(raw["stage"]) is not str or raw["stage"] not in {m.value for m in CleanupStage}:
             raise _refuse(ReceiptDefect.FIELD_MALFORMED)
         if type(raw["failure"]) is not str or not raw["failure"]:
             raise _refuse(ReceiptDefect.FIELD_MALFORMED)
@@ -466,9 +530,11 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
     if bound is not None and hex_digest(bound) is None:
         raise _refuse(ReceiptDefect.FIELD_MALFORMED)
 
-    # Binding to the launch record. The entry, the registered code and configuration
-    # always; the binding digest when the bootstrap released.
-    if entry is not expectation.entry:
+    # Binding to the launch record. The entry (where one was selected), the registered
+    # code and configuration always; the binding digest when the bootstrap released. A
+    # REFUSED_ENTRY receipt names no entry, and the collector binds it to the launch
+    # through the launch record alone.
+    if entry is not None and entry is not expectation.entry:
         raise _refuse(ReceiptDefect.ENTRY_MISMATCH)
     if document["configuration_digest"] not in (None, expectation.configuration_digest):
         raise _refuse(ReceiptDefect.CONFIGURATION_MISMATCH)

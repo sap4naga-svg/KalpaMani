@@ -75,11 +75,37 @@ clock), from a clean checkout whose commit and tree it records. It carries, per 
 
 The task reads the file at start, refuses `REFUSED_CONFIGURATION` when it is absent, malformed,
 oversize, compiled for the other entry, pinned to another derivation version, or carrying any field
-outside the closed set; its SHA-256 over the exact bytes is the `configuration_digest`. **Rotating an
-origin address set, a secret name or a build configuration is an image rebuild, a new registered
-revision and a Terraform apply** — the lifecycle consequence of compiling rather than delivering at
-run time, chosen because a compiled value is attested by the image digest and can be steered by no
-parameter, binding or environment.
+outside the closed set; its SHA-256 over the exact bytes is the `configuration_digest`. **Parsing is
+total**: a field of the wrong type anywhere — a list where a name is expected, an object where a
+digest string is, a float, a session that opens before its own date — a repeated key at any depth,
+a lone surrogate or undecodable text is one closed `CompiledConfigurationDefect`, never the
+interpreter's or an accepted value contract's own exception. **Rotating an origin address set, a
+secret name or a build configuration is an image rebuild, a new registered revision and a Terraform
+apply** — the lifecycle consequence of compiling rather than delivering at run time, chosen because
+a compiled value is attested by the image digest and can be steered by no parameter, binding or
+environment.
+
+**The source identity covers what enters the build.** A recorded commit binds nothing if the bytes
+Docker copies come from a working tree: an untracked module, a git-ignored file or a local
+modification under `src/` is copied by `docker build .` with no record of it, and
+`git status --porcelain --untracked-files=no` cannot see the first two at all. The build context is
+therefore **prepared from the exact tree of the recorded commit** by
+`scripts/production_build_context.py` — `git archive <commit>` over the closed allowlist of image
+source paths (`pyproject.toml`, `src`, the entrypoint script, the Dockerfile, the constraints and
+entry files), extracted into a fresh directory outside the checkout — with the compiled
+configuration placed beside it at `configuration/compiled-configuration.json` as a **separately
+declared, digest-bound input** that is never presented as part of the commit. Five records must
+agree before a context exists and before a layer is kept, and a disagreement is refused rather than
+relabelled: the `--commit` argument (a full commit id resolving to exactly itself); the generation
+record's `code_commit`, `code_tree`, `configuration_digest` and byte count; the compiled file's own
+`code_commit`, `code_tree` and `entry`, parsed under the accepted contract; the
+`context-manifest.json` the preparer writes (commit, tree, a digest over every source file, the
+configuration digest, the build arguments); and, at build time, the required `KALPAMANI_COMMIT` and
+`CONFIGURATION_DIGEST` arguments, which the Dockerfile holds equal to the recorded `CODE_COMMIT`, the
+copied file's SHA-256 and the target's entry. A configuration generated at an earlier commit is stale
+for a later one and is regenerated, never edited. The repository root is not a build context: a
+mistaken build from a checkout admits only the source allowlist and fails at the `configuration/`
+copy.
 
 ## 3. Decision — task-side spent identities travel in the acquisition input
 
@@ -112,9 +138,14 @@ The accepted receipt (ADR-0043: allowlisted sentences and integer counts) gains 
 `receipt: <canonical JSON>` (`kalpamani-task-receipt/v1`):
 
 ```text
-schema_version, contract_id, entry, actor, outcome, exit_code, runner (null before the bootstrap),
+schema_version, contract_id,
+entry, actor           (null exactly for REFUSED_ENTRY: an invalid invocation selected no entry
+                        and the receipt invents no actor for it; named for every other outcome),
+outcome, exit_code, runner (null before the bootstrap),
 counts_observed, counts (null when not observed -- never zeros), cleanup_failures,
-code_commit, configuration_digest, binding_digest (null unless the bootstrap released),
+code_commit, configuration_digest (null when no configuration was read: REFUSED_ENTRY and
+                        REFUSED_CONFIGURATION -- never a placeholder),
+binding_digest (null unless the bootstrap released),
 receipt_digest (SHA-256 over the rest)
 binding_digest = SHA-256 over { task_id, task_definition_arn, image_digest, identity,
                                 input_digest, configuration_digest, code_commit }
@@ -123,12 +154,31 @@ binding_digest = SHA-256 over { task_id, task_definition_arn, image_digest, iden
 The task discloses **no identifier**: the launch tool holds every value in that set from its own
 launch record, recomputes the digest and compares. **This narrowly amends ADR-0036 §2.9's output
 rule** ("no key, digest, identifier, subject or vendor row"): the line carries closed tokens, integer
-counts, the public code commit and three digests — never a key, identifier, subject or row. The
-validator (`receipts.py`) refuses: no or duplicate receipt lines; any field outside the closed set;
-an exit code that is not the outcome's; a runner verdict that contradicts the outcome; counts present
-when unobserved or absent when observed, or data-plane counts on an unreleased bootstrap; a binding
-digest present without release or absent with it; a digest mismatch; a receipt from another entry,
-configuration, commit, task, image, revision, run or input.
+counts, the public code commit and three digests — never a key, identifier, subject or row.
+
+**Every outcome ends in the line, the early refusals included.** The entrypoint's own two refusals —
+no closed entry selected (`REFUSED_ENTRY`, exit 2) and no usable compiled configuration
+(`REFUSED_CONFIGURATION`, exit 3) — print the allowlisted sentence, the zero counts the process can
+prove by construction (no factory, client, socket or working directory existed) and exactly one
+closing receipt line, with `entry`/`actor` null for the first, `code_commit`/`configuration_digest`
+null for both, `runner` and `binding_digest` null, and no external operation. A `REFUSED_ENTRY`
+receipt binds to its launch only through the launch record; the collector never reads an actor out of
+it.
+
+The validator (`receipts.py`) refuses: no or duplicate receipt lines; any field outside the closed
+set; an exit code that is not the outcome's; a runner verdict that contradicts the outcome; counts
+present when unobserved or absent when observed, or data-plane counts on an unreleased bootstrap; a
+binding digest present without release or absent with it; a digest mismatch; a receipt from another
+entry, configuration, commit, task, image, revision, run or input; an entry or actor on a
+`REFUSED_ENTRY` receipt. **Its parsing is total and closed**: a repeated key at any depth
+(`DUPLICATE_KEY` — `json.loads` alone keeps the last value, so a contradictory duplicate would
+otherwise verify under a matching digest), a lone surrogate or undecodable text (`ENCODING_INVALID`),
+malformed or oversize text (`DOCUMENT_MALFORMED`, `TOO_LARGE`), and a value of the wrong type in any
+closed field or nested structure — a list where a token is expected, a float, a string count, a
+negative count, a malformed cleanup entry — is one closed `ReceiptDefect` (`FIELD_MALFORMED` or the
+field's own contradiction member), checked before any set membership, enum conversion or digest
+computation, so that no raw `TypeError`, `ValueError` or Unicode error and no input content escapes
+the collector boundary.
 
 **Ledger completion** (`ledger_completion`): `COMPLETED` only from a `COMPLETED` receipt with
 observed counts; `HALTED`/`REFUSED` from the outcomes that establish them; **no row** for
@@ -154,11 +204,16 @@ against the launch record and completes the ledger row. Until then the receipt i
 ## 6. Packaging (prepared offline; nothing built)
 
 `docker/production/Dockerfile` (targets `acquire`, `build`; base image pinned by a required
-`BASE_IMAGE_DIGEST` build argument; `KALPAMANI_COMMIT` required and recorded; one entry executable
-per image named as the task definition's `command` token; the compiled configuration copied from the
-git-ignored `docker/production/build/<target>/`; unprivileged user; no `ENTRYPOINT`), a restrictive
-allowlist `.dockerignore`, `docker/production/constraints.txt` pinning the verified SDK set
-(`boto3==1.43.83`, `botocore==1.43.83` and their resolved dependencies; hash pinning deferred), and
+`BASE_IMAGE_DIGEST` build argument; `KALPAMANI_COMMIT` and `CONFIGURATION_DIGEST` required, the first
+recorded as `CODE_COMMIT` and both held equal to the copied configuration at build time; one entry
+executable per image named as the task definition's `command` token; the compiled configuration copied
+from the prepared context's `configuration/` input, never from the checkout; unprivileged user; no
+`ENTRYPOINT`), `scripts/production_build_context.py` (the context from the exact tree, §2),
+`scripts/production_compiled_configuration.py` (the configuration into the git-ignored
+`docker/production/build/<entry>/` staging directory), a root `.dockerignore` that admits only the
+source allowlist so a mistaken checkout build still fails, `docker/production/constraints.txt`
+pinning the verified SDK set (`boto3==1.43.83`, `botocore==1.43.83` and their resolved dependencies;
+hash pinning deferred), and
 [docs/operations/production-image-build.md](../operations/production-image-build.md). **No image is
 built or published by this repository.**
 

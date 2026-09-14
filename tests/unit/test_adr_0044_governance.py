@@ -85,6 +85,24 @@ def test_the_adr_selects_one_design_per_question() -> None:
     assert "Collection (proposed, not implemented)" in ADR_PLAIN
 
 
+def test_the_adr_states_the_source_identity_and_the_total_parsing_corrections() -> None:
+    # Finding 1: the context comes from the exact tree; five records must agree.
+    assert "The source identity covers what enters the build" in ADR_PLAIN
+    assert "scripts/production_build_context.py" in ADR_TEXT and "git archive" in ADR_TEXT
+    assert "separately declared, digest-bound input" in ADR_PLAIN
+    assert "refused rather than relabelled" in ADR_PLAIN
+    assert "CONFIGURATION_DIGEST" in ADR_TEXT and "KALPAMANI_COMMIT" in ADR_TEXT
+    assert "The repository root is not a build context" in ADR_PLAIN
+    # Finding 2: total, closed parsing on both boundaries.
+    assert "Parsing is total" in ADR_PLAIN and "Its parsing is total and closed" in ADR_PLAIN
+    assert "DUPLICATE_KEY" in ADR_TEXT and "ENCODING_INVALID" in ADR_TEXT
+    assert "no raw TypeError, ValueError or Unicode error" in ADR_PLAIN
+    # Finding 3: every outcome ends in the line; an invalid invocation names no actor.
+    assert "Every outcome ends in the line, the early refusals included" in ADR_PLAIN
+    assert "null exactly for REFUSED_ENTRY" in ADR_PLAIN
+    assert "invents no actor" in ADR_PLAIN
+
+
 def test_the_implementation_matches_the_document() -> None:
     assert RELEASE_CONTRACT_ID == "kalpamani-placement-release/v2"
     assert release.RELEASE_SCHEMA_VERSION == 2
@@ -105,6 +123,9 @@ def test_the_implementation_matches_the_document() -> None:
     assert not (PRODUCTION / "spent_source.py").exists()
     assert (PROJECT_ROOT / "docker" / "production" / "Dockerfile").is_file()
     assert (PROJECT_ROOT / "scripts" / "production_compiled_configuration.py").is_file()
+    assert (PROJECT_ROOT / "scripts" / "production_build_context.py").is_file()
+    assert receipts.ReceiptDefect.DUPLICATE_KEY and receipts.ReceiptDefect.ENCODING_INVALID
+    assert compiled.CompiledConfigurationDefect.DUPLICATE_KEY
     assert (PROJECT_ROOT / "docs" / "operations" / "production-image-build.md").is_file()
 
 

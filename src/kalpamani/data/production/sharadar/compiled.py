@@ -43,6 +43,7 @@ from kalpamani.data.production.sharadar.build_manifest import (
     BuildConfiguration,
     BuildConfigurationError,
 )
+from kalpamani.data.production.sharadar.documents import contains_surrogate_text
 from kalpamani.data.production.sharadar.entry import ENTRY_ACTOR, EntryConfiguration, TaskEntry
 from kalpamani.data.production.sharadar.gold import (
     ADJUSTMENT_CONVENTION,
@@ -173,10 +174,16 @@ def decode_compiled_configuration(raw: object) -> dict[str, Any]:
         document = json.loads(text, object_pairs_hook=_no_duplicate_keys)
     except CompiledConfigurationError:
         raise
-    except Exception:
+    except ValueError:
+        # ``json.JSONDecodeError`` and the decoder's own value refusals: malformed text.
+        raise _refuse(CompiledConfigurationDefect.DOCUMENT_MALFORMED) from None
+    except RecursionError:
         raise _refuse(CompiledConfigurationDefect.DOCUMENT_MALFORMED) from None
     if type(document) is not dict:
         raise _refuse(CompiledConfigurationDefect.DOCUMENT_MALFORMED)
+    if contains_surrogate_text(document):
+        # A lone surrogate has no UTF-8 form: the file could never round-trip.
+        raise _refuse(CompiledConfigurationDefect.ENCODING_INVALID)
     return document
 
 
@@ -262,13 +269,20 @@ def parse_build_configuration(document: object) -> BuildConfiguration:
     calendar = _closed(payload["calendar"], frozenset({"version", "sessions"}))
     if type(calendar["sessions"]) is not list:
         raise _refuse(CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED)
-    sessions = tuple(
-        TradingSession(
-            session_date=_day(_closed(s, frozenset({"session_date", "open_at"}))["session_date"]),
-            open_at=_instant(s["open_at"]),
-        )
-        for s in calendar["sessions"]
-    )
+    sessions: list[TradingSession] = []
+    for raw_session in calendar["sessions"]:
+        session = _closed(raw_session, frozenset({"session_date", "open_at"}))
+        # The accepted value contract refuses a session that opens before its own
+        # date with its own exception; here that is one more malformed document.
+        try:
+            sessions.append(
+                TradingSession(
+                    session_date=_day(session["session_date"]),
+                    open_at=_instant(session["open_at"]),
+                )
+            )
+        except (TypeError, ValueError):
+            raise _refuse(CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED) from None
 
     evidence = _closed(payload["evidence"], frozenset({"version", "items"}))
     if type(evidence["items"]) is not list:
@@ -285,18 +299,25 @@ def parse_build_configuration(document: object) -> BuildConfiguration:
             raise _refuse(CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED) from None
         if type(item["row_key"]) is not list:
             raise _refuse(CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED)
-        items.append(
-            VersionEvidence(
-                kind=kind,
-                dataset=_exact_str(item["dataset"]),
-                row_key=tuple(_exact_str(k) for k in item["row_key"]),
-                content_sha256=(
-                    None if item["content_sha256"] is None else _exact_str(item["content_sha256"])
-                ),
-                instant=None if item["instant"] is None else _instant(item["instant"]),
-                evidence_digest=_exact_str(item["evidence_digest"]),
+        # The accepted evidence contract refuses a short digest or a naive instant
+        # with its own exception; here that is one more malformed document.
+        try:
+            items.append(
+                VersionEvidence(
+                    kind=kind,
+                    dataset=_exact_str(item["dataset"]),
+                    row_key=tuple(_exact_str(k) for k in item["row_key"]),
+                    content_sha256=(
+                        None
+                        if item["content_sha256"] is None
+                        else _exact_str(item["content_sha256"])
+                    ),
+                    instant=None if item["instant"] is None else _instant(item["instant"]),
+                    evidence_digest=_exact_str(item["evidence_digest"]),
+                )
             )
-        )
+        except (TypeError, ValueError):
+            raise _refuse(CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED) from None
 
     rule_document = _closed(
         payload["universe_rule"],
@@ -326,7 +347,9 @@ def parse_build_configuration(document: object) -> BuildConfiguration:
     try:
         return BuildConfiguration(
             schemas=AcceptedSchemas(version=_exact_str(schemas["version"]), digests=accepted),
-            calendar=SessionCalendar(version=_exact_str(calendar["version"]), sessions=sessions),
+            calendar=SessionCalendar(
+                version=_exact_str(calendar["version"]), sessions=tuple(sessions)
+            ),
             evidence=AvailabilityEvidence(
                 version=_exact_str(evidence["version"]), items=tuple(items)
             ),
@@ -380,7 +403,9 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
     document = decode_compiled_configuration(raw)
     names = set(document)
     entry_value = document.get("entry")
-    if entry_value not in {member.value for member in TaskEntry}:
+    # Exact type before membership: a list or an object is unhashable and would turn a
+    # closed refusal into the interpreter's own exception.
+    if type(entry_value) is not str or entry_value not in {member.value for member in TaskEntry}:
         raise _refuse(CompiledConfigurationDefect.ENTRY_UNKNOWN)
     entry = TaskEntry(entry_value)
     fields = _ACQUISITION_FIELDS if entry is TaskEntry.ACQUISITION else _BUILD_FIELDS

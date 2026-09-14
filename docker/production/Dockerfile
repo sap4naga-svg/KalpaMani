@@ -7,19 +7,28 @@
 # named exactly as the task definition's `command` token, and ONE compiled configuration
 # file generated at the image gate (docs/operations/production-image-build.md).
 #
+# THE BUILD CONTEXT IS A PREPARED DIRECTORY, NOT A CHECKOUT. The source paths below are
+# extracted from the exact tree of the recorded commit by
+# scripts/production_build_context.py (`git archive <commit>` over a closed allowlist),
+# and the compiled configuration is placed beside them at `configuration/` as a
+# separately declared, digest-bound input. A working tree is never the context: an
+# untracked, ignored or modified file under `src/` would otherwise be copied with no
+# record of it. Building from the repository root fails at the `configuration/` COPY.
+#
 # Nothing here is built or published by the repository: the image gate is a separately
 # authorized owner action. Every input that the repository cannot know is a REQUIRED
 # build argument with no default, so an unconfigured build fails rather than producing
 # an image that would "work" with a placeholder:
 #
-#   BASE_IMAGE_DIGEST   sha256:<64 hex> of the python:3.11-slim base the owner pinned
-#   KALPAMANI_COMMIT    the 40-hex commit the build context was checked out at; the
-#                       image records it and refuses to build from a dirty tree elsewhere
+#   BASE_IMAGE_DIGEST      sha256:<64 hex> of the python:3.11-slim base the owner pinned
+#   KALPAMANI_COMMIT       the 40-hex commit the context was prepared from; recorded as
+#                          /opt/kalpamani/CODE_COMMIT and held equal to the commit the
+#                          compiled configuration carries
+#   CONFIGURATION_DIGEST   the 64-hex SHA-256 the generation record and the context
+#                          manifest name; the copied file must hash to exactly it
 #
-# The compiled configuration is COPIED from a git-ignored staging path in the build
-# context (docker/production/build/<entry>/compiled-configuration.json); an absent file
-# fails the build. The image's own digest and its task-definition revision are never
-# written into the image (ADR-0044 s.2): the launch tool attests both in the release.
+# The image's own digest and its task-definition revision are never written into the
+# image (ADR-0044 s.2): the launch tool attests both in the release.
 
 ARG BASE_IMAGE_DIGEST
 FROM python:3.11-slim@${BASE_IMAGE_DIGEST} AS base
@@ -57,14 +66,45 @@ CHECK
 
 # Neither target carries a shell entrypoint: the task definition's `command` token is the
 # executable, and the executable is the actor's entry and nothing else.
+#
+# Each target copies the ONE compiled configuration from the context's declared input
+# path and then holds three things equal before the layer is kept: the file's SHA-256
+# and CONFIGURATION_DIGEST; the file's `entry` and this target's entry; and the file's
+# `code_commit` and the recorded CODE_COMMIT. A disagreement fails the build.
 FROM base AS acquire
+ARG CONFIGURATION_DIGEST
 COPY --chmod=0555 docker/production/entry/kalpamani-production-acquire /usr/local/bin/kalpamani-production-acquire
-COPY --chmod=0444 docker/production/build/acquire/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-production-acquire python - <<'CHECK'
+import hashlib, json, os, pathlib, sys
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+document = json.loads(raw)
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+ok = (
+    hashlib.sha256(raw).hexdigest() == os.environ["CONFIGURATION_DIGEST"]
+    and document.get("entry") == os.environ["EXPECTED_ENTRY"]
+    and document.get("code_commit") == commit
+)
+sys.exit(0 if ok else 1)
+CHECK
 USER kalpamani
 CMD ["kalpamani-production-acquire"]
 
 FROM base AS build
+ARG CONFIGURATION_DIGEST
 COPY --chmod=0555 docker/production/entry/kalpamani-research-build /usr/local/bin/kalpamani-research-build
-COPY --chmod=0444 docker/production/build/build/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-research-build python - <<'CHECK'
+import hashlib, json, os, pathlib, sys
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+document = json.loads(raw)
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+ok = (
+    hashlib.sha256(raw).hexdigest() == os.environ["CONFIGURATION_DIGEST"]
+    and document.get("entry") == os.environ["EXPECTED_ENTRY"]
+    and document.get("code_commit") == commit
+)
+sys.exit(0 if ok else 1)
+CHECK
 USER kalpamani
 CMD ["kalpamani-research-build"]

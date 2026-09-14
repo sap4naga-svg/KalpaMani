@@ -564,3 +564,697 @@ class TestCompiledConfiguration:
         assert json.loads(_acquisition_bytes(generated_at=datetime(2026, 9, 13, tzinfo=UTC)))[
             "generated_at"
         ].endswith("+00:00")
+
+
+# ---------------------------------------------------------------------------
+# Total, closed parsing: malformed external documents are closed defects, never raw
+# TypeError, ValueError or Unicode errors, and no duplicate key collapses silently
+# ---------------------------------------------------------------------------
+
+
+def _sign(document: dict[str, Any]) -> dict[str, Any]:
+    """Re-sign a mutated receipt so that only the mutation, not the digest, is refused."""
+    from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+
+    unsigned = {k: v for k, v in document.items() if k != "receipt_digest"}
+    document["receipt_digest"] = sha256_hex(canonical_bytes(unsigned))
+    return document
+
+
+def _line_of(document: dict[str, Any]) -> str:
+    return pr.RECEIPT_LINE_PREFIX + json.dumps(document, separators=(",", ":"))
+
+
+def _harness_and_expectation() -> tuple[AcquisitionHarness, pr.ReceiptExpectation]:
+    harness = AcquisitionHarness(spent=None)
+    return harness, _expectation(
+        TaskEntry.ACQUISITION, input_digest=input_digest(harness.input_bytes)
+    )
+
+
+class TestTotalReceiptParsing:
+    """Every refusal reaches the collector as a closed :class:`ReceiptError`."""
+
+    @pytest.mark.parametrize(
+        ("overrides", "defect"),
+        [
+            ({"entry": []}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"entry": {"kalpamani-production-acquire": 1}}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"entry": None}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"actor": ["acquisition"]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"outcome": {}}, pr.ReceiptDefect.OUTCOME_UNKNOWN),
+            ({"outcome": ["COMPLETED"]}, pr.ReceiptDefect.OUTCOME_UNKNOWN),
+            ({"outcome": None}, pr.ReceiptDefect.OUTCOME_UNKNOWN),
+            ({"exit_code": "0"}, pr.ReceiptDefect.EXIT_CODE_CONTRADICTS_OUTCOME),
+            ({"exit_code": False}, pr.ReceiptDefect.EXIT_CODE_CONTRADICTS_OUTCOME),
+            ({"exit_code": [0]}, pr.ReceiptDefect.EXIT_CODE_CONTRADICTS_OUTCOME),
+            ({"exit_code": 0.0}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"runner": ["RELEASED"]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"runner": {"RELEASED": True}}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"runner": 1}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"counts_observed": "true"}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"counts_observed": 1}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"counts": []}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"counts": "s3_operations=3"}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"counts": {"s3_operations": 3}}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"cleanup_failures": {}}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"cleanup_failures": "none"}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"cleanup_failures": [["WORKING_DIRECTORY", "X"]]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            (
+                {"cleanup_failures": [{"stage": [], "failure": "X"}]},
+                pr.ReceiptDefect.FIELD_MALFORMED,
+            ),
+            (
+                {"cleanup_failures": [{"stage": {"WORKING_DIRECTORY": 1}, "failure": "X"}]},
+                pr.ReceiptDefect.FIELD_MALFORMED,
+            ),
+            (
+                {"cleanup_failures": [{"stage": "WORKING_DIRECTORY", "failure": ["X"]}]},
+                pr.ReceiptDefect.FIELD_MALFORMED,
+            ),
+            (
+                {"cleanup_failures": [{"stage": "WORKING_DIRECTORY", "failure": ""}]},
+                pr.ReceiptDefect.FIELD_MALFORMED,
+            ),
+            (
+                {"cleanup_failures": [{"stage": "WORKING_DIRECTORY"}]},
+                pr.ReceiptDefect.FIELD_MALFORMED,
+            ),
+            ({"code_commit": ["a" * 40]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"code_commit": 7}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"configuration_digest": {}}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"binding_digest": ["ab" * 32]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"binding_digest": 12}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"schema_version": "1"}, pr.ReceiptDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"schema_version": [1]}, pr.ReceiptDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"contract_id": ["kalpamani-task-receipt/v1"]}, pr.ReceiptDefect.CONTRACT_ID_UNKNOWN),
+        ],
+        ids=lambda value: next(iter(value)) if isinstance(value, dict) else value.value,
+    )
+    def test_a_wrong_type_in_any_closed_field_is_a_closed_defect(
+        self, overrides: dict[str, Any], defect: pr.ReceiptDefect
+    ) -> None:
+        """Through ``collect_and_verify`` -- the collector's boundary -- not a helper."""
+        harness, expectation = _harness_and_expectation()
+        document = pr.receipt_document(harness.run())
+        document.update(overrides)
+        if not any(isinstance(v, float) for v in overrides.values()):
+            _sign(document)
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([_line_of(document)], expectation=expectation)
+        assert refusal.value.defect is defect, overrides
+
+    @pytest.mark.parametrize(
+        ("overrides", "defect"),
+        [
+            ({"receipt_digest": 5}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"receipt_digest": ["0" * 64]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"receipt_digest": None}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"receipt_digest": "0" * 63}, pr.ReceiptDefect.FIELD_MALFORMED),
+        ],
+    )
+    def test_a_malformed_receipt_digest_is_a_closed_defect(
+        self, overrides: dict[str, Any], defect: pr.ReceiptDefect
+    ) -> None:
+        harness, expectation = _harness_and_expectation()
+        document = pr.receipt_document(harness.run())
+        document.update(overrides)  # deliberately not re-signed
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([_line_of(document)], expectation=expectation)
+        assert refusal.value.defect is defect
+
+    @pytest.mark.parametrize(
+        ("counts_override", "defect"),
+        [
+            ({"s3_operations": "3"}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"s3_operations": 3.0}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"s3_operations": -1}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"s3_operations": True}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"s3_operations": [3]}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"s3_operations": None}, pr.ReceiptDefect.FIELD_MALFORMED),
+            ({"extra_count": 0}, pr.ReceiptDefect.FIELD_MALFORMED),
+        ],
+        ids=["string", "float", "negative", "bool", "list", "null", "foreign-name"],
+    )
+    def test_a_malformed_count_is_a_malformed_field_never_a_measurement(
+        self, counts_override: dict[str, Any], defect: pr.ReceiptDefect
+    ) -> None:
+        harness, expectation = _harness_and_expectation()
+        document = pr.receipt_document(harness.run())
+        document["counts"] = {**document["counts"], **counts_override}
+        if not any(isinstance(v, float) for v in counts_override.values()):
+            _sign(document)
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([_line_of(document)], expectation=expectation)
+        assert refusal.value.defect is defect
+
+    def test_a_contradictory_duplicate_key_is_refused_even_when_the_digest_would_verify(
+        self,
+    ) -> None:
+        """An otherwise-valid receipt with one contradictory duplicate: refused, not last-wins."""
+        harness, expectation = _harness_and_expectation()
+        line = harness.run().render()[-1]
+        assert pr.collect_and_verify([line], expectation=expectation).outcome is (
+            TaskOutcome.COMPLETED
+        )
+        body = line[len(pr.RECEIPT_LINE_PREFIX) :]
+        assert body.endswith("}")
+        # ``json.loads`` alone keeps the LAST value, so the document would read COMPLETED
+        # with a digest that still verifies -- exactly the collapse that must not happen.
+        forged = body[:-1] + ',"outcome":"REFUSED_INPUT","outcome":"COMPLETED"}'
+        assert json.loads(forged)["outcome"] == "COMPLETED"
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([pr.RECEIPT_LINE_PREFIX + forged], expectation=expectation)
+        assert refusal.value.defect is pr.ReceiptDefect.DUPLICATE_KEY
+        # The same duplicate inside a nested object (the counts) is refused too.
+        document = json.loads(body)
+        counts = json.dumps(document["counts"], separators=(",", ":"))
+        nested_counts = (
+            counts[:-1]
+            + ',"s3_operations":999,"s3_operations":'
+            + str(document["counts"]["s3_operations"])
+            + "}"
+        )
+        rest = json.dumps(
+            {k: v for k, v in document.items() if k != "counts"}, separators=(",", ":")
+        )
+        nested = rest[:-1] + ',"counts":' + nested_counts + "}"
+        assert json.loads(nested)["counts"] == document["counts"]
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([pr.RECEIPT_LINE_PREFIX + nested], expectation=expectation)
+        assert refusal.value.defect is pr.ReceiptDefect.DUPLICATE_KEY
+        # A duplicate inside a cleanup entry is refused as well.
+        entry = '{"stage":"WORKING_DIRECTORY","failure":"A","failure":"B"}'
+        with_entry = rest[:-1] + ',"counts":' + counts + ',"cleanup_failures":[' + entry + "]}"
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify(
+                [pr.RECEIPT_LINE_PREFIX + with_entry.replace(',"cleanup_failures":[]', "", 1)],
+                expectation=expectation,
+            )
+        assert refusal.value.defect is pr.ReceiptDefect.DUPLICATE_KEY
+
+    @pytest.mark.parametrize(
+        ("body", "defect"),
+        [
+            ('{"a":"\udc80"}', pr.ReceiptDefect.ENCODING_INVALID),
+            ('{"a":"\\udc80"}', pr.ReceiptDefect.ENCODING_INVALID),
+            ('{"\\ud800":1}', pr.ReceiptDefect.ENCODING_INVALID),
+            ('{"a":["\\udfff"]}', pr.ReceiptDefect.ENCODING_INVALID),
+            ("{not json", pr.ReceiptDefect.DOCUMENT_MALFORMED),
+            ("[]", pr.ReceiptDefect.DOCUMENT_MALFORMED),
+            ('"a string"', pr.ReceiptDefect.DOCUMENT_MALFORMED),
+            ("null", pr.ReceiptDefect.DOCUMENT_MALFORMED),
+            ("[" * 100000 + "]" * 100000, pr.ReceiptDefect.TOO_LARGE),
+            ("{" + " " * (8 * 1024) + "}", pr.ReceiptDefect.TOO_LARGE),
+        ],
+        ids=[
+            "raw-lone-surrogate",
+            "escaped-lone-surrogate",
+            "surrogate-in-a-key",
+            "surrogate-in-a-list",
+            "not-json",
+            "not-an-object",
+            "a-string",
+            "null",
+            "deeply-nested-oversize",
+            "oversize",
+        ],
+    )
+    def test_undecodable_text_is_a_closed_defect(self, body: str, defect: pr.ReceiptDefect) -> None:
+        _harness, expectation = _harness_and_expectation()
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([pr.RECEIPT_LINE_PREFIX + body], expectation=expectation)
+        assert refusal.value.defect is defect
+
+    def test_a_deeply_nested_document_under_the_ceiling_is_malformed_not_a_recursion_error(
+        self,
+    ) -> None:
+        depth = 3000
+        body = '{"a":' + "[" * depth + "]" * depth + "}"
+        assert len(body.encode("utf-8")) <= pr.MAX_RECEIPT_BYTES
+        _harness, expectation = _harness_and_expectation()
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([pr.RECEIPT_LINE_PREFIX + body], expectation=expectation)
+        assert refusal.value.defect in (
+            pr.ReceiptDefect.DOCUMENT_MALFORMED,
+            pr.ReceiptDefect.FIELD_UNKNOWN,
+        )
+
+    @pytest.mark.parametrize("depth", [200, 900])
+    def test_a_deeply_nested_value_inside_a_known_field_is_a_closed_defect(
+        self, depth: int
+    ) -> None:
+        """The digest is computed over the document; a depth the serializer cannot walk
+        is malformed evidence, never the interpreter's recursion error."""
+        harness, expectation = _harness_and_expectation()
+        document = pr.receipt_document(harness.run())
+        body = json.dumps(document, separators=(",", ":"))
+        nested = body[:-1] + ',"counts":' + "[" * depth + "]" * depth + "}"
+        nested = nested.replace(
+            ',"counts":' + json.dumps(document["counts"], separators=(",", ":")), "", 1
+        )
+        assert len(nested.encode("utf-8")) <= pr.MAX_RECEIPT_BYTES
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.collect_and_verify([pr.RECEIPT_LINE_PREFIX + nested], expectation=expectation)
+        assert refusal.value.defect in (
+            pr.ReceiptDefect.DIGEST_MISMATCH,
+            pr.ReceiptDefect.DOCUMENT_MALFORMED,
+        )
+
+    def test_verify_receipt_refuses_a_non_string_key_and_a_foreign_value_type(self) -> None:
+        harness, expectation = _harness_and_expectation()
+        document = pr.receipt_document(harness.run())
+        with pytest.raises(pr.ReceiptError) as refusal:
+            keyed: dict[Any, Any] = {**document, 1: "x"}
+            pr.verify_receipt(keyed, expectation=expectation)
+        assert refusal.value.defect is pr.ReceiptDefect.DOCUMENT_MALFORMED
+        with pytest.raises(pr.ReceiptError) as refusal:
+            pr.verify_receipt({**document, "runner": object()}, expectation=expectation)
+        assert refusal.value.defect is pr.ReceiptDefect.FIELD_MALFORMED
+
+    def test_the_valid_receipt_still_verifies_after_the_tightening(self) -> None:
+        harness, expectation = _harness_and_expectation()
+        verified = pr.collect_and_verify(harness.run().render(), expectation=expectation)
+        assert verified.outcome is TaskOutcome.COMPLETED and verified.counts is not None
+
+
+class TestNoEntryReceipt:
+    """An invalid invocation names no entry and no actor (ADR-0044 §4)."""
+
+    def test_the_receipt_carries_null_entry_and_actor_and_verifies(self) -> None:
+        from kalpamani.data.production.sharadar.entry import no_entry_receipt, run_task_entry
+
+        receipt = no_entry_receipt()
+        assert receipt.entry is None and receipt.exit_code == 2
+        assert run_task_entry(entry=None, configuration=None, factories=None).entry is None
+        document = pr.receipt_document(receipt)
+        assert document["entry"] is None and document["actor"] is None
+        assert document["runner"] is None and document["binding_digest"] is None
+        assert document["code_commit"] is None and document["configuration_digest"] is None
+        assert document["counts_observed"] is True and set(document["counts"].values()) == {0}
+        for entry in TaskEntry:
+            verified = pr.verify_receipt(document, expectation=_expectation(entry))
+            assert verified.entry is None and verified.outcome is TaskOutcome.REFUSED_ENTRY
+            assert verified.ledger_outcome == "REFUSED"
+            completion = pr.ledger_completion(verified)
+            assert completion is not None and completion.outcome == "REFUSED"
+        assert "None" in repr(receipt) and "None" in repr(verified)
+
+    def test_an_invented_actor_on_a_no_entry_receipt_is_a_contradiction(self) -> None:
+        from kalpamani.data.production.sharadar.entry import no_entry_receipt
+
+        document = pr.receipt_document(no_entry_receipt())
+        for override in ({"entry": TaskEntry.BUILD.value}, {"actor": BUILD.value}):
+            with pytest.raises(pr.ReceiptError) as refusal:
+                pr.verify_receipt(
+                    _sign({**document, **override}), expectation=_expectation(TaskEntry.BUILD)
+                )
+            assert refusal.value.defect is pr.ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME
+        # ... and a configured refusal with no entry is refused at construction.
+        with pytest.raises(ValueError):
+            TaskReceipt(
+                entry=None,
+                outcome=TaskOutcome.REFUSED_CONFIGURATION,
+                runner=None,
+                counts=OperationCounts(),
+                counts_observed=True,
+                cleanup_failures=(),
+            )
+        with pytest.raises(ValueError):
+            TaskReceipt(
+                entry=TaskEntry.BUILD,
+                outcome=TaskOutcome.REFUSED_ENTRY,
+                runner=None,
+                counts=OperationCounts(),
+                counts_observed=True,
+                cleanup_failures=(),
+            )
+
+
+class TestTotalCompiledParsing:
+    """Every malformed compiled configuration is a closed defect through the real parser."""
+
+    @pytest.mark.parametrize(
+        ("overrides", "defect"),
+        [
+            ({"entry": []}, pc.CompiledConfigurationDefect.ENTRY_UNKNOWN),
+            (
+                {"entry": {"kalpamani-production-acquire": 1}},
+                pc.CompiledConfigurationDefect.ENTRY_UNKNOWN,
+            ),
+            ({"entry": None}, pc.CompiledConfigurationDefect.ENTRY_UNKNOWN),
+            ({"entry": 1}, pc.CompiledConfigurationDefect.ENTRY_UNKNOWN),
+            ({"schema_version": "1"}, pc.CompiledConfigurationDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"schema_version": [1]}, pc.CompiledConfigurationDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"contract_id": {}}, pc.CompiledConfigurationDefect.CONTRACT_ID_UNKNOWN),
+            ({"actor": ["acquisition"]}, pc.CompiledConfigurationDefect.ACTOR_MISMATCH),
+            ({"family": None}, pc.CompiledConfigurationDefect.ACTOR_MISMATCH),
+            ({"code_commit": ["a" * 40]}, pc.CompiledConfigurationDefect.FIELD_MALFORMED),
+            ({"code_tree": 40}, pc.CompiledConfigurationDefect.FIELD_MALFORMED),
+            ({"generated_at": {}}, pc.CompiledConfigurationDefect.FIELD_MALFORMED),
+            ({"generated_at": 0}, pc.CompiledConfigurationDefect.FIELD_MALFORMED),
+            ({"secret_name": ["x"]}, pc.CompiledConfigurationDefect.SECRET_NAME_MALFORMED),
+            ({"secret_name": None}, pc.CompiledConfigurationDefect.SECRET_NAME_MALFORMED),
+            (
+                {"origin_addresses": "198.51.100.1"},
+                pc.CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED,
+            ),
+            (
+                {"origin_addresses": [["198.51.100.1"]]},
+                pc.CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED,
+            ),
+            (
+                {"origin_addresses": [None]},
+                pc.CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED,
+            ),
+            (
+                {"origin_addresses": {"198.51.100.1": 1}},
+                pc.CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED,
+            ),
+        ],
+        ids=lambda value: next(iter(value)) if isinstance(value, dict) else value.value,
+    )
+    def test_a_wrong_type_in_an_acquisition_field_is_a_closed_defect(
+        self, overrides: dict[str, Any], defect: pc.CompiledConfigurationDefect
+    ) -> None:
+        document = json.loads(_acquisition_bytes())
+        document.update(overrides)
+        with pytest.raises(pc.CompiledConfigurationError) as refusal:
+            pc.parse_compiled_configuration(json.dumps(document).encode("utf-8"))
+        assert refusal.value.defect is defect, overrides
+
+    @staticmethod
+    def _build_document() -> dict[str, Any]:
+        document: dict[str, Any] = json.loads(
+            pc.build_compiled_configuration(
+                entry=TaskEntry.BUILD,
+                code_commit=COMMIT,
+                code_tree=TREE,
+                generated_at=NOW,
+                build_configuration=configuration(),
+            )
+        )
+        return document
+
+    @pytest.mark.parametrize(
+        ("mutate", "defect"),
+        [
+            (
+                lambda b: b.__setitem__("calendar", []),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"].__setitem__("sessions", {}),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"].__setitem__("sessions", [["2026-01-02"]]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"]["sessions"][0].__setitem__("session_date", ["2026-01-02"]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"]["sessions"][0].__setitem__(
+                    "open_at", "1990-01-01T00:00:00+00:00"
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"]["sessions"][0].__setitem__(
+                    "open_at", "2026-01-02T14:30:00"
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["calendar"].__setitem__("version", ["v1"]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["accepted_schemas"].__setitem__("digests", []),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["accepted_schemas"].__setitem__("digests", {"stocks": "x"}),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["accepted_schemas"].__setitem__(
+                    "digests", {"stocks": [{"nested": "dict"}]}
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["accepted_schemas"].__setitem__("digests", {"unknown": []}),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__("items", {}),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__(
+                    "items",
+                    [
+                        {
+                            "kind": "PER_VERSION_DELIVERY",
+                            "dataset": "stocks",
+                            "row_key": ["x"],
+                            "content_sha256": None,
+                            "instant": None,
+                            "evidence_digest": "short",
+                        }
+                    ],
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__(
+                    "items",
+                    [
+                        {
+                            "kind": "PER_VERSION_DELIVERY",
+                            "dataset": "stocks",
+                            "row_key": "x",
+                            "content_sha256": None,
+                            "instant": None,
+                            "evidence_digest": "a" * 64,
+                        }
+                    ],
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__(
+                    "items",
+                    [
+                        {
+                            "kind": ["PER_VERSION_DELIVERY"],
+                            "dataset": "stocks",
+                            "row_key": ["x"],
+                            "content_sha256": None,
+                            "instant": None,
+                            "evidence_digest": "a" * 64,
+                        }
+                    ],
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__(
+                    "items",
+                    [
+                        {
+                            "kind": "PER_VERSION_DELIVERY",
+                            "dataset": "stocks",
+                            "row_key": ["x"],
+                            "content_sha256": 5,
+                            "instant": None,
+                            "evidence_digest": "a" * 64,
+                        }
+                    ],
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["evidence"].__setitem__(
+                    "items",
+                    [
+                        {
+                            "kind": "PER_VERSION_DELIVERY",
+                            "dataset": "stocks",
+                            "row_key": ["x"],
+                            "content_sha256": None,
+                            "instant": "2026-01-02T00:00:00",
+                            "evidence_digest": "a" * 64,
+                        }
+                    ],
+                ),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("universe_rule", []),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("history_sessions", "5"),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("history_sessions", True),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("history_sessions", -1),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("price_floor", 5),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("price_floor", "not-a-number"),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("eligible_exchanges", "NYSE"),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("eligible_exchanges", [["NYSE"]]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b["universe_rule"].__setitem__("universe_rule_version", ["x"]),
+                pc.CompiledConfigurationDefect.DERIVATION_VERSION_MISMATCH,
+            ),
+            (
+                lambda b: b.__setitem__("decision_sessions", "2026-01-02"),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("decision_sessions", [["2026-01-02"]]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("decision_sessions", [20260102]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("as_of", ["2026-01-02T00:00:00+00:00"]),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("commit", 1),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("jump_ratio", 1.5),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("jump_ratio", None),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("reconciliation_tolerance", {"D": "0.01"}),
+                pc.CompiledConfigurationDefect.BUILD_CONFIGURATION_MALFORMED,
+            ),
+            (
+                lambda b: b.__setitem__("adjustment_policy", ["SPLIT_ONLY"]),
+                pc.CompiledConfigurationDefect.DERIVATION_VERSION_MISMATCH,
+            ),
+        ],
+        ids=[
+            "calendar-list",
+            "sessions-object",
+            "session-list",
+            "session-date-list",
+            "session-opens-before-date",
+            "session-open-naive",
+            "calendar-version-list",
+            "digests-list",
+            "digest-values-string",
+            "digest-value-dict",
+            "unknown-dataset",
+            "items-object",
+            "short-evidence-digest",
+            "row-key-string",
+            "kind-list",
+            "content-sha256-int",
+            "evidence-instant-naive",
+            "rule-list",
+            "int-as-string",
+            "int-as-bool",
+            "negative-int",
+            "decimal-as-int",
+            "decimal-not-a-number",
+            "exchanges-string",
+            "exchanges-nested",
+            "rule-version-list",
+            "decision-sessions-string",
+            "decision-session-list",
+            "decision-session-int",
+            "as-of-list",
+            "commit-int",
+            "ratio-float",
+            "ratio-null",
+            "tolerance-dict",
+            "policy-list",
+        ],
+    )
+    def test_a_wrong_type_anywhere_in_the_build_configuration_is_a_closed_defect(
+        self, mutate: Any, defect: pc.CompiledConfigurationDefect
+    ) -> None:
+        document = self._build_document()
+        mutate(document["build_configuration"])
+        with pytest.raises(pc.CompiledConfigurationError) as refusal:
+            pc.parse_compiled_configuration(json.dumps(document).encode("utf-8"))
+        assert refusal.value.defect is defect
+        # The same document through the sub-parser the generator uses.
+        with pytest.raises(pc.CompiledConfigurationError) as refusal:
+            pc.parse_build_configuration(document["build_configuration"])
+        assert refusal.value.defect is defect
+
+    @pytest.mark.parametrize(
+        ("raw", "defect"),
+        [
+            (b'{"entry":"\\udc80"}', pc.CompiledConfigurationDefect.ENCODING_INVALID),
+            (b'{"\\ud800":1}', pc.CompiledConfigurationDefect.ENCODING_INVALID),
+            (
+                b'{"entry":"x","build_configuration":{"a":["\\udfff"]}}',
+                pc.CompiledConfigurationDefect.ENCODING_INVALID,
+            ),
+            (b"\xff\xfe{}", pc.CompiledConfigurationDefect.ENCODING_INVALID),
+            (
+                b'{"entry":"kalpamani-research-build","build_configuration":{"a":1,"a":2}}',
+                pc.CompiledConfigurationDefect.DUPLICATE_KEY,
+            ),
+            (
+                b'{"entry":"kalpamani-research-build","x":[{"a":1,"a":2}]}',
+                pc.CompiledConfigurationDefect.DUPLICATE_KEY,
+            ),
+            (b'{"entry":1e999}', pc.CompiledConfigurationDefect.ENTRY_UNKNOWN),
+            (
+                b'{"entry":"kalpamani-research-build","a":' + b"[" * 2000 + b"]" * 2000 + b"}",
+                pc.CompiledConfigurationDefect.DOCUMENT_MALFORMED,
+            ),
+        ],
+        ids=[
+            "escaped-lone-surrogate",
+            "surrogate-in-a-key",
+            "nested-surrogate",
+            "invalid-utf8",
+            "nested-duplicate",
+            "duplicate-inside-a-list",
+            "float-entry",
+            "deeply-nested",
+        ],
+    )
+    def test_undecodable_or_duplicate_text_is_a_closed_defect(
+        self, raw: bytes, defect: pc.CompiledConfigurationDefect
+    ) -> None:
+        with pytest.raises(pc.CompiledConfigurationError) as refusal:
+            pc.parse_compiled_configuration(raw)
+        assert refusal.value.defect is defect
