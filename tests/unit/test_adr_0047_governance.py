@@ -283,6 +283,7 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
         pc.PERMISSION_TARGETS_CONTRACT_ID,
         pc.PERMISSION_STATEMENT_CONTRACT_ID,
         pc.PERMISSION_AUTHORIZATION_CONTRACT_ID,
+        pc.PERMISSION_CONSUMPTION_CONTRACT_ID,
         pc.PERMISSION_ATTEMPT_CONTRACT_ID,
         pc.PERMISSION_RECORD_CONTRACT_ID,
         pc.PERMISSION_CLEANUP_CONTRACT_ID,
@@ -301,6 +302,16 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
     assert "an acknowledged stop is not a termination" in ADR_PLAIN
     assert "No RunTask is ever retried" in ADR_PLAIN
     assert "## 8. Corrections on review (PR #106, correction 1)" in ADR_TEXT
+    assert "## 9. Corrections on review (PR #106, correction 2)" in ADR_TEXT
+    assert "One validator binds a result, and it is the same everywhere" in ADR_PLAIN
+    assert "A digest-shaped field alone binds nothing" in ADR_PLAIN
+    assert "Discovery exhaustion is never proof of absence" in ADR_PLAIN
+    assert "the digest of the owner's private targets document" in ADR_PLAIN
+    assert "bind_result" in ADR_TEXT and "PermissionContext" in ADR_TEXT
+    assert "targets_sha256" in pc.PermissionBinding.__slots__
+    assert pc.DISCOVERY_DESIRED_STATUSES == ("RUNNING", "STOPPED")
+    assert pc.DISCOVERY_MAX_PAGES == 3 and "three pages per status" in ADR_PLAIN
+    assert "recorded as deferred (owner inputs D.2); not granted" in ADR_PLAIN
     assert "--prepare-subcell" in ADR_TEXT and "LaunchStore.consume" in ADR_TEXT
     for status in pc.SubcellStatus:
         assert status.value in ADR_TEXT, status

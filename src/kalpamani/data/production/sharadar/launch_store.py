@@ -503,6 +503,27 @@ class LaunchStore:
         """Whether ``digest`` was consumed before."""
         return self.consumed_path(kind, digest).exists()
 
+    def consumptions(self, kind: str) -> dict[str, bytes]:
+        """Every consumption of ``kind`` beside the ledger: the digest and the bytes.
+
+        Read only; a file whose name is not a digest of this kind is ignored, a file that
+        cannot be read is reported by its digest with empty bytes (malformed, never
+        silently absent).
+        """
+        directory = self._ledger_path.with_name(self._ledger_path.name + CONSUMED_SUFFIX)
+        if not directory.is_dir() or not kind.isidentifier():
+            return {}
+        found: dict[str, bytes] = {}
+        for path in sorted(directory.glob(f"{kind}-*.json")):
+            digest = path.name[len(kind) + 1 : -len(".json")]
+            if len(digest) != 64 or not set(digest) <= _HEX_64:
+                continue
+            try:
+                found[digest] = path.read_bytes()
+            except OSError:
+                found[digest] = b""
+        return found
+
     def unreconciled(self, ledger: OwnerLedger) -> list[str]:
         """Identities reserved but absent from the ledger: interrupted work, sorted."""
         if not self._reservations.is_dir():

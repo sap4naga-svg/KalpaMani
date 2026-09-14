@@ -70,7 +70,7 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
     if str(_entry) not in sys.path:  # pragma: no cover - import bootstrap
         sys.path.insert(0, str(_entry))
 
-from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex  # noqa: E402
+from kalpamani.data.contracts.canonical import canonical_bytes  # noqa: E402
 from kalpamani.data.production.sharadar import verification_cells as vc  # noqa: E402
 from kalpamani.data.production.sharadar.release import ReleaseMode  # noqa: E402
 
@@ -307,12 +307,14 @@ def _negative_evidence(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozense
     return _closed_records(store, "negative-launch-evidence", vc.parse_negative_launch_evidence)
 
 
-def permission_evidence(store: Any, binding: Any) -> Any:
-    """Every permission record, attempt and cleanup in the records directory, parsed closed.
+def permission_evidence(store: Any, context: Any) -> Any:
+    """Every permission record, attempt, statement, consumption and cleanup, parsed closed.
 
-    Grouped by subcell (records, attempts) or kept in order (cleanups); a file that does
-    not parse is counted as malformed, which makes every permission subcell UNBOUND until
-    it is removed or repaired -- malformed evidence is reported, never ignored.
+    Grouped by subcell (records, attempts, statements), by authorization digest
+    (consumptions, read from beside the ledger) or kept in order (cleanups); a file that
+    does not parse is counted as malformed, which makes every permission subcell UNBOUND
+    until it is removed or repaired -- malformed evidence is reported, never ignored.
+    ``context`` is what everything is held to now (``None``: no binding, nothing passes).
     """
     from kalpamani.data.production.sharadar import permission_cells as pc
     from kalpamani.data.production.sharadar.documents import decode_document
@@ -321,11 +323,26 @@ def permission_evidence(store: Any, binding: Any) -> Any:
     records: dict[str, list[Any]] = {}
     attempts: dict[str, list[Any]] = {}
     statements: dict[str, list[Any]] = {}
+    consumptions: dict[str, Any] = {}
     cleanups: list[Any] = []
     malformed = 0
+    for digest, raw in store.consumptions(_permission_tool().CONSUMPTION_KIND).items():
+        try:
+            parsed = pc.parse_permission_consumption(
+                decode_document(raw, max_bytes=MAX_RECORD_BYTES)
+            )
+        except Exception:
+            malformed += 1
+            continue
+        if parsed.authorization_sha256 != digest:
+            malformed += 1
+            continue
+        consumptions[digest] = parsed
     records_dir: Path = store._records_dir
     if not records_dir.is_dir():
-        return pc.PermissionEvidence(binding=binding)
+        return pc.PermissionEvidence(
+            consumptions=consumptions, malformed=malformed, context=context
+        )
     parsers: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]] | None], ...] = (
         ("permission-record", pc.parse_permission_record, records),
         ("permission-attempt", pc.parse_permission_attempt, attempts),
@@ -349,9 +366,10 @@ def permission_evidence(store: Any, binding: Any) -> Any:
         statements={
             k: tuple(sorted(v, key=lambda st: st.prepared_at)) for k, v in statements.items()
         },
+        consumptions=consumptions,
         cleanups=tuple(sorted(cleanups, key=lambda c: c.recorded_at)),
         malformed=malformed,
-        binding=binding,
+        context=context,
     )
 
 
@@ -360,6 +378,7 @@ def recorded_evidence(
     store: Any,
     *,
     r3_binding_source: Callable[[], Any] | None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
 ) -> vc.RecordedEvidence:
     """Everything the matrix is derived from, read once."""
     from kalpamani.data.production.sharadar import launch_records as lr
@@ -415,26 +434,24 @@ def recorded_evidence(
                 r3_binding = r3_binding_source()
             except Exception:
                 r3_binding = None
-    # The permission binding: the same environment binding, the production declarations
-    # and the registration the targets were resolved from. Absent when the R-3 binding
-    # is (nothing to hold the evidence to).
-    permission_binding = None
+    # The permission context: the same environment binding, the tracked declarations,
+    # the registration, the private targets document and (when named) the acquisition
+    # configuration -- built by the permission tool's own constructor, so the matrix holds
+    # every recorded result to exactly what an execution would be held to. Absent when any
+    # input is (nothing to hold the evidence to: recorded results read UNBOUND, never
+    # PASSED).
+    permission_context = None
     if r3_binding is not None:
-        from kalpamani.data.production.sharadar import permission_cells as pc
-
+        source = (
+            _current_permission_context
+            if permission_context_source is None
+            else permission_context_source
+        )
         try:
-            permission_binding = pc.PermissionBinding(
-                environment_binding_sha256=r3_binding.environment_binding_sha256,
-                policy_declaration_sha256=pc.declaration_digest(
-                    _permission_tool().declaration_paths()
-                ),
-                registration_sha256=sha256_hex(arguments.launch_inputs.read_bytes()),
-                partition=r3_binding.partition,
-                region=r3_binding.region,
-            )
-        except (OSError, ValueError):
-            permission_binding = None
-    permission = permission_evidence(store, permission_binding)
+            permission_context = source(arguments)
+        except Exception:
+            permission_context = None
+    permission = permission_evidence(store, permission_context)
     return vc.RecordedEvidence(
         ledger=ledger,
         unreconciled=unreconciled,
@@ -451,6 +468,40 @@ def recorded_evidence(
         malformed_negative_evidence=malformed_negative,
         unreadable_negative_evidence=unreadable_negative,
         permission=permission,
+    )
+
+
+def _current_permission_context(arguments: argparse.Namespace) -> Any:
+    """The permission context in force today, from the same private inputs the tool admits."""
+    from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
+    from kalpamani.data.production.sharadar.launch_records import parse_launch_inputs
+    from kalpamani.data.qualify.sharadar.runtime_binding import (
+        ENVIRONMENT_BINDING_ENV_VAR,
+        load_environment_binding,
+    )
+
+    tool = _permission_tool()
+    from aws_foundation_verify import expected_account
+
+    environment = load_environment_binding(
+        path=os.environ.get(ENVIRONMENT_BINDING_ENV_VAR, ""), expected_account=expected_account()
+    )
+    registration_bytes = arguments.launch_inputs.read_bytes()
+    targets = tool.pc.parse_permission_targets(
+        tool._read_private(os.environ.get(tool.TARGETS_ENV_VAR, ""))
+    )
+    production_secret = None
+    if arguments.acquisition_configuration is not None:
+        configuration, _digest = parse_compiled_configuration(
+            arguments.acquisition_configuration.read_bytes()
+        )
+        production_secret = configuration.secret_identifier
+    return tool.permission_context(
+        environment,
+        registration_bytes=registration_bytes,
+        inputs=parse_launch_inputs(registration_bytes),
+        targets=targets,
+        production_secret=production_secret,
     )
 
 
@@ -738,6 +789,7 @@ def main(
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
     r3_binding_source: Callable[[], Any] | None = None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
 ) -> int:
     """Derive the matrix (default), or prepare / execute / complete / verdict one cell.
 
@@ -803,7 +855,12 @@ def main(
             print(f"cell={record.cell_id} specification_digest={record.specification_digest}")
             print(SENTENCES["prepared"])
             return EXIT_PREPARED
-        evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+        evidence = recorded_evidence(
+            arguments,
+            store,
+            r3_binding_source=binding_source,
+            permission_context_source=permission_context_source,
+        )
         prepared = read_prepared(store)
         states = vc.derive_states(evidence, prepared)
         if arguments.execute_cell is not None:
@@ -835,7 +892,12 @@ def main(
                 [*_launch_argv(arguments, cell, record.identity), launch.AUTHORIZATION_FLAG],
                 **seams,
             )
-            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):
                 print(line)
@@ -856,7 +918,12 @@ def main(
                 now=clock(),
                 root_source=root_source,
             )
-            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):
                 print(line)
@@ -909,7 +976,12 @@ def main(
                 _record_negative_evidence(
                     launch, store, cell, record, mode_argv, now=clock(), root_source=root_source
                 )
-            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):
                 print(line)

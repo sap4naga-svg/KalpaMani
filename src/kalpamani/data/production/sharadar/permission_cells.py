@@ -1231,7 +1231,9 @@ class PermissionClient(Protocol):
         platform_version: str,
     ) -> Observation: ...
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
-    def list_tasks(self, *, cluster_arn: str, started_by: str) -> Observation: ...
+    def list_tasks(
+        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
+    ) -> Observation: ...
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Observation: ...
     def execute_command(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
 
@@ -1298,9 +1300,19 @@ MAX_RETURNED_TASKS: Final = 4
 SUBCELL_OPERATION_BUDGET: Final = 1 + MAX_RETURNED_TASKS
 #: Cleanup operations per created key: one DeleteObject and one HeadObject.
 CLEANUP_OPERATIONS_PER_KEY: Final = 2
-#: Cleanup operations per launching attempt: one ListTasks, then per task one DescribeTasks
-#: and, when it is not STOPPED, one StopTask.
-CLEANUP_OPERATIONS_PER_TASK_MAX: Final = 1 + 2 * MAX_RETURNED_TASKS
+#: Bounded discovery of a launching attempt's tasks: the cluster is listed by the attempt's
+#: ``startedBy`` tag under each of these desired statuses (ECS lists RUNNING by default and
+#: keeps STOPPED tasks listable for a bounded time), following ``nextToken`` for at most
+#: this many pages per status. A page bound reached with a token remaining is an
+#: INCOMPLETE discovery; a listing that did not answer is a FAILED discovery; a complete
+#: discovery that found nothing is NOT proof of absence -- the launch stays unresolved.
+DISCOVERY_DESIRED_STATUSES: Final[tuple[str, ...]] = ("RUNNING", "STOPPED")
+DISCOVERY_MAX_PAGES: Final = 3
+#: Cleanup operations per launching attempt: the discovery listings, then per task one
+#: DescribeTasks and, when it is not STOPPED, one StopTask.
+CLEANUP_OPERATIONS_PER_TASK_MAX: Final = (
+    len(DISCOVERY_DESIRED_STATUSES) * DISCOVERY_MAX_PAGES + 2 * MAX_RETURNED_TASKS
+)
 #: The ECS ``lastStatus`` that alone confirms a task is no longer running.
 TASK_STOPPED_STATUS: Final = "STOPPED"
 
@@ -1322,6 +1334,7 @@ def decide(cell: Subcell, observed: ObservedClass) -> SubcellOutcome:
 
 PERMISSION_STATEMENT_CONTRACT_ID: Final = "kalpamani-permission-statement/v1"
 PERMISSION_AUTHORIZATION_CONTRACT_ID: Final = "kalpamani-permission-authorization/v1"
+PERMISSION_CONSUMPTION_CONTRACT_ID: Final = "kalpamani-permission-consumption/v1"
 PERMISSION_ATTEMPT_CONTRACT_ID: Final = "kalpamani-permission-attempt/v1"
 PERMISSION_RECORD_CONTRACT_ID: Final = "kalpamani-permission-record/v1"
 PERMISSION_CLEANUP_CONTRACT_ID: Final = "kalpamani-permission-cleanup/v1"
@@ -1339,12 +1352,18 @@ class PermissionBinding:
     task roles and the bucket-policy statements) -- a change to any of them makes every
     permission record HISTORICAL, exactly as ADR-0036 s.3 and readiness s.4.6 require;
     ``registration_sha256`` is the digest of the launch-inputs record the targets were
-    resolved from.
+    resolved from; ``targets_sha256`` is the digest of the owner's private targets document
+    (the foundation task role, the qualification secret, the CONTROL bucket) the targets
+    were resolved from -- a changed targets document changes the binding, and every record
+    made under the old one is HISTORICAL. A binding cannot be computed without every one
+    of its inputs present now, so a missing input holds every recorded result UNBOUND
+    rather than preserving a PASSED.
     """
 
     environment_binding_sha256: str
     policy_declaration_sha256: str
     registration_sha256: str
+    targets_sha256: str
     partition: str
     region: str
 
@@ -1353,6 +1372,7 @@ class PermissionBinding:
             "environment_binding_sha256": self.environment_binding_sha256,
             "policy_declaration_sha256": self.policy_declaration_sha256,
             "registration_sha256": self.registration_sha256,
+            "targets_sha256": self.targets_sha256,
             "partition": self.partition,
             "region": self.region,
         }
@@ -1375,16 +1395,57 @@ def _binding_from(document: object) -> PermissionBinding:
         "partition",
         "region",
         "registration_sha256",
+        "targets_sha256",
     }
     if type(document) is not dict or set(document) != fields_:
         raise ValueError("permission binding: closed field set")
     values = {name: exact_str(document[name]) for name in fields_}
     if any(v is None for v in values.values()):
         raise ValueError("permission binding: field")
-    for name in ("environment_binding_sha256", "policy_declaration_sha256", "registration_sha256"):
+    for name in (
+        "environment_binding_sha256",
+        "policy_declaration_sha256",
+        "registration_sha256",
+        "targets_sha256",
+    ):
         if hex_digest(values[name]) is None:
             raise ValueError("permission binding: digest")
     return PermissionBinding(**values)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionContext:
+    """What is admitted NOW: the binding and everything a target is resolved from.
+
+    Built by the tool (execution, cleanup) and by the cell runner (derivation) from the
+    same inputs -- the environment binding, the tracked declarations, the launch-inputs
+    registration, the private targets document and, when present, the acquisition
+    configuration -- so the one validator below holds every recorded result to the same
+    current state. Never rendered.
+    """
+
+    binding: PermissionBinding
+    licensed_bucket: str
+    inputs: LaunchInputs
+    targets: PermissionTargets
+    production_secret: str | None
+
+    def __repr__(self) -> str:
+        return "PermissionContext(...)"
+
+    def resolve(
+        self, cell: Subcell, *, stamp: str, prerequisites: Mapping[str, PermissionRecord]
+    ) -> ResolvedTarget:
+        """The exact target of ``cell`` for ``stamp`` from what is admitted now."""
+        return resolve_target(
+            cell,
+            stamp=stamp,
+            licensed_bucket=self.licensed_bucket,
+            inputs=self.inputs,
+            targets=self.targets,
+            production_secret=self.production_secret,
+            prerequisites=prerequisites,
+        )
 
 
 def _prerequisites_from(document: object) -> dict[str, str]:
@@ -1561,6 +1622,58 @@ def parse_permission_authorization(
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionConsumption:
+    """The durable consumption of one authorization, written beside the ledger.
+
+    Created exclusively (``LaunchStore.consume``) before the attempt it admits and never
+    removed; a record binds only when the consumption of its authorization exists, names
+    its subcell and statement, and was consumed no later than the attempt started.
+    """
+
+    subcell_id: str
+    statement_sha256: str
+    authorization_sha256: str
+    consumed_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": PERMISSION_CONSUMPTION_CONTRACT_ID,
+            "subcell_id": self.subcell_id,
+            "statement_sha256": self.statement_sha256,
+            "authorization_sha256": self.authorization_sha256,
+            "consumed_at": self.consumed_at.isoformat(),
+        }
+
+
+_CONSUMPTION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "subcell_id",
+        "statement_sha256",
+        "authorization_sha256",
+        "consumed_at",
+    }
+)
+
+
+def parse_permission_consumption(raw: object) -> PermissionConsumption:
+    """A consumption record, parsed closed."""
+    d = _document(raw, PERMISSION_CONSUMPTION_CONTRACT_ID, _CONSUMPTION_FIELDS)
+    cell_id = exact_str(d["subcell_id"])
+    consumed_at = instant(d["consumed_at"])
+    if cell_id is None or cell_id not in SUBCELL_BY_ID or consumed_at is None:
+        raise ValueError("permission consumption: field")
+    return PermissionConsumption(
+        subcell_id=cell_id,
+        statement_sha256=_digest_field(d["statement_sha256"]),
+        authorization_sha256=_digest_field(d["authorization_sha256"]),
+        consumed_at=consumed_at,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PermissionAttempt:
     """Written **before** the operation: what is attempted, and the object it may create.
 
@@ -1710,16 +1823,25 @@ class CleanupKey:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CleanupTasks:
-    """One launching attempt's tasks, settled by listing, describing and stopping.
+    """One launching attempt's tasks: bounded discovery, then describing and stopping.
 
-    ``task_ids`` are the tasks known for the attempt (recorded, or listed by its
-    ``started_by`` tag); ``stopped_ids`` those a ``DescribeTasks`` answered ``STOPPED``;
-    every other known task is residue, stopped once more here and still not confirmed.
+    ``task_ids`` are the tasks known for the attempt (recorded, or discovered by its
+    ``started_by`` tag under each desired status, page by page); ``stopped_ids`` those a
+    ``DescribeTasks`` answered ``STOPPED``; every other known task is residue, stopped once
+    more here and still not confirmed. ``listings`` counts the discovery calls;
+    ``discovery_failed`` says one did not answer; ``discovery_incomplete`` says a page bound
+    was reached with a token remaining. **A launch is settled only by termination
+    evidence for every task it is known to have started; a discovery that found nothing
+    settles nothing** -- delayed visibility, an incomplete listing and a refused listing
+    all look the same as absence, so absence is never concluded.
     """
 
     attempt_sha256: str
     started_by: str
+    listings: int
     list_observed: ObservedClass
+    discovery_failed: bool
+    discovery_incomplete: bool
     task_ids: tuple[str, ...]
     stopped_ids: tuple[str, ...]
     residue_ids: tuple[str, ...]
@@ -1729,7 +1851,10 @@ class CleanupTasks:
         return {
             "attempt_sha256": self.attempt_sha256,
             "started_by": self.started_by,
+            "listings": self.listings,
             "list_observed": self.list_observed.value,
+            "discovery_failed": self.discovery_failed,
+            "discovery_incomplete": self.discovery_incomplete,
             "task_ids": list(self.task_ids),
             "stopped_ids": list(self.stopped_ids),
             "residue_ids": list(self.residue_ids),
@@ -1737,9 +1862,19 @@ class CleanupTasks:
         }
 
     @property
+    def undiscovered(self) -> bool:
+        """No task known or discovered: the launch stays unresolved, never absent."""
+        return not self.task_ids
+
+    @property
     def settled(self) -> bool:
-        """Every known task confirmed STOPPED, and the listing answered."""
-        return self.list_observed is ObservedClass.OK_200 and not self.residue_ids
+        """Discovery complete and answered, at least one task known, every one STOPPED."""
+        return (
+            not self.discovery_failed
+            and not self.discovery_incomplete
+            and bool(self.task_ids)
+            and not self.residue_ids
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2018,20 +2153,43 @@ def run_cleanup(
             exhausted = True
             residue.extend(f"task:{t}" for t in launch.known_task_ids)
             if not launch.known_task_ids:
-                residue.append(f"launch:{launch.started_by}")
+                residue.append(f"launch:{launch.started_by}:undiscovered")
             continue
-        listed = client.list_tasks(cluster_arn=launch.cluster_arn, started_by=launch.started_by)
-        operations += 1
-        list_observed = classify(listed)
+        cluster_match = _CLUSTER_ARN_RE.fullmatch(launch.cluster_arn)
         known = list(launch.known_task_ids)
-        for task_arn in tuple(listed.task_arns)[:MAX_RETURNED_TASKS]:
-            task_id = _task_id(task_arn)
-            if task_id not in known:
-                known.append(task_id)
-        known = known[:MAX_RETURNED_TASKS]
+        listings = 0
+        worst = ObservedClass.OK_200
+        failed = False
+        incomplete = False
+        for desired in DISCOVERY_DESIRED_STATUSES:
+            token: str | None = None
+            for _page in range(DISCOVERY_MAX_PAGES):
+                listed = client.list_tasks(
+                    cluster_arn=launch.cluster_arn,
+                    started_by=launch.started_by,
+                    desired_status=desired,
+                    next_token=token,
+                )
+                operations += 1
+                listings += 1
+                observed = classify(listed)
+                if observed is not ObservedClass.OK_200:
+                    failed = True
+                    worst = observed
+                    break
+                for task_arn in tuple(listed.task_arns)[:MAX_RETURNED_TASKS]:
+                    task_id = _task_id(task_arn)
+                    if task_id not in known and len(known) < MAX_RETURNED_TASKS:
+                        known.append(task_id)
+                token = listed.next_token
+                if token is None:
+                    break
+            else:
+                incomplete = True
+            if failed:
+                break
         stopped: list[str] = []
         left: list[str] = []
-        cluster_match = _CLUSTER_ARN_RE.fullmatch(launch.cluster_arn)
         for task_id in known:
             task_arn = (
                 f"{cluster_match.group(1).replace(':cluster/', ':task/')}"
@@ -2048,21 +2206,25 @@ def run_cleanup(
             client.stop_task(cluster_arn=launch.cluster_arn, task_arn=task_arn)
             operations += 1
             left.append(task_id)
-        if list_observed is not ObservedClass.OK_200 and not known:
-            left_marker = f"launch:{launch.started_by}"
-            residue.append(left_marker)
-        residue.extend(f"task:{t}" for t in left)
-        settled_tasks.append(
-            CleanupTasks(
-                attempt_sha256=launch.attempt_sha256,
-                started_by=launch.started_by,
-                list_observed=list_observed,
-                task_ids=tuple(known),
-                stopped_ids=tuple(stopped),
-                residue_ids=tuple(left),
-                operations=1 + len(known) + len(left),
-            )
+        block = CleanupTasks(
+            attempt_sha256=launch.attempt_sha256,
+            started_by=launch.started_by,
+            listings=listings,
+            list_observed=worst,
+            discovery_failed=failed,
+            discovery_incomplete=incomplete,
+            task_ids=tuple(known),
+            stopped_ids=tuple(stopped),
+            residue_ids=tuple(left),
+            operations=listings + len(known) + len(left),
         )
+        residue.extend(f"task:{t}" for t in left)
+        if not block.settled and not left:
+            residue.append(
+                f"launch:{launch.started_by}:"
+                + ("failed" if failed else "incomplete" if incomplete else "undiscovered")
+            )
+        settled_tasks.append(block)
     return PermissionCleanup(
         stamp=stamp,
         keys=tuple(done),
@@ -2445,7 +2607,10 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
         if type(block) is not dict or set(block) != {
             "attempt_sha256",
             "started_by",
+            "listings",
             "list_observed",
+            "discovery_failed",
+            "discovery_incomplete",
             "task_ids",
             "stopped_ids",
             "residue_ids",
@@ -2456,36 +2621,57 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
         task_ids = _task_ids(block["task_ids"])
         stopped = _task_ids(block["stopped_ids"])
         left = _task_ids(block["residue_ids"])
+        listings = block["listings"]
+        max_listings = len(DISCOVERY_DESIRED_STATUSES) * DISCOVERY_MAX_PAGES
         if (
             started_by is None
             or not started_by.startswith("kalpamani-permission-")
             or type(block["operations"]) is not int
             or type(block["operations"]) is bool
+            or type(listings) is not int
+            or type(listings) is bool
+            or not 1 <= listings <= max_listings
+            or type(block["discovery_failed"]) is not bool
+            or type(block["discovery_incomplete"]) is not bool
             or set(stopped) | set(left) != set(task_ids)
             or set(stopped) & set(left)
-            or block["operations"] != 1 + len(task_ids) + len(left)
+            or block["operations"] != listings + len(task_ids) + len(left)
         ):
             raise ValueError("permission cleanup: task block")
-        task_operations += block["operations"]
-        tasks.append(
-            CleanupTasks(
-                attempt_sha256=_digest_field(block["attempt_sha256"]),
-                started_by=started_by,
-                list_observed=_member(ObservedClass, block["list_observed"]),
-                task_ids=task_ids,
-                stopped_ids=stopped,
-                residue_ids=left,
-                operations=block["operations"],
-            )
+        block_parsed = CleanupTasks(
+            attempt_sha256=_digest_field(block["attempt_sha256"]),
+            started_by=started_by,
+            listings=listings,
+            list_observed=_member(ObservedClass, block["list_observed"]),
+            discovery_failed=block["discovery_failed"],
+            discovery_incomplete=block["discovery_incomplete"],
+            task_ids=task_ids,
+            stopped_ids=stopped,
+            residue_ids=left,
+            operations=block["operations"],
         )
+        if block_parsed.discovery_failed == (block_parsed.list_observed is ObservedClass.OK_200):
+            raise ValueError("permission cleanup: discovery contradicts the class")
+        task_operations += block["operations"]
+        tasks.append(block_parsed)
     residue = tuple(_optional_key(r) or "" for r in d["residue"])
     deferred = tuple(_optional_key(r) or "" for r in d["deferred"])
     if any(not r for r in residue) or any(not r for r in deferred):
         raise ValueError("permission cleanup: residue")
     unconfirmed = {k.key for k in keys if not k.confirmed_absent}
     unconfirmed |= {f"task:{t}" for block in tasks for t in block.residue_ids}
+    for block in tasks:
+        if not block.settled and not block.residue_ids:
+            reason = (
+                "failed"
+                if block.discovery_failed
+                else "incomplete"
+                if block.discovery_incomplete
+                else "undiscovered"
+            )
+            unconfirmed.add(f"launch:{block.started_by}:{reason}")
     if not unconfirmed <= set(residue):
-        raise ValueError("permission cleanup: an unconfirmed key or task is not residue")
+        raise ValueError("permission cleanup: an unsettled key, task or launch is not residue")
     if d["operations"] != CLEANUP_OPERATIONS_PER_KEY * len(keys) + task_operations:
         raise ValueError("permission cleanup: operations")
     return PermissionCleanup(
@@ -2531,42 +2717,211 @@ class SubcellState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PermissionEvidence:
-    """Every permission record, attempt and cleanup the runner read, and the current binding."""
+    """Every permission record, attempt, statement, consumption and cleanup the runner read,
+    and the context (binding and resolvable targets) everything is held to now."""
 
     records: dict[str, tuple[PermissionRecord, ...]] = field(default_factory=dict)
     attempts: dict[str, tuple[PermissionAttempt, ...]] = field(default_factory=dict)
     statements: dict[str, tuple[PermissionStatement, ...]] = field(default_factory=dict)
+    consumptions: dict[str, PermissionConsumption] = field(default_factory=dict)
     cleanups: tuple[PermissionCleanup, ...] = ()
     malformed: int = 0
-    binding: PermissionBinding | None = None
+    context: PermissionContext | None = None
+
+    @property
+    def binding(self) -> PermissionBinding | None:
+        return None if self.context is None else self.context.binding
 
 
-def _settled(record: PermissionRecord, cleanups: Iterable[PermissionCleanup]) -> str | None:
-    """Why ``record``'s object or launch is not yet settled, or ``None`` when it is.
+class ChainDefect(StrEnum):
+    """Why a recorded result is not bound to its attempt, statement and consumption. Closed."""
 
-    A cleanup settles a record only by naming its attempt and its exact object, and only
-    when recorded no earlier than the record -- a cleanup that predates a write cannot
-    have removed it, whatever key it names (and, joined by identity, cannot name an
-    attempt that did not yet exist).
+    NO_CONTEXT = "NO_CONTEXT"
+    OTHER_BINDING = "OTHER_BINDING"
+    ATTEMPT_MISSING = "ATTEMPT_MISSING"
+    ATTEMPT_MISMATCH = "ATTEMPT_MISMATCH"
+    STATEMENT_MISSING = "STATEMENT_MISSING"
+    STATEMENT_MISMATCH = "STATEMENT_MISMATCH"
+    PREREQUISITE_UNBOUND = "PREREQUISITE_UNBOUND"
+    TARGET_UNRESOLVABLE = "TARGET_UNRESOLVABLE"
+    TARGET_MISMATCH = "TARGET_MISMATCH"
+    CONSUMPTION_MISSING = "CONSUMPTION_MISSING"
+    CONSUMPTION_MISMATCH = "CONSUMPTION_MISMATCH"
+
+
+class ChainError(ValueError):
+    """A recorded result that does not bind, and why."""
+
+    def __init__(self, defect: ChainDefect) -> None:
+        super().__init__(defect.value)
+        self.defect = defect
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BoundChain:
+    """One recorded result with every component it binds to, validated together."""
+
+    record: PermissionRecord
+    attempt: PermissionAttempt
+    statement: PermissionStatement
+    consumption: PermissionConsumption
+    target: ResolvedTarget
+    prerequisites: dict[str, PermissionRecord]
+
+
+def bind_result(
+    record: PermissionRecord, evidence: PermissionEvidence, *, _depth: int = 0
+) -> BoundChain:
+    """The one validator: a result binds only through its whole chain, or ``ChainError``.
+
+    Required, and held to each other: the current context (no context, no binding);
+    the record under the current binding; the attempt the record names by digest, for
+    the same subcell, principal, stamp, start, authorization and binding; the statement
+    the attempt names by digest, for the same subcell, principal, operation, target
+    class, stamp, binding, targets document and prerequisites; every prerequisite the
+    statement names as the exact bound record it was prepared against (itself bound
+    through its own chain, established before this one, its object created); the exact
+    target recomputed NOW from the context and equal to the statement's digest, with
+    the attempt's and the record's object the target's; and the durable consumption of
+    the authorization, naming this subcell and statement, consumed no later than the
+    attempt started. A digest-shaped field alone binds nothing.
     """
+    context = evidence.context
+    if context is None:
+        raise ChainError(ChainDefect.NO_CONTEXT)
+    binding = context.binding
+    if record.binding != binding:
+        raise ChainError(ChainDefect.OTHER_BINDING)
+    cell = SUBCELL_BY_ID[record.subcell_id]
+    attempts = [
+        a for a in evidence.attempts.get(record.subcell_id, ()) if a.digest == record.attempt_sha256
+    ]
+    if len(attempts) != 1:
+        raise ChainError(ChainDefect.ATTEMPT_MISSING)
+    attempt = attempts[0]
+    if (
+        attempt.subcell_id != record.subcell_id
+        or attempt.principal is not record.principal
+        or attempt.stamp != record.stamp
+        or attempt.started_at != record.started_at
+        or attempt.authorization_sha256 != record.authorization_sha256
+        or attempt.binding != binding
+    ):
+        raise ChainError(ChainDefect.ATTEMPT_MISMATCH)
+    statements = [
+        s
+        for s in evidence.statements.get(record.subcell_id, ())
+        if s.digest == attempt.statement_sha256
+    ]
+    if len(statements) != 1:
+        raise ChainError(ChainDefect.STATEMENT_MISSING)
+    statement = statements[0]
+    if (
+        statement.subcell_id != record.subcell_id
+        or statement.principal is not cell.principal
+        or statement.operation is not cell.operation
+        or statement.target is not cell.target
+        or statement.stamp != record.stamp
+        or statement.binding != binding
+        or statement.targets_sha256 != binding.targets_sha256
+        or statement.prerequisites != record.prerequisites
+    ):
+        raise ChainError(ChainDefect.STATEMENT_MISMATCH)
+    prerequisites: dict[str, PermissionRecord] = {}
+    for required, digest in statement.prerequisites.items():
+        if _depth > len(SUBCELLS):  # pragma: no cover - the catalogue has no cycles
+            raise ChainError(ChainDefect.PREREQUISITE_UNBOUND)
+        candidates = [
+            r
+            for r in evidence.records.get(required, ())
+            if r.digest == digest
+            and r.outcome is SubcellOutcome.MATCHED
+            and r.created_key is not None
+            and r.started_at <= record.started_at
+        ]
+        if len(candidates) != 1:
+            raise ChainError(ChainDefect.PREREQUISITE_UNBOUND)
+        try:
+            bind_result(candidates[0], evidence, _depth=_depth + 1)
+        except ChainError:
+            raise ChainError(ChainDefect.PREREQUISITE_UNBOUND) from None
+        prerequisites[required] = candidates[0]
+    try:
+        target = context.resolve(cell, stamp=statement.stamp, prerequisites=prerequisites)
+    except (ValueError, KeyError):
+        raise ChainError(ChainDefect.TARGET_UNRESOLVABLE) from None
+    if target.digest != statement.target_sha256:
+        raise ChainError(ChainDefect.TARGET_MISMATCH)
+    expected_key = target.key if cell.creates else None
+    expected_bucket = target.bucket if cell.creates else None
+    if attempt.key != expected_key or attempt.bucket != expected_bucket:
+        raise ChainError(ChainDefect.ATTEMPT_MISMATCH)
+    if record.created_key is not None and (
+        record.created_key != target.key or record.created_bucket != target.bucket
+    ):
+        raise ChainError(ChainDefect.TARGET_MISMATCH)
+    if cell.operation in _LAUNCHING and record.started_by != started_by_of(record.stamp):
+        raise ChainError(ChainDefect.ATTEMPT_MISMATCH)
+    consumption = evidence.consumptions.get(record.authorization_sha256)
+    if consumption is None:
+        raise ChainError(ChainDefect.CONSUMPTION_MISSING)
+    if (
+        consumption.subcell_id != record.subcell_id
+        or consumption.statement_sha256 != statement.digest
+        or consumption.authorization_sha256 != record.authorization_sha256
+        or consumption.consumed_at > attempt.started_at
+    ):
+        raise ChainError(ChainDefect.CONSUMPTION_MISMATCH)
+    return BoundChain(
+        record=record,
+        attempt=attempt,
+        statement=statement,
+        consumption=consumption,
+        target=target,
+        prerequisites=prerequisites,
+    )
+
+
+def unsettled_reason(chain: BoundChain, cleanups: Iterable[PermissionCleanup]) -> str | None:
+    """Why the bound result's object or launch is not yet settled, or ``None`` when it is.
+
+    A cleanup settles a bound result only by naming its attempt and its exact object --
+    the bucket and key the chain's target names -- or its exact launch (the attempt and
+    its ``startedBy`` tag, every task the record started confirmed STOPPED, discovery
+    complete and answered), under the same binding, recorded no earlier than the record.
+    A cleanup that found no task settles nothing.
+    """
+    record = chain.record
     later = [
         c for c in cleanups if c.binding == record.binding and c.recorded_at >= record.finished_at
     ]
     if record.object_open:
-        bucket, key = record.created_bucket, record.created_key
-        if key is None:
-            if not any(c.settles_attempt(record.attempt_sha256) for c in later):
-                return "an ambiguous write left an object possibly committed; not yet settled"
-        elif not any(c.settles_object(record.attempt_sha256, bucket or "", key) for c in later):
+        bucket, key = chain.target.bucket, chain.target.key
+        if bucket is None or key is None:
+            return "an object is open but the bound target names no object"
+        if not any(c.settles_object(chain.attempt.digest, bucket, key) for c in later):
             return (
-                "an object this attempt created is not confirmed removed by a later cleanup "
-                "naming this attempt"
+                "an object this attempt created or may have created is not confirmed removed "
+                "by a later cleanup naming this attempt and this exact object"
             )
     if record.launch_open:
-        if not any(c.settles_tasks(record.attempt_sha256, record.started_task_ids) for c in later):
+        settled = any(
+            t.attempt_sha256 == chain.attempt.digest
+            and t.started_by == record.started_by
+            and t.settled
+            and set(record.started_task_ids) <= set(t.stopped_ids)
+            for c in later
+            for t in c.tasks
+        )
+        if not settled:
+            if record.started_task_ids:
+                return (
+                    "a task this attempt started is not confirmed STOPPED by a later cleanup "
+                    "naming this attempt (a stop acknowledgement is not a termination)"
+                )
             return (
-                "a task this attempt started, or may have started, is not confirmed STOPPED by "
-                "a later cleanup naming this attempt (a stop acknowledgement is not a termination)"
+                "no task of the ambiguous launch has been discovered and confirmed STOPPED; "
+                "an empty, failed or incomplete discovery is not proof of absence"
             )
     return None
 
@@ -2613,7 +2968,8 @@ def derive_subcell(
             return SubcellState(
                 subcell_id=cell.subcell_id,
                 status=SubcellStatus.UNBOUND,
-                reason="no current binding to hold the recorded evidence to",
+                reason="no current binding (environment, declarations, registration, targets) "
+                "to hold the recorded evidence to",
             )
         return SubcellState(
             subcell_id=cell.subcell_id,
@@ -2654,7 +3010,10 @@ def derive_subcell(
         inverted = [r for r in records if r.outcome is SubcellOutcome.INVERTED][-1]
         detail = ""
         if inverted.started_task_ids:
-            unsettled = _settled(inverted, evidence.cleanups)
+            try:
+                unsettled = unsettled_reason(bind_result(inverted, evidence), evidence.cleanups)
+            except ChainError as error:
+                unsettled = f"unbound ({error.defect.value})"
             detail = (
                 f"; {len(inverted.started_task_ids)} task(s) started, "
                 f"{len(inverted.stop_acknowledged_ids)} stop(s) acknowledged, termination "
@@ -2672,22 +3031,19 @@ def derive_subcell(
             status=SubcellStatus.UNBOUND,
             reason="the record does not attest that the principal's identity was verified",
         )
-    for required, digest in latest.prerequisites.items():
-        dependency = SUBCELL_BY_ID[required]
-        bound = [
-            r
-            for r in evidence.records.get(required, ())
-            if r.binding == binding and r.outcome is SubcellOutcome.MATCHED and r.digest == digest
-        ]
-        if not bound or bound[0].started_at > latest.started_at or bound[0].created_key is None:
+    chains: list[BoundChain] = []
+    for record in records:
+        try:
+            chains.append(bind_result(record, evidence))
+        except ChainError as error:
             return SubcellState(
                 subcell_id=cell.subcell_id,
                 status=SubcellStatus.UNBOUND,
-                reason=f"its prerequisite object from {dependency.subcell_id} is not the exact "
-                "bound record it was prepared against",
+                reason=f"the recorded result does not bind to its attempt, statement, "
+                f"target and consumed authorization ({error.defect.value})",
             )
-    for record in records:
-        unsettled = _settled(record, evidence.cleanups)
+    for chain in chains:
+        unsettled = unsettled_reason(chain, evidence.cleanups)
         if unsettled is not None:
             return SubcellState(
                 subcell_id=cell.subcell_id,
@@ -2711,6 +3067,8 @@ __all__ = [
     "CLEANUP_OPERATIONS_PER_KEY",
     "CLEANUP_OPERATIONS_PER_TASK_MAX",
     "DELETION_DEPENDENCY",
+    "DISCOVERY_DESIRED_STATUSES",
+    "DISCOVERY_MAX_PAGES",
     "EXECUTE_COMMAND_DEPENDENCY",
     "MAX_AUTHORIZATION_VALIDITY",
     "MAX_PERMISSION_RECORD_BYTES",
@@ -2719,6 +3077,7 @@ __all__ = [
     "PERMISSION_ATTEMPT_CONTRACT_ID",
     "PERMISSION_AUTHORIZATION_CONTRACT_ID",
     "PERMISSION_CLEANUP_CONTRACT_ID",
+    "PERMISSION_CONSUMPTION_CONTRACT_ID",
     "PERMISSION_RECORD_CONTRACT_ID",
     "PERMISSION_STATEMENT_CONTRACT_ID",
     "PERMISSION_TARGETS_CONTRACT_ID",
@@ -2731,6 +3090,9 @@ __all__ = [
     "TASK_PROBE_DEPENDENCY",
     "TASK_STOPPED_STATUS",
     "AuthorizationDefect",
+    "BoundChain",
+    "ChainDefect",
+    "ChainError",
     "CleanupKey",
     "CleanupTasks",
     "Expectation",
@@ -2743,6 +3105,8 @@ __all__ = [
     "PermissionBinding",
     "PermissionCleanup",
     "PermissionClient",
+    "PermissionConsumption",
+    "PermissionContext",
     "PermissionEvidence",
     "PermissionRecord",
     "PermissionStatement",
@@ -2755,6 +3119,7 @@ __all__ = [
     "SubcellStatus",
     "TargetKind",
     "TasksToSettle",
+    "bind_result",
     "bucket_of",
     "decide",
     "declaration_digest",
@@ -2762,6 +3127,7 @@ __all__ = [
     "parse_permission_attempt",
     "parse_permission_authorization",
     "parse_permission_cleanup",
+    "parse_permission_consumption",
     "parse_permission_record",
     "parse_permission_statement",
     "parse_permission_targets",
@@ -2773,4 +3139,5 @@ __all__ = [
     "subcell",
     "subcells_of",
     "synthetic_run_id",
+    "unsettled_reason",
 ]

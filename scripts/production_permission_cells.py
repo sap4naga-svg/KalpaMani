@@ -220,64 +220,75 @@ def current_binding(
     environment: QualificationEnvironmentBinding,
     *,
     registration_bytes: bytes,
+    targets: pc.PermissionTargets,
     directory: Path = DECLARATION_DIR,
 ) -> pc.PermissionBinding:
-    """The binding a record made now would carry."""
+    """The binding a record made now would carry: every input present, or ``OSError``."""
     return pc.PermissionBinding(
         environment_binding_sha256=environment.digest,
         policy_declaration_sha256=pc.declaration_digest(declaration_paths(directory)),
         registration_sha256=sha256_hex(registration_bytes),
+        targets_sha256=targets.digest,
         partition=environment.partition,
         region=environment.region,
+    )
+
+
+def permission_context(
+    environment: QualificationEnvironmentBinding,
+    *,
+    registration_bytes: bytes,
+    inputs: Any,
+    targets: pc.PermissionTargets,
+    production_secret: str | None,
+    directory: Path = DECLARATION_DIR,
+) -> pc.PermissionContext:
+    """What the tool and the cell runner hold every permission result to: the same object."""
+    return pc.PermissionContext(
+        binding=current_binding(
+            environment, registration_bytes=registration_bytes, targets=targets, directory=directory
+        ),
+        licensed_bucket=environment.licensed_bucket_name,
+        inputs=inputs,
+        targets=targets,
+        production_secret=production_secret,
     )
 
 
 class _Admitted:
     """Everything the authorized branch admitted before any client existed."""
 
-    __slots__ = (
-        "binding",
-        "environment",
-        "inputs",
-        "production_secret",
-        "store",
-        "targets",
-        "targets_sha256",
-    )
+    __slots__ = ("context", "environment", "store")
 
     def __init__(
         self,
         *,
         environment: QualificationEnvironmentBinding,
-        inputs: Any,
-        targets: pc.PermissionTargets,
-        targets_sha256: str,
-        production_secret: str | None,
-        binding: pc.PermissionBinding,
+        context: pc.PermissionContext,
         store: Any,
     ) -> None:
         self.environment = environment
-        self.inputs = inputs
-        self.targets = targets
-        self.targets_sha256 = targets_sha256
-        self.production_secret = production_secret
-        self.binding = binding
+        self.context = context
         self.store = store
+
+    @property
+    def binding(self) -> pc.PermissionBinding:
+        return self.context.binding
+
+    @property
+    def targets(self) -> pc.PermissionTargets:
+        return self.context.targets
+
+    @property
+    def targets_sha256(self) -> str:
+        return self.context.binding.targets_sha256
 
     def resolve(
         self, cell: pc.Subcell, *, stamp: str, prerequisites: Mapping[str, pc.PermissionRecord]
     ) -> pc.ResolvedTarget:
         """The exact target of ``cell`` for ``stamp`` from what was admitted, or refuse."""
         try:
-            return pc.resolve_target(
-                cell,
-                stamp=stamp,
-                licensed_bucket=self.environment.licensed_bucket_name,
-                inputs=self.inputs,
-                targets=self.targets,
-                production_secret=self.production_secret,
-                prerequisites=prerequisites,
-            )
+            return self.context.resolve(cell, stamp=stamp, prerequisites=prerequisites)
         except (ValueError, KeyError):
             raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
 
@@ -325,11 +336,9 @@ def _admit(
         raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
     targets_source = env.get(TARGETS_ENV_VAR, "")
     try:
-        targets_bytes = read_private(targets_source)
-        targets = pc.parse_permission_targets(targets_bytes)
+        targets = pc.parse_permission_targets(read_private(targets_source))
     except Exception:
         raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
-    targets_sha256 = targets.digest
     production_secret: str | None = None
     if parsed.acquisition_configuration is not None:
         try:
@@ -340,8 +349,13 @@ def _admit(
         except Exception:
             raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
     try:
-        binding = current_binding(
-            environment, registration_bytes=registration_bytes, directory=declaration_dir
+        context = permission_context(
+            environment,
+            registration_bytes=registration_bytes,
+            inputs=inputs,
+            targets=targets,
+            production_secret=production_secret,
+            directory=declaration_dir,
         )
     except OSError:
         raise PermissionToolRefusalError("refused_declaration", EXIT_REFUSED_DECLARATION) from None
@@ -370,15 +384,7 @@ def _admit(
         store = launch._store(probe, launch._private_root(root_source))
     except launch.LaunchRefusalError:
         raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
-    return _Admitted(
-        environment=environment,
-        inputs=inputs,
-        targets=targets,
-        targets_sha256=targets_sha256,
-        production_secret=production_secret,
-        binding=binding,
-        store=store,
-    )
+    return _Admitted(environment=environment, context=context, store=store)
 
 
 # ---------------------------------------------------------------------------
@@ -452,37 +458,38 @@ def prove_identity(
 
 
 def _evidence(admitted: _Admitted) -> Any:
-    """Every permission record, attempt, statement and cleanup under the current binding."""
+    """Every permission record, attempt, statement, consumption and cleanup, in context."""
     from production_verification_cells import permission_evidence
 
-    return permission_evidence(admitted.store, admitted.binding)
+    return permission_evidence(admitted.store, admitted.context)
 
 
 def _bound_prerequisites(
     cell: pc.Subcell, evidence: Any, binding: pc.PermissionBinding
 ) -> dict[str, pc.PermissionRecord]:
-    """The exact MATCHED record of each prerequisite whose object is still present, or refuse.
+    """The exact bound MATCHED record of each prerequisite whose object is present, or refuse.
 
-    The object must have been created (a record naming its bucket and key) under the
-    current binding and must not have been confirmed removed by a later cleanup: a
-    dependent read against an object the cleanup already settled would read nothing.
+    The record must bind through its whole chain (the one validator, ``pc.bind_result``:
+    attempt, statement, exact target, consumed authorization), must have created its
+    object, and must not have been settled by a later cleanup naming that attempt and
+    object: a dependent read against an object the cleanup already settled would read
+    nothing.
     """
     bound: dict[str, pc.PermissionRecord] = {}
     for required in cell.requires:
-        candidates = [
-            r
-            for r in evidence.records.get(required, ())
-            if r.binding == binding
-            and r.outcome is pc.SubcellOutcome.MATCHED
-            and r.created_key is not None
-            and r.created_bucket is not None
-            and not any(
-                c.binding == binding
-                and c.recorded_at >= r.finished_at
-                and c.settles_object(r.attempt_sha256, r.created_bucket, r.created_key)
-                for c in evidence.cleanups
-            )
-        ]
+        candidates: list[pc.PermissionRecord] = []
+        for r in evidence.records.get(required, ()):
+            if r.binding != binding or r.outcome is not pc.SubcellOutcome.MATCHED:
+                continue
+            if r.created_key is None or r.created_bucket is None:
+                continue
+            try:
+                chain = pc.bind_result(r, evidence)
+            except pc.ChainError:
+                continue
+            if pc.unsettled_reason(chain, evidence.cleanups) is None:
+                continue  # already settled: the object is gone
+            candidates.append(r)
         if not candidates:
             raise PermissionToolRefusalError("refused_prerequisite", EXIT_REFUSED_PREREQUISITE)
         bound[required] = sorted(candidates, key=lambda r: r.started_at)[-1]
@@ -638,16 +645,14 @@ def execute_subcell(
         cell, admitted, evidence, authorization.statement_sha256
     )
     started_at = now()
+    consumption = pc.PermissionConsumption(
+        subcell_id=cell.subcell_id,
+        statement_sha256=statement.digest,
+        authorization_sha256=authorization.digest,
+        consumed_at=started_at,
+    )
     try:
-        admitted.store.consume(
-            CONSUMPTION_KIND,
-            authorization.digest,
-            {
-                "subcell_id": cell.subcell_id,
-                "statement_sha256": statement.digest,
-                "consumed_at": started_at.isoformat(),
-            },
-        )
+        admitted.store.consume(CONSUMPTION_KIND, authorization.digest, consumption.document())
     except StoreError as error:
         if error.defect is StoreDefect.AUTHORIZATION_CONSUMED:
             raise PermissionToolRefusalError(
@@ -733,6 +738,16 @@ def settlement_targets(
     for subcell_id, records in evidence.records.items():
         for record in records:
             if record.binding != binding:
+                continue
+            # A bound result is settled by the one validator's rule; an unbound record
+            # still names an object or a launch to restore, and is settled by what it and
+            # its attempt name (restoration never depends on the chain binding).
+            chain: pc.BoundChain | None
+            try:
+                chain = pc.bind_result(record, evidence)
+            except pc.ChainError:
+                chain = None
+            if chain is not None and pc.unsettled_reason(chain, evidence.cleanups) is None:
                 continue
             if record.object_open:
                 attempt = next(
@@ -1060,7 +1075,12 @@ class _Boto3PermissionClient:
             arns = tuple(
                 str(arn) for arn in (response.get("taskArns") or [])[: pc.MAX_RETURNED_TASKS]
             )
-            return r3.Observation(status=status, task_arns=arns)
+            token = response.get("nextToken")
+            return r3.Observation(
+                status=status,
+                task_arns=arns,
+                next_token=str(token) if isinstance(token, str) and token else None,
+            )
         if operation == "describe_tasks":
             statuses = tuple(
                 (str(task.get("taskArn", "")), str(task.get("lastStatus", "")))
@@ -1150,14 +1170,19 @@ class _Boto3PermissionClient:
             reason="kalpamani permission subcell: unexpected launch stopped",
         )
 
-    def list_tasks(self, *, cluster_arn: str, started_by: str) -> r3.Observation:
-        return self._call(
-            "ecs",
-            "list_tasks",
-            cluster=cluster_arn,
-            startedBy=started_by,
-            maxResults=pc.MAX_RETURNED_TASKS,
-        )
+    def list_tasks(
+        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
+    ) -> r3.Observation:
+        # One page of one desired status; the engine follows the token within its bound.
+        kwargs: dict[str, Any] = {
+            "cluster": cluster_arn,
+            "startedBy": started_by,
+            "desiredStatus": desired_status,
+            "maxResults": pc.MAX_RETURNED_TASKS,
+        }
+        if next_token is not None:
+            kwargs["nextToken"] = next_token
+        return self._call("ecs", "list_tasks", **kwargs)
 
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> r3.Observation:
         return self._call("ecs", "describe_tasks", cluster=cluster_arn, tasks=list(task_arns))
@@ -1363,6 +1388,7 @@ __all__ = [
     "execute_cleanup",
     "execute_subcell",
     "main",
+    "permission_context",
     "plan_lines",
     "prepare_subcell",
     "prove_identity",

@@ -15,6 +15,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -78,6 +79,7 @@ BINDING: Final = pc.PermissionBinding(
     environment_binding_sha256="ab" * 32,
     policy_declaration_sha256="cd" * 32,
     registration_sha256="ef" * 32,
+    targets_sha256=TARGETS.digest,
     partition="aws",
     region="us-east-1",
 )
@@ -85,11 +87,26 @@ OTHER_BINDING: Final = pc.PermissionBinding(
     environment_binding_sha256="ab" * 32,
     policy_declaration_sha256="99" * 32,
     registration_sha256="ef" * 32,
+    targets_sha256=TARGETS.digest,
     partition="aws",
     region="us-east-1",
 )
 INPUTS: Final = parse_launch_inputs(encode(launch_inputs_document()))
 SECRET_NAME: Final = "synthetic/production/sharadar"  # noqa: S105 - a name, not a value
+CONTEXT: Final = pc.PermissionContext(
+    binding=BINDING,
+    licensed_bucket=BUCKET,
+    inputs=INPUTS,
+    targets=TARGETS,
+    production_secret=SECRET_NAME,
+)
+OTHER_CONTEXT: Final = pc.PermissionContext(
+    binding=OTHER_BINDING,
+    licensed_bucket=BUCKET,
+    inputs=INPUTS,
+    targets=TARGETS,
+    production_secret=SECRET_NAME,
+)
 TASK_ARN: Final = f"{CLUSTER_ARN.replace(':cluster/', ':task/')}/{'a' * 32}"
 
 
@@ -159,8 +176,16 @@ class FakePermissionClient:
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Any:
         return self._next("stop_task", cluster_arn=cluster_arn, task_arn=task_arn)
 
-    def list_tasks(self, *, cluster_arn: str, started_by: str) -> Any:
-        return self._next("list_tasks", cluster_arn=cluster_arn, started_by=started_by)
+    def list_tasks(
+        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
+    ) -> Any:
+        return self._next(
+            "list_tasks",
+            cluster_arn=cluster_arn,
+            started_by=started_by,
+            desired_status=desired_status,
+            next_token=next_token,
+        )
 
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Any:
         return self._next("describe_tasks", cluster_arn=cluster_arn, task_arns=task_arns)
@@ -225,7 +250,7 @@ def _record(cell_id: str, **fields: Any) -> pc.PermissionRecord:
         "expectation": cell.expectation,
         "stamp": STAMP if attempt is None else attempt.stamp,
         "attempt_sha256": AUTH_DIGEST if attempt is None else attempt.digest,
-        "authorization_sha256": AUTH_DIGEST,
+        "authorization_sha256": AUTH_DIGEST if attempt is None else attempt.authorization_sha256,
         "prerequisites": {k: v.digest for k, v in prerequisites.items()},
         "observed": matched,
         "outcome": pc.SubcellOutcome.MATCHED,
@@ -273,13 +298,105 @@ def _run(
     )
 
 
+@dataclass(frozen=True)
+class _Bound:
+    """A recorded result with every component the validator binds it through."""
+
+    record: pc.PermissionRecord
+    attempt: pc.PermissionAttempt
+    statement: pc.PermissionStatement
+    consumption: pc.PermissionConsumption
+    prerequisites: dict[str, pc.PermissionRecord]
+
+
+def _bound(
+    cell_id: str,
+    *,
+    context: pc.PermissionContext = CONTEXT,
+    stamp: str = STAMP,
+    started_at: datetime = NOW,
+    prerequisites: dict[str, pc.PermissionRecord] | None = None,
+    created: bool | None = None,
+    **record_fields: Any,
+) -> _Bound:
+    """The complete chain for one result of ``cell_id`` under ``context``, consistent.
+
+    ``created`` forces the created key on (``True``) or off (``False``); by default a
+    creating subcell whose observed class is its success class records the target key.
+    """
+    cell = pc.subcell(cell_id)
+    prerequisites = dict(prerequisites or {})
+    target = context.resolve(cell, stamp=stamp, prerequisites=prerequisites)
+    statement = pc.statement_for(
+        cell,
+        target=target,
+        stamp=stamp,
+        binding=context.binding,
+        targets_sha256=context.binding.targets_sha256,
+        prerequisites=prerequisites,
+        prepared_at=started_at - timedelta(minutes=10),
+    )
+    authorization = pc.PermissionAuthorization(
+        subcell_id=cell_id,
+        statement_sha256=statement.digest,
+        issued_at=started_at - timedelta(minutes=5),
+        expires_at=started_at + timedelta(hours=1),
+    )
+    attempt = pc.PermissionAttempt(
+        subcell_id=cell_id,
+        principal=cell.principal,
+        stamp=stamp,
+        authorization_sha256=authorization.digest,
+        statement_sha256=statement.digest,
+        bucket=target.bucket if cell.creates else None,
+        key=target.key if cell.creates else None,
+        started_at=started_at,
+        binding=context.binding,
+    )
+    consumption = pc.PermissionConsumption(
+        subcell_id=cell_id,
+        statement_sha256=statement.digest,
+        authorization_sha256=authorization.digest,
+        consumed_at=started_at,
+    )
+    fields: dict[str, Any] = dict(record_fields)
+    observed = fields.get("observed")
+    success = observed is None or observed is pc._SUCCESS_CLASS[cell.operation]
+    if created is None:
+        created = cell.creates and success and cell.expectation is pc.Expectation.ALLOWED
+        if cell.creates and observed is pc.ObservedClass.OK_200:
+            created = True
+    if created:
+        fields.setdefault("created_key", target.key)
+        fields.setdefault("created_bucket", target.bucket)
+    record = _record(
+        cell_id,
+        attempt=attempt,
+        prerequisites=prerequisites,
+        binding=context.binding,
+        **fields,
+    )
+    return _Bound(
+        record=record,
+        attempt=attempt,
+        statement=statement,
+        consumption=consumption,
+        prerequisites=prerequisites,
+    )
+
+
 def _cleanup_for(
     *records: pc.PermissionRecord,
     recorded_at: datetime | None = None,
     confirmed: bool = True,
     tasks_stopped: bool = True,
+    discovered: tuple[str, ...] = (),
 ) -> pc.PermissionCleanup:
-    """A cleanup settling every open object and launch of ``records`` by identity."""
+    """A cleanup settling every open object and launch of ``records`` by identity.
+
+    ``discovered`` are the tasks the discovery listed for a launch that recorded none
+    (an ambiguous launch); with none discovered the launch stays unresolved residue.
+    """
     keys = []
     task_blocks = []
     residue: list[str] = []
@@ -302,20 +419,25 @@ def _cleanup_for(
                 residue.append(r.created_key)
         if r.launch_open:
             assert r.started_by is not None
-            ids = r.started_task_ids
-            task_blocks.append(
-                pc.CleanupTasks(
-                    attempt_sha256=r.attempt_sha256,
-                    started_by=r.started_by,
-                    list_observed=pc.ObservedClass.OK_200,
-                    task_ids=ids,
-                    stopped_ids=ids if tasks_stopped else (),
-                    residue_ids=() if tasks_stopped else ids,
-                    operations=1 + len(ids) + (0 if tasks_stopped else len(ids)),
-                )
+            ids = r.started_task_ids or discovered
+            listings = len(pc.DISCOVERY_DESIRED_STATUSES)
+            block = pc.CleanupTasks(
+                attempt_sha256=r.attempt_sha256,
+                started_by=r.started_by,
+                listings=listings,
+                list_observed=pc.ObservedClass.OK_200,
+                discovery_failed=False,
+                discovery_incomplete=False,
+                task_ids=ids,
+                stopped_ids=ids if tasks_stopped else (),
+                residue_ids=() if tasks_stopped else ids,
+                operations=listings + len(ids) + (0 if tasks_stopped else len(ids)),
             )
+            task_blocks.append(block)
             if not tasks_stopped:
                 residue.extend(f"task:{i}" for i in ids)
+            elif not ids:
+                residue.append(f"launch:{r.started_by}:undiscovered")
     return pc.PermissionCleanup(
         stamp="20260914T200000Z-0c1e",
         keys=tuple(keys),
@@ -785,92 +907,125 @@ class TestEngine:
         with pytest.raises(ValueError):
             pc.parse_permission_cleanup(canonical_bytes(broken))
 
-    def test_cleanup_settles_tasks_by_listing_describing_and_stopping(self) -> None:
-        """PR #106 correction 1, finding 4: termination is confirmed by DescribeTasks only."""
+    def test_cleanup_settles_tasks_by_bounded_discovery_describing_and_stopping(self) -> None:
+        """PR #106 corrections 1 and 2, finding 4/2: termination evidence, never absence."""
         launch = pc.TasksToSettle(
             attempt_sha256="d4" * 32,
             started_by=pc.started_by_of(STAMP),
             cluster_arn=CLUSTER_ARN,
             known_task_ids=("a" * 32,),
         )
-        # Known task STOPPED: list (nothing new), describe -> STOPPED; two operations.
-        client = FakePermissionClient(LISTED_NONE, STOPPED)
-        cleanup = pc.run_cleanup(
-            (),
-            (launch,),
-            client=client,
-            stamp=STAMP,
-            deferred=(),
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            budget=20,
-        )
-        assert [c[0] for c in client.calls] == ["list_tasks", "describe_tasks"]
-        assert client.calls[0][1]["started_by"] == launch.started_by
+
+        def cleanup_with(client: FakePermissionClient, *launches: pc.TasksToSettle) -> Any:
+            return pc.run_cleanup(
+                (),
+                launches,
+                client=client,
+                stamp=STAMP,
+                deferred=(),
+                binding=BINDING,
+                identity_verified=True,
+                now=NOW,
+                budget=60,
+            )
+
+        # Known task, discovery lists nothing new under either status, described STOPPED.
+        client = FakePermissionClient(LISTED_NONE, LISTED_NONE, STOPPED)
+        cleanup = cleanup_with(client, launch)
+        calls = [c[0] for c in client.calls]
+        assert calls == ["list_tasks", "list_tasks", "describe_tasks"]
+        assert [c[1]["desired_status"] for c in client.calls[:2]] == ["RUNNING", "STOPPED"]
+        assert all(c[1]["started_by"] == launch.started_by for c in client.calls[:2])
+        assert all(c[1]["next_token"] is None for c in client.calls[:2])
         block = cleanup.tasks[0]
-        assert block.stopped_ids == ("a" * 32,) and block.residue_ids == () and block.settled
+        assert block.listings == 2 and block.stopped_ids == ("a" * 32,) and block.settled
+        assert not block.discovery_failed and not block.discovery_incomplete
         assert cleanup.settles_tasks("d4" * 32, ("a" * 32,)) and cleanup.residue == ()
-        assert cleanup.operations == 2
+        assert cleanup.operations == 3
         assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
         # Still RUNNING: stopped once more, residue, not settled.
-        client = FakePermissionClient(LISTED_NONE, RUNNING, OK)
-        cleanup = pc.run_cleanup(
-            (),
-            (launch,),
-            client=client,
-            stamp=STAMP,
-            deferred=(),
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            budget=20,
-        )
-        assert [c[0] for c in client.calls] == ["list_tasks", "describe_tasks", "stop_task"]
-        assert cleanup.tasks[0].residue_ids == ("a" * 32,) and cleanup.residue == (
-            "task:" + "a" * 32,
-        )
+        client = FakePermissionClient(LISTED_NONE, LISTED_NONE, RUNNING, OK)
+        cleanup = cleanup_with(client, launch)
+        assert [c[0] for c in client.calls][-2:] == ["describe_tasks", "stop_task"]
+        assert cleanup.tasks[0].residue_ids == ("a" * 32,)
+        assert cleanup.residue == ("task:" + "a" * 32,)
         assert not cleanup.settles_tasks("d4" * 32, ("a" * 32,))
-        # An ambiguous launch with no known task: the listing finds one, and it is settled.
+        # An ambiguous launch with no known task and nothing discovered: NOT settled --
+        # an empty discovery is never proof of absence (finding 2 of correction 2).
         unknown = pc.TasksToSettle(
             attempt_sha256="e5" * 32,
             started_by=pc.started_by_of(STAMP),
             cluster_arn=CLUSTER_ARN,
             known_task_ids=(),
         )
-        client = FakePermissionClient(LISTED_ONE, STOPPED)
-        cleanup = pc.run_cleanup(
-            (),
-            (unknown,),
-            client=client,
-            stamp=STAMP,
-            deferred=(),
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            budget=20,
-        )
-        assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.settles_tasks("e5" * 32, ())
-        # A listing that does not answer is residue, never an absence.
-        client = FakePermissionClient(DENIED)
-        cleanup = pc.run_cleanup(
-            (),
-            (unknown,),
-            client=client,
-            stamp=STAMP,
-            deferred=(),
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            budget=20,
-        )
-        assert cleanup.residue == ("launch:" + unknown.started_by,)
+        client = FakePermissionClient(LISTED_NONE, LISTED_NONE)
+        cleanup = cleanup_with(client, unknown)
+        block = cleanup.tasks[0]
+        assert block.undiscovered and not block.settled and block.residue_ids == ()
+        assert cleanup.residue == (f"launch:{unknown.started_by}:undiscovered",)
         assert not cleanup.settles_tasks("e5" * 32, ())
-        # A cleanup record cannot claim a task both stopped and residue.
-        broken = cleanup.document()
-        broken["tasks"][0]["stopped_ids"] = ["a" * 32]
-        with pytest.raises(ValueError):
-            pc.parse_permission_cleanup(canonical_bytes(broken))
+        assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
+        # Empty, then visible: a later pass discovers the task under STOPPED and settles it.
+        client = FakePermissionClient(LISTED_NONE, LISTED_ONE, STOPPED)
+        cleanup = cleanup_with(client, unknown)
+        assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.tasks[0].settled
+        assert cleanup.settles_tasks("e5" * 32, ()) and cleanup.residue == ()
+        # Persistent empty discovery across passes stays unresolved every time.
+        for _ in range(3):
+            cleanup = cleanup_with(FakePermissionClient(LISTED_NONE, LISTED_NONE), unknown)
+            assert not cleanup.tasks[0].settled and cleanup.residue
+        # A listing that does not answer is a failed discovery: residue, never an absence,
+        # and the second status is not asked.
+        client = FakePermissionClient(DENIED)
+        cleanup = cleanup_with(client, unknown)
+        assert len(client.calls) == 1 and cleanup.tasks[0].discovery_failed
+        assert cleanup.residue == (f"launch:{unknown.started_by}:failed",)
+        assert not cleanup.settles_tasks("e5" * 32, ())
+        # A paginated listing is followed within its bound; a token remaining beyond it is
+        # an incomplete discovery: the tasks found are still described, nothing is settled.
+        paged = r3.Observation(status=200, task_arns=(), next_token="more")  # noqa: S106 - a page token
+        client = FakePermissionClient(paged, paged, paged, LISTED_ONE, STOPPED)
+        cleanup = cleanup_with(client, unknown)
+        listing_calls = [c for c in client.calls if c[0] == "list_tasks"]
+        assert len(listing_calls) == pc.DISCOVERY_MAX_PAGES + 1
+        assert [c[1]["next_token"] for c in listing_calls[:3]] == [None, "more", "more"]
+        assert cleanup.tasks[0].discovery_incomplete and not cleanup.tasks[0].settled
+        assert cleanup.tasks[0].stopped_ids == ("a" * 32,)
+        assert cleanup.residue == (f"launch:{unknown.started_by}:incomplete",)
+        # Budget: a launch beyond it is residue, untouched.
+        client = FakePermissionClient()
+        cleanup = pc.run_cleanup(
+            (),
+            (launch, unknown),
+            client=client,
+            stamp=STAMP,
+            deferred=(),
+            binding=BINDING,
+            identity_verified=True,
+            now=NOW,
+            budget=pc.CLEANUP_OPERATIONS_PER_TASK_MAX,
+        )
+        assert (
+            cleanup.budget_exhausted
+            and f"launch:{unknown.started_by}:undiscovered" in cleanup.residue
+        )
+        # A cleanup record cannot claim a task both stopped and residue, nor a settled
+        # discovery that found nothing off the residue, nor a failed discovery beside OK.
+        good = cleanup_with(FakePermissionClient(LISTED_NONE, LISTED_NONE, STOPPED), launch)
+        for mutate in (
+            lambda d: d["tasks"][0].__setitem__("stopped_ids", []),
+            lambda d: d["tasks"][0].__setitem__("discovery_failed", True),
+            lambda d: (
+                d["tasks"][0].__setitem__("task_ids", []),
+                d["tasks"][0].__setitem__("stopped_ids", []),
+                d["tasks"][0].__setitem__("operations", 2),
+                d.__setitem__("operations", 2),
+            ),
+        ):
+            broken = good.document()
+            mutate(broken)
+            with pytest.raises(ValueError):
+                pc.parse_permission_cleanup(canonical_bytes(broken))
 
 
 # ---------------------------------------------------------------------------
@@ -879,24 +1034,41 @@ class TestEngine:
 
 
 def _evidence(
-    *records: pc.PermissionRecord,
+    *items: pc.PermissionRecord | _Bound,
     attempts: tuple[pc.PermissionAttempt, ...] = (),
+    statements: tuple[pc.PermissionStatement, ...] = (),
+    consumptions: tuple[pc.PermissionConsumption, ...] = (),
     cleanups: tuple[pc.PermissionCleanup, ...] = (),
-    binding: pc.PermissionBinding | None = BINDING,
+    context: pc.PermissionContext | None = CONTEXT,
     malformed: int = 0,
 ) -> pc.PermissionEvidence:
+    """Evidence from bound chains (every component) and bare records (the record alone)."""
     grouped: dict[str, list[pc.PermissionRecord]] = {}
-    for r in records:
-        grouped.setdefault(r.subcell_id, []).append(r)
     grouped_attempts: dict[str, list[pc.PermissionAttempt]] = {}
+    grouped_statements: dict[str, list[pc.PermissionStatement]] = {}
+    consumed: dict[str, pc.PermissionConsumption] = {}
+    for item in items:
+        if isinstance(item, _Bound):
+            grouped.setdefault(item.record.subcell_id, []).append(item.record)
+            grouped_attempts.setdefault(item.attempt.subcell_id, []).append(item.attempt)
+            grouped_statements.setdefault(item.statement.subcell_id, []).append(item.statement)
+            consumed[item.consumption.authorization_sha256] = item.consumption
+        else:
+            grouped.setdefault(item.subcell_id, []).append(item)
     for a in attempts:
         grouped_attempts.setdefault(a.subcell_id, []).append(a)
+    for s in statements:
+        grouped_statements.setdefault(s.subcell_id, []).append(s)
+    for c in consumptions:
+        consumed[c.authorization_sha256] = c
     return pc.PermissionEvidence(
         records={k: tuple(v) for k, v in grouped.items()},
         attempts={k: tuple(v) for k, v in grouped_attempts.items()},
+        statements={k: tuple(v) for k, v in grouped_statements.items()},
+        consumptions=consumed,
         cleanups=cleanups,
         malformed=malformed,
-        binding=binding,
+        context=context,
     )
 
 
@@ -904,41 +1076,246 @@ R1: Final = {ProductionActor.ACQUISITION: False, ProductionActor.BUILD: False}
 
 
 class TestDerivation:
-    def test_a_matched_record_under_the_current_binding_passes(self) -> None:
+    def test_a_bound_result_under_the_current_context_passes(self) -> None:
         cell = pc.subcell("R4-LIST-HUMAN")
-        state = pc.derive_subcell(cell, _evidence(_record(cell.subcell_id)), r1_passed=R1)
+        state = pc.derive_subcell(cell, _evidence(_bound(cell.subcell_id)), r1_passed=R1)
         assert state.status is pc.SubcellStatus.PASSED
         assert pc.derive_subcell(cell, _evidence(), r1_passed=R1).status is (
             pc.SubcellStatus.UNEXECUTED
         )
 
+    def test_a_record_alone_never_passes(self) -> None:
+        """PR #106 correction 2, finding 1: a result binds only through its whole chain."""
+        cell = pc.subcell("R4-LIST-HUMAN")
+        state = pc.derive_subcell(cell, _evidence(_record(cell.subcell_id)), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.UNBOUND
+        assert pc.ChainDefect.ATTEMPT_MISSING.value in state.reason
+        # Each component missing, substituted or contradicting: UNBOUND with the defect.
+        good = _bound(cell.subcell_id)
+        other = _bound(cell.subcell_id, stamp="20260914T170000Z-0000")
+        cases: list[tuple[str, pc.PermissionEvidence]] = [
+            (
+                "ATTEMPT_MISSING",
+                _evidence(
+                    good.record, statements=(good.statement,), consumptions=(good.consumption,)
+                ),
+            ),
+            (
+                "STATEMENT_MISSING",
+                _evidence(good.record, attempts=(good.attempt,), consumptions=(good.consumption,)),
+            ),
+            (
+                "STATEMENT_MISSING",
+                _evidence(
+                    good.record,
+                    attempts=(good.attempt,),
+                    statements=(other.statement,),
+                    consumptions=(good.consumption,),
+                ),
+            ),
+            (
+                "CONSUMPTION_MISSING",
+                _evidence(good.record, attempts=(good.attempt,), statements=(good.statement,)),
+            ),
+            (
+                "CONSUMPTION_MISSING",
+                _evidence(
+                    good.record,
+                    attempts=(good.attempt,),
+                    statements=(good.statement,),
+                    consumptions=(other.consumption,),
+                ),
+            ),
+            (
+                "CONSUMPTION_MISMATCH",
+                _evidence(
+                    good.record,
+                    attempts=(good.attempt,),
+                    statements=(good.statement,),
+                    consumptions=(
+                        pc.PermissionConsumption(
+                            subcell_id=cell.subcell_id,
+                            statement_sha256=other.statement.digest,
+                            authorization_sha256=good.consumption.authorization_sha256,
+                            consumed_at=good.consumption.consumed_at,
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "CONSUMPTION_MISMATCH",
+                _evidence(
+                    good.record,
+                    attempts=(good.attempt,),
+                    statements=(good.statement,),
+                    consumptions=(
+                        pc.PermissionConsumption(
+                            subcell_id=cell.subcell_id,
+                            statement_sha256=good.statement.digest,
+                            authorization_sha256=good.consumption.authorization_sha256,
+                            consumed_at=good.attempt.started_at + timedelta(seconds=1),
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "ATTEMPT_MISMATCH",
+                _evidence(
+                    _record(
+                        cell.subcell_id,
+                        attempt=good.attempt,
+                        authorization_sha256="77" * 32,
+                    ),
+                    attempts=(good.attempt,),
+                    statements=(good.statement,),
+                    consumptions=(good.consumption,),
+                ),
+            ),
+        ]
+        for defect, evidence in cases:
+            state = pc.derive_subcell(cell, evidence, r1_passed=R1)
+            assert state.status is pc.SubcellStatus.UNBOUND, defect
+            assert defect in state.reason, (defect, state.reason)
+        no_context = pc.derive_subcell(cell, _evidence(good, context=None), r1_passed=R1)
+        assert (
+            no_context.status is pc.SubcellStatus.UNBOUND
+            and "no current binding" in no_context.reason
+        )
+        with pytest.raises(pc.ChainError) as raised:
+            pc.bind_result(good.record, _evidence(good, context=None))
+        assert raised.value.defect is pc.ChainDefect.NO_CONTEXT
+        # Another attempt of the same subcell in place of the record's own: that attempt
+        # is unanswered (INTERRUPTED), and the record still binds to nothing.
+        substituted = _evidence(
+            good.record,
+            attempts=(other.attempt,),
+            statements=(good.statement,),
+            consumptions=(good.consumption,),
+        )
+        assert pc.derive_subcell(cell, substituted, r1_passed=R1).status is (
+            pc.SubcellStatus.INTERRUPTED
+        )
+        with pytest.raises(pc.ChainError) as raised:
+            pc.bind_result(good.record, substituted)
+        assert raised.value.defect is pc.ChainDefect.ATTEMPT_MISSING
+        # The exact target: a statement whose target digest is not what the context resolves
+        # now is TARGET_MISMATCH; a subcell whose target cannot be resolved from the current
+        # inputs (no acquisition configuration for the production secret) is UNRESOLVABLE --
+        # a missing current input never preserves a PASSED.
+        wrong_target = pc.PermissionStatement(
+            **{
+                **{
+                    f: getattr(good.statement, f)
+                    for f in pc.PermissionStatement.__slots__
+                    if f != "target_sha256"
+                },
+                "target_sha256": "55" * 32,
+            }
+        )
+        attempt = pc.PermissionAttempt(
+            **{
+                **{
+                    f: getattr(good.attempt, f)
+                    for f in pc.PermissionAttempt.__slots__
+                    if f != "statement_sha256"
+                },
+                "statement_sha256": wrong_target.digest,
+            }
+        )
+        consumption = pc.PermissionConsumption(
+            subcell_id=cell.subcell_id,
+            statement_sha256=wrong_target.digest,
+            authorization_sha256=attempt.authorization_sha256,
+            consumed_at=attempt.started_at,
+        )
+        record = _record(cell.subcell_id, attempt=attempt)
+        state = pc.derive_subcell(
+            cell,
+            _evidence(
+                record,
+                attempts=(attempt,),
+                statements=(wrong_target,),
+                consumptions=(consumption,),
+            ),
+            r1_passed=R1,
+        )
+        assert state.status is pc.SubcellStatus.UNBOUND and "TARGET_MISMATCH" in state.reason
+        secret = pc.subcell("R4-SECRET-GET-HUMAN")
+        chain = _bound(secret.subcell_id)
+        assert pc.derive_subcell(secret, _evidence(chain), r1_passed=R1).status is (
+            pc.SubcellStatus.PASSED
+        )
+        without_configuration = pc.PermissionContext(
+            binding=BINDING,
+            licensed_bucket=BUCKET,
+            inputs=INPUTS,
+            targets=TARGETS,
+            production_secret=None,
+        )
+        state = pc.derive_subcell(
+            secret, _evidence(chain, context=without_configuration), r1_passed=R1
+        )
+        assert state.status is pc.SubcellStatus.UNBOUND and "TARGET_UNRESOLVABLE" in state.reason
+
+    def test_changed_targets_or_declarations_make_every_result_historical(self) -> None:
+        """PR #106 correction 2, finding 1: the binding covers the owner's targets document."""
+        cell = pc.subcell("R4-PUT-CONTROL-HUMAN")
+        chain = _bound(cell.subcell_id)
+        assert pc.derive_subcell(cell, _evidence(chain), r1_passed=R1).status is (
+            pc.SubcellStatus.PASSED
+        )
+        changed = pc.PermissionTargets(
+            foundation_task_role_arn=TARGETS.foundation_task_role_arn,
+            qualification_secret_arn=TARGETS.qualification_secret_arn,
+            control_bucket_name="another-control-bucket",
+        )
+        renewed_binding = pc.PermissionBinding(
+            **{**BINDING.document(), "targets_sha256": changed.digest}
+        )
+        renewed = pc.PermissionContext(
+            binding=renewed_binding,
+            licensed_bucket=BUCKET,
+            inputs=INPUTS,
+            targets=changed,
+            production_secret=SECRET_NAME,
+        )
+        state = pc.derive_subcell(cell, _evidence(chain, context=renewed), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.HISTORICAL
+        assert "targets_sha256" in pc.PermissionBinding.__slots__
+        # Re-executed under the changed targets, the new chain passes and the old stays history.
+        again = _bound(cell.subcell_id, context=renewed, stamp="20260914T190000Z-1111")
+        assert pc.derive_subcell(
+            cell, _evidence(chain, again, context=renewed), r1_passed=R1
+        ).status is (pc.SubcellStatus.PASSED)
+
     def test_an_inversion_never_disappears_under_the_same_binding(self) -> None:
         cell = pc.subcell("R4-LIST-HUMAN")
-        inverted = _record(
+        inverted = _bound(
             cell.subcell_id, observed=pc.ObservedClass.OK_200, outcome=pc.SubcellOutcome.INVERTED
         )
-        later = _record(
+        later = _bound(
             cell.subcell_id,
+            stamp="20260914T190000Z-2222",
             started_at=NOW + timedelta(hours=1),
             finished_at=NOW + timedelta(hours=1),
         )
         state = pc.derive_subcell(cell, _evidence(inverted, later), r1_passed=R1)
         assert state.status is pc.SubcellStatus.FAILED and "OK_200" in state.reason
         # Under a new binding (a corrected declaration) the inversion is historical and the
-        # matched record under the new binding decides.
-        renewed = _record(cell.subcell_id, binding=OTHER_BINDING)
+        # bound result under the new binding decides.
+        renewed = _bound(cell.subcell_id, context=OTHER_CONTEXT)
         state = pc.derive_subcell(
-            cell, _evidence(inverted, renewed, binding=OTHER_BINDING), r1_passed=R1
+            cell, _evidence(inverted, renewed, context=OTHER_CONTEXT), r1_passed=R1
         )
         assert state.status is pc.SubcellStatus.PASSED
 
     def test_other_binding_undecided_interrupted_and_unverified_identity(self) -> None:
         cell = pc.subcell("R4-LIST-HUMAN")
         stale = pc.derive_subcell(
-            cell, _evidence(_record(cell.subcell_id, binding=OTHER_BINDING)), r1_passed=R1
+            cell, _evidence(_bound(cell.subcell_id, context=OTHER_CONTEXT)), r1_passed=R1
         )
         assert stale.status is pc.SubcellStatus.HISTORICAL
-        undecided = _record(
+        undecided = _bound(
             cell.subcell_id, observed=pc.ObservedClass.TIMEOUT, outcome=pc.SubcellOutcome.UNDECIDED
         )
         assert pc.derive_subcell(cell, _evidence(undecided), r1_passed=R1).status is (
@@ -946,7 +1323,7 @@ class TestDerivation:
         )
         attempt = _attempt(cell.subcell_id, started_at=NOW + timedelta(hours=2))
         state = pc.derive_subcell(
-            cell, _evidence(_record(cell.subcell_id), attempts=(attempt,)), r1_passed=R1
+            cell, _evidence(_bound(cell.subcell_id), attempts=(attempt,)), r1_passed=R1
         )
         assert state.status is pc.SubcellStatus.INTERRUPTED
         assert pc.derive_subcell(cell, _evidence(attempts=(attempt,)), r1_passed=R1).status is (
@@ -954,32 +1331,28 @@ class TestDerivation:
         )
         # Attempts and records join by the attempt's digest, never by order: a record for
         # ANOTHER attempt, however much later, does not answer this one (finding 3).
-        earlier = _attempt(cell.subcell_id, started_at=NOW - timedelta(hours=2))
-        answered = _record(cell.subcell_id, attempt=earlier)
-        assert (
-            pc.derive_subcell(cell, _evidence(answered, attempts=(earlier,)), r1_passed=R1).status
-            is pc.SubcellStatus.PASSED
+        earlier = _bound(cell.subcell_id, started_at=NOW - timedelta(hours=2))
+        assert pc.derive_subcell(cell, _evidence(earlier), r1_passed=R1).status is (
+            pc.SubcellStatus.PASSED
         )
         other = _attempt(cell.subcell_id, started_at=NOW - timedelta(hours=3))
         assert (
-            pc.derive_subcell(
-                cell, _evidence(answered, attempts=(other, earlier)), r1_passed=R1
-            ).status
+            pc.derive_subcell(cell, _evidence(earlier, attempts=(other,)), r1_passed=R1).status
             is pc.SubcellStatus.INTERRUPTED
         )
-        unverified = _record(cell.subcell_id, identity_verified=False)
+        unverified = _bound(cell.subcell_id, identity_verified=False)
         assert pc.derive_subcell(cell, _evidence(unverified), r1_passed=R1).status is (
             pc.SubcellStatus.UNBOUND
         )
         assert (
             pc.derive_subcell(
-                cell, _evidence(_record(cell.subcell_id), malformed=1), r1_passed=R1
+                cell, _evidence(_bound(cell.subcell_id), malformed=1), r1_passed=R1
             ).status
             is pc.SubcellStatus.UNBOUND
         )
         assert (
             pc.derive_subcell(
-                cell, _evidence(_record(cell.subcell_id), binding=None), r1_passed=R1
+                cell, _evidence(_bound(cell.subcell_id), context=None), r1_passed=R1
             ).status
             is pc.SubcellStatus.UNBOUND
         )
@@ -988,77 +1361,104 @@ class TestDerivation:
     def test_prerequisite_objects_and_cleanup_are_required(self) -> None:
         get = pc.subcell("R5-GET-PAYLOAD-HUMAN")
         put = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
-        key = _resolve(put).key
-        put_record = _record(put.subcell_id, created_key=key)
-        get_record = _record(
+        put_chain = _bound(put.subcell_id)
+        put_record = put_chain.record
+        assert put_record.created_key is not None
+        get_chain = _bound(
             get.subcell_id,
+            stamp="20260914T190000Z-3333",
             started_at=NOW + timedelta(minutes=5),
             finished_at=NOW + timedelta(minutes=6),
             prerequisites={put.subcell_id: put_record},
         )
-        # The exact bound record must be present: absent, or another record, is unbound.
-        assert pc.derive_subcell(get, _evidence(get_record), r1_passed=R1).status is (
+        # The exact bound prerequisite record must be present and bound itself: absent,
+        # another record, or the same record without its chain, is unbound.
+        assert pc.derive_subcell(get, _evidence(get_chain), r1_passed=R1).status is (
             pc.SubcellStatus.UNBOUND
         )
-        other = _record(put.subcell_id, created_key=key, stamp="20260914T170000Z-0000")
-        assert pc.derive_subcell(get, _evidence(other, get_record), r1_passed=R1).status is (
+        other = _bound(put.subcell_id, stamp="20260914T170000Z-0000")
+        assert pc.derive_subcell(get, _evidence(other, get_chain), r1_passed=R1).status is (
             pc.SubcellStatus.UNBOUND
         )
-        state = pc.derive_subcell(get, _evidence(put_record, get_record), r1_passed=R1)
+        assert (
+            pc.derive_subcell(get, _evidence(put_record, get_chain), r1_passed=R1).status
+            is pc.SubcellStatus.UNBOUND
+        )
+        state = pc.derive_subcell(get, _evidence(put_chain, get_chain), r1_passed=R1)
         assert state.status is pc.SubcellStatus.PASSED
         # The creating subcell itself waits for its object to be confirmed removed -- by a
-        # cleanup naming ITS attempt, recorded after it.
-        assert pc.derive_subcell(put, _evidence(put_record), r1_passed=R1).status is (
+        # cleanup naming ITS attempt and ITS exact object, recorded no earlier than it.
+        assert pc.derive_subcell(put, _evidence(put_chain), r1_passed=R1).status is (
             pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
-        assert key is not None
         cleanup = _cleanup_for(put_record)
         assert pc.derive_subcell(
-            put, _evidence(put_record, cleanups=(cleanup,)), r1_passed=R1
+            put, _evidence(put_chain, cleanups=(cleanup,)), r1_passed=R1
         ).status is (pc.SubcellStatus.PASSED)
         unresolved = _cleanup_for(put_record, confirmed=False)
         assert (
             pc.derive_subcell(
-                put, _evidence(put_record, cleanups=(unresolved,)), r1_passed=R1
+                put, _evidence(put_chain, cleanups=(unresolved,)), r1_passed=R1
             ).status
             is pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
-        # A cleanup that predates the write cannot have settled it (finding 3).
         before = _cleanup_for(put_record, recorded_at=NOW - timedelta(minutes=1))
         assert (
-            pc.derive_subcell(put, _evidence(put_record, cleanups=(before,)), r1_passed=R1).status
+            pc.derive_subcell(put, _evidence(put_chain, cleanups=(before,)), r1_passed=R1).status
             is pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
-        # A cleanup of the same key for ANOTHER attempt does not settle this one.
         foreign = _record(
             put.subcell_id,
-            created_key=key,
+            created_key=put_record.created_key,
             stamp="20260914T170000Z-0000",
             attempt_sha256="99" * 32,
         )
         assert (
             pc.derive_subcell(
-                put, _evidence(put_record, cleanups=(_cleanup_for(foreign),)), r1_passed=R1
+                put, _evidence(put_chain, cleanups=(_cleanup_for(foreign),)), r1_passed=R1
             ).status
             is pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
+        # A cleanup entry naming the attempt but ANOTHER key does not settle it.
+        elsewhere = pc.PermissionCleanup(
+            **{
+                **{f: getattr(cleanup, f) for f in pc.PermissionCleanup.__slots__ if f != "keys"},
+                "keys": (
+                    pc.CleanupKey(
+                        bucket=BUCKET,
+                        key="silver/elsewhere",
+                        attempt_sha256=put_record.attempt_sha256,
+                        delete_observed=pc.ObservedClass.OK_204,
+                        confirmation_observed=pc.ObservedClass.NOT_FOUND_404,
+                        confirmed_absent=True,
+                    ),
+                ),
+            }
+        )
+        assert (
+            pc.derive_subcell(put, _evidence(put_chain, cleanups=(elsewhere,)), r1_passed=R1).status
+            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
         # A possibly committed write stays open until settled; the UNDECIDED result stays.
-        open_record = _record(
+        open_chain = _bound(
             put.subcell_id,
+            stamp="20260914T190000Z-4444",
             observed=pc.ObservedClass.TIMEOUT,
             outcome=pc.SubcellOutcome.UNDECIDED,
             possibly_created=True,
+            created=False,
         )
-        assert pc.derive_subcell(put, _evidence(open_record), r1_passed=R1).status is (
+        assert pc.derive_subcell(put, _evidence(open_chain), r1_passed=R1).status is (
             pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
+        assert open_chain.attempt.key is not None
         settled = pc.PermissionCleanup(
             stamp="20260914T200000Z-0c1e",
             keys=(
                 pc.CleanupKey(
                     bucket=BUCKET,
-                    key=key,
-                    attempt_sha256=open_record.attempt_sha256,
+                    key=open_chain.attempt.key,
+                    attempt_sha256=open_chain.attempt.digest,
                     delete_observed=pc.ObservedClass.OK_204,
                     confirmation_observed=pc.ObservedClass.NOT_FOUND_404,
                     confirmed_absent=True,
@@ -1073,13 +1473,13 @@ class TestDerivation:
             recorded_at=NOW + timedelta(hours=1),
             binding=BINDING,
         )
-        state = pc.derive_subcell(put, _evidence(open_record, cleanups=(settled,)), r1_passed=R1)
+        state = pc.derive_subcell(put, _evidence(open_chain, cleanups=(settled,)), r1_passed=R1)
         assert state.status is pc.SubcellStatus.UNDECIDED and "TIMEOUT" in state.reason
 
     def test_a_started_task_is_settled_only_by_a_confirmed_stop(self) -> None:
-        """PR #106 correction 1, finding 4: a stop acknowledgement is not a termination."""
+        """PR #106 correction 1 (finding 4) and 2 (finding 2): termination evidence only."""
         cell = pc.subcell("R6-ACQ-RUN-OTHER-REVISION")
-        launched = _record(
+        launched = _bound(
             cell.subcell_id,
             observed=pc.ObservedClass.OK_200,
             outcome=pc.SubcellOutcome.INVERTED,
@@ -1093,16 +1493,18 @@ class TestDerivation:
             "termination NOT confirmed" in state.reason and "1 stop(s) acknowledged" in state.reason
         )
         confirmed = pc.derive_subcell(
-            cell, _evidence(launched, cleanups=(_cleanup_for(launched),)), r1_passed=R1
+            cell, _evidence(launched, cleanups=(_cleanup_for(launched.record),)), r1_passed=R1
         )
         assert confirmed.status is pc.SubcellStatus.FAILED
         assert "termination confirmed by a later cleanup" in confirmed.reason
-        unstopped = _cleanup_for(launched, tasks_stopped=False)
+        unstopped = _cleanup_for(launched.record, tasks_stopped=False)
         state = pc.derive_subcell(cell, _evidence(launched, cleanups=(unstopped,)), r1_passed=R1)
         assert "termination NOT confirmed" in state.reason
-        # An ambiguous launch (possibly started) is open until the cleanup lists and settles.
-        ambiguous = _record(
+        # An ambiguous launch (possibly started) is open until a task is discovered AND
+        # confirmed STOPPED; an empty discovery settles nothing (finding 2).
+        ambiguous = _bound(
             cell.subcell_id,
+            stamp="20260914T190000Z-5555",
             observed=pc.ObservedClass.TIMEOUT,
             outcome=pc.SubcellOutcome.UNDECIDED,
             possibly_started=True,
@@ -1110,12 +1512,42 @@ class TestDerivation:
         assert pc.derive_subcell(cell, _evidence(ambiguous), r1_passed=R1).status is (
             pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
+        empty = _cleanup_for(ambiguous.record)
+        state = pc.derive_subcell(cell, _evidence(ambiguous, cleanups=(empty,)), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        assert "not proof of absence" in state.reason
+        discovered = _cleanup_for(ambiguous.record, discovered=("b" * 32,))
         assert (
             pc.derive_subcell(
-                cell, _evidence(ambiguous, cleanups=(_cleanup_for(ambiguous),)), r1_passed=R1
+                cell, _evidence(ambiguous, cleanups=(discovered,)), r1_passed=R1
             ).status
             is pc.SubcellStatus.UNDECIDED
         )
+        # A cleanup naming the attempt but another tag, or a stopped set that does not
+        # cover every started task, settles nothing.
+        assert launched.record.started_by is not None
+        other_tag = pc.CleanupTasks(
+            **{
+                **{
+                    f: getattr(_cleanup_for(launched.record).tasks[0], f)
+                    for f in pc.CleanupTasks.__slots__
+                    if f != "started_by"
+                },
+                "started_by": pc.started_by_of("20260914T170000Z-0000"),
+            }
+        )
+        mismatched = pc.PermissionCleanup(
+            **{
+                **{
+                    f: getattr(_cleanup_for(launched.record), f)
+                    for f in pc.PermissionCleanup.__slots__
+                    if f != "tasks"
+                },
+                "tasks": (other_tag,),
+            }
+        )
+        state = pc.derive_subcell(cell, _evidence(launched, cleanups=(mismatched,)), r1_passed=R1)
+        assert "termination NOT confirmed" in state.reason
 
     def test_r1_evidenced_and_blocked_subcells(self) -> None:
         own = pc.subcell("R6-BLD-RUN-OWN-REVISION")
@@ -1163,28 +1595,31 @@ class TestMatrix:
         prepared = {c.cell_id: c.prepared()[c.cell_id] for c in passed}
         return vc.derive_states(full, prepared)
 
-    def test_r7_and_r9_pass_only_with_every_subcell_matched_under_the_binding(self) -> None:
-        r7 = [_record(s.subcell_id) for s in pc.subcells_of("R7-QUALIFICATION")]
+    def test_r7_and_r9_pass_only_with_every_subcell_bound_under_the_binding(self) -> None:
+        r7 = [_bound(s.subcell_id) for s in pc.subcells_of("R7-QUALIFICATION")]
         states = self._states(_evidence(*r7[:-1]))
         assert states["R7-QUALIFICATION"].status is vc.CellStatus.UNEXECUTED
         assert len(states["R7-QUALIFICATION"].subcells) == 12
         states = self._states(_evidence(*r7))
         assert states["R7-QUALIFICATION"].status is vc.CellStatus.PASSED
         assert states["R9-FOUNDATION-TASK"].status is vc.CellStatus.UNEXECUTED
-        r9 = [_record(s.subcell_id) for s in pc.subcells_of("R9-FOUNDATION-TASK")]
+        r9 = [_bound(s.subcell_id) for s in pc.subcells_of("R9-FOUNDATION-TASK")]
         states = self._states(_evidence(*r7, *r9))
         assert states["R9-FOUNDATION-TASK"].status is vc.CellStatus.PASSED
-        # One stale record among matched ones: HISTORICAL, never PASSED.
-        stale = [*r7[:-1], _record(r7[-1].subcell_id, binding=OTHER_BINDING)]
+        # One stale record among bound ones: HISTORICAL, never PASSED.
+        stale = [*r7[:-1], _bound(r7[-1].record.subcell_id, context=OTHER_CONTEXT)]
         states = self._states(_evidence(*stale))
         assert states["R7-QUALIFICATION"].status is vc.CellStatus.HISTORICAL
         assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
+        # One record among bound chains that lacks its chain: UNBOUND, never PASSED.
+        states = self._states(_evidence(*r7[:-1], r7[-1].record))
+        assert states["R7-QUALIFICATION"].status is vc.CellStatus.UNBOUND
 
     def test_r4_stays_blocked_by_its_task_subcells_however_the_human_ones_read(self) -> None:
         human = [
-            _record(s.subcell_id)
+            _bound(s.subcell_id)
             for s in pc.subcells_of("R4-ACQUISITION")
-            if s.layer is pc.Layer.L3_RUNTIME
+            if s.layer is pc.Layer.L3_RUNTIME and not s.requires
         ]
         states = self._states(_evidence(*human))
         assert states["R4-ACQUISITION"].status is vc.CellStatus.BLOCKED
@@ -1198,7 +1633,7 @@ class TestMatrix:
 
     def test_an_inverted_subcell_fails_its_cell_and_the_aggregate(self) -> None:
         r9 = pc.subcells_of("R9-FOUNDATION-TASK")
-        inverted = _record(
+        inverted = _bound(
             r9[0].subcell_id,
             observed=pc.ObservedClass.OK_200,
             outcome=pc.SubcellOutcome.INVERTED,
@@ -1206,14 +1641,14 @@ class TestMatrix:
             stop_acknowledged_ids=("a" * 32,),
             operations=2,
         )
-        states = self._states(_evidence(inverted, _record(r9[1].subcell_id)))
+        states = self._states(_evidence(inverted, _bound(r9[1].subcell_id)))
         assert states["R9-FOUNDATION-TASK"].status is vc.CellStatus.FAILED
         assert "termination NOT confirmed" in states["R9-FOUNDATION-TASK"].reason
         assert vc.aggregate(states) is vc.AggregateStatus.FAILED
 
     def test_r6_positive_subcells_follow_the_r1_bootstrap_cells(self) -> None:
         negatives = [
-            _record(s.subcell_id)
+            _bound(s.subcell_id)
             for s in pc.subcells_of("R6-LAUNCHERS")
             if s.layer is pc.Layer.L3_RUNTIME
         ]
@@ -1411,6 +1846,30 @@ class _Tool:
     def cleanup(self, control: _Tool, answers: list[Any]) -> int:
         control.client.answers = list(answers)
         return control.main("--cleanup", *self.base(), tool.CLEANUP_FLAG)
+
+    def context(self) -> pc.PermissionContext:
+        """The permission context the tool admits over this scenario, built its own way."""
+        from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
+
+        configuration, _digest = parse_compiled_configuration(
+            self.scenario.acquisition_configuration.read_bytes()
+        )
+        registration = self.scenario.inputs.read_bytes()
+        context: pc.PermissionContext = tool.permission_context(
+            self.environment_binding(),
+            registration_bytes=registration,
+            inputs=parse_launch_inputs(registration),
+            targets=pc.parse_permission_targets(self.targets.read_bytes()),
+            production_secret=configuration.secret_identifier,
+            directory=self.declarations,
+        )
+        return context
+
+    def evidence(self) -> pc.PermissionEvidence:
+        evidence: pc.PermissionEvidence = runner.permission_evidence(
+            self.scenario.store(), self.context()
+        )
+        return evidence
 
 
 def test_the_plan_prints_the_catalogue_and_constructs_nothing(
@@ -1694,7 +2153,7 @@ def test_a_dependent_subcell_reads_the_exact_object_and_the_cleanup_defers_it(
     settled = next(c for c in cleanups if c.keys)
     assert settled.keys[0].attempt_sha256 == created.attempt_sha256 and settled.deferred == ()
     assert next(c for c in cleanups if not c.keys).deferred == (created.created_key,)
-    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    evidence = t.evidence()
     for subcell in ("R4-PUT-PAYLOAD-HUMAN", "R5-GET-PAYLOAD-HUMAN"):
         assert pc.derive_subcell(pc.subcell(subcell), evidence, r1_passed=R1).status is (
             pc.SubcellStatus.PASSED
@@ -1771,17 +2230,19 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     capsys.readouterr()
     control = t.control(tmp_path)
     # Three objects (created, possibly created, interrupted), then two launches: the
-    # recorded task described STOPPED; the ambiguous launch listed, nothing found.
+    # recorded task discovered under neither status (two listings), described STOPPED;
+    # the ambiguous launch listed under both statuses, nothing found -- which settles
+    # NOTHING: an empty discovery is not proof of absence, and the pass is UNRESOLVED.
     control.client.by_operation = {
         "delete_object": [NO_CONTENT] * 3,
         "head_object": [NOT_FOUND] * 3,
-        "list_tasks": [LISTED_NONE, LISTED_NONE],
+        "list_tasks": [LISTED_NONE] * 4,
         "describe_tasks": [STOPPED],
     }
-    assert t.cleanup(control, []) == tool.EXIT_EXECUTED
+    assert t.cleanup(control, []) == tool.EXIT_CLEANUP_UNRESOLVED
     out = capsys.readouterr().out
     assert "keys=3 confirmed=3 launches=2 tasks_known=1 tasks_stopped=1" in out
-    assert "deferred=0 residue=0 operations=9" in out
+    assert "deferred=0 residue=1 operations=11" in out
     assert control.gate_calls == ["foundation"] and control.identity_calls == []
     assert control.constructions == [(r3.CONTROL_PROFILE, "us-east-1")]
     deleted = sorted(c[1]["key"] for c in control.client.calls if c[0] == "delete_object")
@@ -1796,7 +2257,11 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     assert index_attempt.key in deleted and index_attempt.key is not None
     assert index_attempt.key.startswith("bronze/sharadar/_indexes/")
     listed = [c[1]["started_by"] for c in control.client.calls if c[0] == "list_tasks"]
-    assert len(listed) == 2 and all(s.startswith("kalpamani-permission-") for s in listed)
+    assert len(listed) == 4 and all(s.startswith("kalpamani-permission-") for s in listed)
+    assert {c[1]["desired_status"] for c in control.client.calls if c[0] == "list_tasks"} == {
+        "RUNNING",
+        "STOPPED",
+    }
     described = [c for c in control.client.calls if c[0] == "describe_tasks"]
     assert len(described) == 1 and described[0][1]["task_arns"] == (TASK_ARN,)
     cleanup = pc.parse_permission_cleanup(t.files("permission-cleanup")[-1].read_bytes())
@@ -1807,8 +2272,9 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     }
     # The matrix: the creator PASSED (created and confirmed removed by its own attempt's
     # entry); the ambiguous one stays UNDECIDED (its result is preserved, its object
-    # settled); the launch FAILED with termination confirmed; the ambiguous launch UNDECIDED.
-    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    # settled); the launch FAILED with termination confirmed; the ambiguous launch stays
+    # CLEANUP_UNRESOLVED -- nothing discovered, nothing settled.
+    evidence = t.evidence()
     states = {
         s: pc.derive_subcell(pc.subcell(s), evidence, r1_passed=R1)
         for s in (
@@ -1824,8 +2290,22 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     assert states["R4-PUT-CLAIM-HUMAN"].status is pc.SubcellStatus.INTERRUPTED
     assert states["R6-ACQ-RUN-OTHER-REVISION"].status is pc.SubcellStatus.FAILED
     assert "termination confirmed" in states["R6-ACQ-RUN-OTHER-REVISION"].reason
-    assert states["R6-ACQ-RUN-OTHER-FAMILY"].status is pc.SubcellStatus.UNDECIDED
-    # A second pass settles nothing again: everything is already settled by identity.
+    assert states["R6-ACQ-RUN-OTHER-FAMILY"].status is pc.SubcellStatus.CLEANUP_UNRESOLVED
+    assert "not proof of absence" in states["R6-ACQ-RUN-OTHER-FAMILY"].reason
+    # A second pass: the objects and the confirmed launch are settled by identity and
+    # left alone; the ambiguous launch is discovered again -- this time the task is
+    # visible under STOPPED (delayed visibility) and its termination is confirmed.
+    control.client.by_operation = {
+        "list_tasks": [LISTED_NONE, LISTED_ONE],
+        "describe_tasks": [STOPPED],
+    }
+    assert t.cleanup(control, []) == tool.EXIT_EXECUTED
+    assert "keys=0 confirmed=0 launches=1 tasks_known=1 tasks_stopped=1" in capsys.readouterr().out
+    evidence = t.evidence()
+    assert pc.derive_subcell(
+        pc.subcell("R6-ACQ-RUN-OTHER-FAMILY"), evidence, r1_passed=R1
+    ).status is (pc.SubcellStatus.UNDECIDED)
+    # A third pass has nothing left to settle.
     assert t.cleanup(control, []) == tool.EXIT_EXECUTED
     assert "keys=0 confirmed=0 launches=0" in capsys.readouterr().out
     # Residue: a delete refused and a task still RUNNING leave residue; the exit says so.
@@ -1835,14 +2315,14 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     control.client.by_operation = {
         "delete_object": [DENIED],
         "head_object": [OK],
-        "list_tasks": [LISTED_NONE],
+        "list_tasks": [LISTED_NONE, LISTED_NONE],
         "describe_tasks": [RUNNING],
         "stop_task": [OK],
     }
     assert t.cleanup(control, []) == tool.EXIT_CLEANUP_UNRESOLVED
     out = capsys.readouterr().out
     assert "residue=2" in out and "tasks_stopped=0" in out
-    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    evidence = t.evidence()
     state = pc.derive_subcell(pc.subcell("R6-ACQ-RUN-OTHER-CLUSTER"), evidence, r1_passed=R1)
     assert state.status is pc.SubcellStatus.FAILED and "termination NOT confirmed" in state.reason
     assert pc.derive_subcell(pc.subcell("R4-PUT-RECORD-HUMAN"), evidence, r1_passed=R1).status is (
@@ -1855,36 +2335,135 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     assert t.main("--cleanup", *t.base(), tool.CLEANUP_FLAG) == tool.EXIT_REFUSED_IDENTITY
 
 
-def test_the_matrix_reads_permission_records_from_the_records_directory(
+def test_the_matrix_passes_r7_only_through_complete_bound_chains(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """PR #106 correction 2, finding 1, through the public runner on real files.
+
+    Every R-7 subcell is prepared, authorized and executed by the tool (the fakes refusing
+    each write and each parameter put), so the records directory holds the complete chain
+    -- statement, consumed authorization beside the ledger, attempt, record -- and the
+    cell runner reads R-7 PASSED. Then, one component at a time: missing, substituted or
+    contradicting, the cell reads UNBOUND; a changed targets document reads HISTORICAL; a
+    missing targets document (no current context) reads UNBOUND. Records alone never pass.
+    """
     from test_production_verification_cells import _Cells
 
     cells = _Cells(tmp_path)
-    store = cells.scenario.store()
-    binding = pc.PermissionBinding(
-        environment_binding_sha256="ab" * 32,
-        policy_declaration_sha256=pc.declaration_digest(tool.declaration_paths()),
-        registration_sha256=sha256_hex(cells.scenario.inputs.read_bytes()),
-        partition="aws",
-        region="us-east-1",
-    )
+    scenario = cells.scenario
+    scenario.records.mkdir(parents=True, exist_ok=True)
+    tools: dict[pc.Principal, _Tool] = {}
+    for principal in (
+        pc.Principal.QUALIFICATION_ACQUISITION,
+        pc.Principal.QUALIFICATION_ASSESSMENT,
+    ):
+        t = _Tool(tmp_path / principal.value.lower(), principal)
+        t.scenario, t.root = scenario, scenario.root
+        t.client.records_dir = scenario.records
+        t.env[rb.ENVIRONMENT_BINDING_ENV_VAR] = str(scenario.root / "environment.json")
+        tools[principal] = t
+    first = next(iter(tools.values()))
+    for t in tools.values():
+        t.declarations = first.declarations
+        t.targets = first.targets
+        t.env[tool.TARGETS_ENV_VAR] = str(first.targets)
     for s in pc.subcells_of("R7-QUALIFICATION"):
-        store.write_record(
-            "permission-record", _record(s.subcell_id, binding=binding).document(), at=NOW
-        )
-    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+        t = tools[s.principal]
+        assert t.execute(s.subcell_id, [DENIED]) == tool.EXIT_EXECUTED, s.subcell_id
+    capsys.readouterr()
+
+    def context_source(_arguments: Any) -> pc.PermissionContext:
+        return first.context()
+
+    matrix = [*cells.base()]
+    assert cells.main(*matrix, permission_context_source=context_source) == runner.EXIT_MATRIX
     out = capsys.readouterr().out
     assert "cell=R7-QUALIFICATION ref=R-7 kind=PERMISSION_MATRIX status=PASSED" in out
     assert "  subcell=R7-ACQ-PUT-SILVER status=PASSED" in out
     assert "cell=R4-ACQUISITION ref=R-4 kind=PERMISSION_MATRIX status=BLOCKED" in out
     assert "cell=R6-LAUNCHERS ref=R-6 kind=PERMISSION_MATRIX status=BLOCKED" in out
-    assert cells.scenario.clients.constructions == []
+    assert scenario.clients.constructions == []
+    for canary in (*CANARIES, BUCKET):
+        assert canary not in out
+
+    def status_of(**overrides: Any) -> str:
+        code = cells.main(*matrix, permission_context_source=context_source, **overrides)
+        assert code == runner.EXIT_MATRIX
+        text = capsys.readouterr().out
+        line = next(ln for ln in text.splitlines() if ln.startswith("cell=R7-QUALIFICATION "))
+        return line.split("status=")[1].split()[0]
+
+    store = scenario.store()
+    statements = sorted(scenario.records.glob("permission-statement-*.json"))
+    attempts = sorted(scenario.records.glob("permission-attempt-*.json"))
+    consumed = sorted(store.consumed_path(tool.CONSUMPTION_KIND, "0" * 64).parent.glob("*.json"))
+    assert len(statements) == 12 and len(attempts) == 12 and len(consumed) == 12
+
+    def withheld(path: Path) -> None:
+        aside = path.with_suffix(".aside")
+        path.rename(aside)
+        try:
+            assert status_of() == "UNBOUND", path.name
+        finally:
+            aside.rename(path)
+
+    # Missing: an attempt, a statement, a consumption -- each alone makes the cell UNBOUND.
+    withheld(attempts[0])
+    withheld(statements[0])
+    withheld(consumed[0])
+    assert status_of() == "PASSED"
+    # Substituted: a statement of the same subcell for another stamp in place of the one
+    # the attempt names; a consumption for another statement; a record whose
+    # authorization digest is not its attempt's.
+    original = statements[0].read_bytes()
+    document = json.loads(original)
+    document["stamp"] = "20260914T170000Z-0000"
+    statements[0].write_bytes(encode(document))
+    try:
+        assert status_of() == "UNBOUND"
+    finally:
+        statements[0].write_bytes(original)
+    original = consumed[0].read_bytes()
+    document = json.loads(original)
+    document["statement_sha256"] = "55" * 32
+    consumed[0].write_bytes(encode(document))
+    try:
+        assert status_of() == "UNBOUND"
+    finally:
+        consumed[0].write_bytes(original)
+    record_path = sorted(scenario.records.glob("permission-record-*.json"))[0]
+    original = record_path.read_bytes()
+    document = json.loads(original)
+    document["authorization_sha256"] = "66" * 32
+    record_path.write_bytes(encode(document))
+    try:
+        assert status_of() == "UNBOUND"
+    finally:
+        record_path.write_bytes(original)
+    assert status_of() == "PASSED"
+    # Changed targets: every chain was made under the old targets document -- HISTORICAL,
+    # never PASSED; a missing targets document is no current context -- UNBOUND.
+    original = first.targets.read_bytes()
+    first.targets.write_bytes(
+        original.replace(b"synthetic-control-bucket", b"another-control-bucket")
+    )
+    try:
+        assert status_of() == "HISTORICAL"
+    finally:
+        first.targets.write_bytes(original)
+    first.targets.rename(first.targets.with_suffix(".aside"))
+    try:
+        assert status_of() == "UNBOUND"
+    finally:
+        first.targets.with_suffix(".aside").rename(first.targets)
+    assert status_of() == "PASSED"
+    # Records alone -- the shape the earlier test supplied -- never pass.
+    for path in [*statements, *attempts]:
+        path.rename(path.with_suffix(".aside"))
+    assert status_of() == "UNBOUND"
     # A malformed permission file makes every permission subcell UNBOUND, never ignored.
-    (cells.scenario.records / "permission-record-20260914T180000Z-ffff.json").write_bytes(b"{}")
-    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
-    out = capsys.readouterr().out
-    assert "cell=R7-QUALIFICATION ref=R-7 kind=PERMISSION_MATRIX status=UNBOUND" in out
+    (scenario.records / "permission-record-20260914T180000Z-ffff.json").write_bytes(b"{}")
+    assert status_of() == "UNBOUND"
 
 
 # ---------------------------------------------------------------------------
@@ -1979,7 +2558,10 @@ class TestBoto3Adapter:
             lambda: adapter.put_parameter("/kalpamani/production/x", "marker"),
             lambda: adapter.execute_command(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN),
             lambda: adapter.list_tasks(
-                cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x"
+                cluster_arn=CLUSTER_ARN,
+                started_by="kalpamani-permission-x",
+                desired_status="RUNNING",
+                next_token=None,
             ),
             lambda: adapter.describe_tasks(cluster_arn=CLUSTER_ARN, task_arns=(TASK_ARN,)),
         )
@@ -2061,19 +2643,104 @@ class TestBoto3Adapter:
         assert r3.classify(adapter.stop_task(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN)) is (
             r3.ObservedClass.OK_200
         )
-        # ListTasks by the tag and DescribeTasks carry the documented fields.
-        transport.script = [(200, json.dumps({"taskArns": [TASK_ARN]}).encode())]
-        listed = adapter.list_tasks(cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x")
-        assert listed.task_arns == (TASK_ARN,)
+        # ListTasks by the tag, per desired status, page by page; DescribeTasks carries the
+        # documented fields. An empty page settles nothing (the engine decides that); a
+        # page with a token is reported incomplete-able through next_token.
+        transport.script = [(200, json.dumps({"taskArns": []}).encode())]
+        empty = adapter.list_tasks(
+            cluster_arn=CLUSTER_ARN,
+            started_by="kalpamani-permission-x",
+            desired_status="RUNNING",
+            next_token=None,
+        )
+        assert empty.task_arns == () and empty.next_token is None
         body = json.loads(transport.requests[-1].body)
         assert body["startedBy"] == "kalpamani-permission-x" and body["cluster"] == CLUSTER_ARN
+        assert body["desiredStatus"] == "RUNNING" and "nextToken" not in body
+        transport.script = [
+            (200, json.dumps({"taskArns": [TASK_ARN], "nextToken": "page-2"}).encode())
+        ]
+        listed = adapter.list_tasks(
+            cluster_arn=CLUSTER_ARN,
+            started_by="kalpamani-permission-x",
+            desired_status="STOPPED",
+            next_token="page-1",  # noqa: S106 - a page token
+        )
+        assert listed.task_arns == (TASK_ARN,)
+        assert listed.next_token == "page-2"  # noqa: S105 - a page token
+        body = json.loads(transport.requests[-1].body)
+        assert body["desiredStatus"] == "STOPPED" and body["nextToken"] == "page-1"
         transport.script = [
             (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "STOPPED"}]}).encode())
         ]
         described = adapter.describe_tasks(cluster_arn=CLUSTER_ARN, task_arns=(TASK_ARN,))
         assert described.task_statuses == ((TASK_ARN, "STOPPED"),)
         assert json.loads(transport.requests[-1].body)["tasks"] == [TASK_ARN]
-        assert transport.sends == 6  # one attempt per operation, no retry anywhere
+        assert transport.sends == 7  # one attempt per operation, no retry anywhere
+
+    def test_an_ambiguous_launch_is_settled_at_the_adapter_only_by_a_discovered_stopped_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PR #106 correction 2, finding 2, with the real adapter at the transport."""
+        adapter, transport = self._adapter(monkeypatch)
+        launch = pc.TasksToSettle(
+            attempt_sha256="e5" * 32,
+            started_by="kalpamani-permission-20260914T180000Z-abcd",
+            cluster_arn=CLUSTER_ARN,
+            known_task_ids=(),
+        )
+
+        def settle() -> Any:
+            return pc.run_cleanup(
+                (),
+                (launch,),
+                client=adapter,
+                stamp=STAMP,
+                deferred=(),
+                binding=BINDING,
+                identity_verified=True,
+                now=NOW,
+                budget=60,
+            )
+
+        empty = (200, json.dumps({"taskArns": []}).encode())
+        # Persistent empty discovery: two listings (RUNNING, STOPPED), nothing settled.
+        transport.script = [empty, empty]
+        cleanup = settle()
+        assert (
+            transport.sends == 2 and cleanup.tasks[0].undiscovered and not cleanup.tasks[0].settled
+        )
+        assert cleanup.residue == (f"launch:{launch.started_by}:undiscovered",)
+        statuses = [json.loads(r.body)["desiredStatus"] for r in transport.requests]
+        assert statuses == ["RUNNING", "STOPPED"]
+        # Empty, then visible under STOPPED on a later pass; described STOPPED: settled.
+        transport.script = [
+            empty,
+            (200, json.dumps({"taskArns": [TASK_ARN]}).encode()),
+            (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "STOPPED"}]}).encode()),
+        ]
+        cleanup = settle()
+        assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.tasks[0].settled
+        assert cleanup.settles_tasks("e5" * 32, ()) and transport.sends == 5
+        # Discovery refused: failed, residue, nothing described, nothing settled.
+        transport.script = [(403, b'{"__type":"AccessDeniedException","message":"synthetic"}')]
+        cleanup = settle()
+        assert cleanup.tasks[0].discovery_failed and transport.sends == 6
+        assert cleanup.residue == (f"launch:{launch.started_by}:failed",)
+        # Discovered but still RUNNING: stopped once, residue -- a stop is not a termination.
+        transport.script = [
+            (200, json.dumps({"taskArns": [TASK_ARN]}).encode()),
+            empty,
+            (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "RUNNING"}]}).encode()),
+            (200, json.dumps({"task": {"taskArn": TASK_ARN}}).encode()),
+        ]
+        cleanup = settle()
+        assert cleanup.tasks[0].residue_ids == ("a" * 32,) and not cleanup.tasks[0].settled
+        assert cleanup.residue == ("task:" + "a" * 32,) and transport.sends == 10
+        # No RunTask was ever sent by the cleanup.
+        assert all(
+            b"RunTask" not in (r.headers.get("X-Amz-Target") or b"") for r in transport.requests
+        )
         from botocore.exceptions import ReadTimeoutError  # type: ignore[import-untyped]
 
         transport.script = [ReadTimeoutError(endpoint_url="https://synthetic")]

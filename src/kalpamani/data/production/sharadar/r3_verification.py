@@ -141,6 +141,8 @@ class Observation:
     task_statuses: tuple[tuple[str, str], ...] = ()
     #: The count of ``failures`` entries a ``RunTask`` answer carried beside its tasks.
     failures: int = 0
+    #: The pagination token a ``ListTasks`` answer carried: a further page exists.
+    next_token: str | None = None
 
     @property
     def task_arn(self) -> str | None:
