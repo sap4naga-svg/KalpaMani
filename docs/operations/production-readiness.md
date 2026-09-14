@@ -22,7 +22,9 @@ publication and AWS runtime verification remain **unperformed**.
 
 The image procedure itself is [`production-image-build.md`](production-image-build.md); this
 document does not restate it. The owner-input checklist is
-[`production-owner-inputs.md`](production-owner-inputs.md). Both are indexed from here.
+[`production-owner-inputs.md`](production-owner-inputs.md), and the disposition of the three review
+findings corrected in this record's second revision is
+[`production-readiness-dispositions.md`](production-readiness-dispositions.md). All are indexed from here.
 
 ---
 
@@ -83,7 +85,7 @@ supplied for this cycle, so every owner value is `MISSING`.
 
 | Input | Purpose · consumer | Authoritative source · owner | Validation · freshness | Location | Status |
 |---|---|---|---|---|---|
-| `build_configuration.accepted_schemas` | the observed CSV header digests Silver admits per dataset (`SCHEMA_UNSTABLE` otherwise) | the header digests of real deliveries, observed under the private boundary — **not derivable from public documentation** | per-dataset sets of 64-hex digests; a new provider header is a configuration change and an image rebuild | owner-private → image | MISSING — and **sequenced after the first acquisition**: the production digests can be observed only from real Bronze, so the first build configuration follows the first completed acquisition |
+| `build_configuration.accepted_schemas` | the observed CSV header digests Silver admits per dataset (`silver._parse` refuses `SCHEMA_UNSTABLE` for a page whose digest is outside its dataset's set) | the header digests of real deliveries (`schema_digest_of` over the delivered header, in delivered order), observed under the private boundary — **not derivable from public documentation alone** | per-dataset sets of 64-hex digests; an explicitly **empty** set parses and admits nothing; a new provider header is a configuration change and an image rebuild | owner-private → image | MISSING, and **sequenced**: two routes exist (§4.2 item 6) — **Route A** (accepted, evidence-backed, conditional): the private combined qualification report's `observed_schema_digests`, computed by the same parser and digest function over real deliveries of the same three tables, **unattributed to datasets** and observed under the ticker-keyed request form, attributable only by an owner-side digest-equality check against documented headers (complete for `actions` only, PSR-SHD-112); **Route B** (PROPOSED / BLOCKING): an observation build with an empty accepted set whose refusal receipt reports the per-dataset observed digests. Until one route yields attributed digests, no Silver-producing build image can be compiled |
 | `build_configuration.calendar` | the trading-session calendar (`session_date`, `open_at`) membership decides against (`decision_time(d) = open(d) − 30 min`) | a **real exchange calendar** with an authoritative source and version | sessions sorted, each opening on its own date; covering every decision session and the history window | owner-private → image | MISSING — only the synthetic pinned calendar exists (`sessions.py`; no tzdata in the operational venv) |
 | `build_configuration.evidence` | per-version availability evidence (`DELIVERY_WINDOW` only with explicit per-version evidence; P-2 first-seen bound is the default) | owner-recorded evidence items, or none | closed item shape; an empty item list is a valid configuration under P-2 | owner-private → image | MISSING (may legitimately be empty for the first build) |
 | `build_configuration.universe_rule` | `breakout-long-v1` parameters: `decision_margin_seconds`, `history_sessions`, `addv_window_sessions`, `price_floor`, `addv_floor`, `eligible_exchanges`, `common_stock_categories` | ADR-0035 §5.2 I-9 — an owner decision | non-negative integers, decimals, closed lists; `universe_rule_version` must equal the code's | owner-private → image | MISSING — I-9 not supplied |
@@ -129,6 +131,8 @@ apply and from the image and generation records, and no tool compiles them today
 
 ## 3. The verification-path question, resolved from code
 
+### 3.1 The finding
+
 **Traced path.** `scripts/production_task_entrypoint.py::main` → `select_entry` →
 `_compiled_configuration` → `pre_entry_refusal` (configuration is this entry's; credential
 environment is a task's by name; the container URI is the documented shape) → working directory under
@@ -137,9 +141,8 @@ environment is a task's by name; the container URI is the documented shape) → 
 `run_task_bootstrap` (environment → binding → input → self-check → identity proof → release barrier)
 → **`RELEASED`** → processing.
 
-**Finding: the accepted code cannot perform R-1/R-2 and stop.** `run_task_bootstrap` returns
-`RELEASED` with zero data-plane operations, but nothing on a composed entry consumes that outcome as
-a terminal one:
+**The accepted code cannot perform R-1/R-2 and stop.** `run_task_bootstrap` returns `RELEASED` with
+zero data-plane operations, but nothing on a composed entry consumes that outcome as a terminal one:
 
 - `entry.BOOTSTRAP_OUTCOME` maps the eight bootstrap *refusals* to task outcomes and states in its
   own comment that "a released bootstrap continues into processing, and the bootstrap-only halt
@@ -170,31 +173,64 @@ image" (ADR-0036 §3), and no such image or probe exists.
 and ADR-0043 §5 refuse, and it is not proposed. **The verification command does not exist**, and
 this document does not claim otherwise.
 
-**The smallest bounded follow-up (a contract decision plus code, proposed for the next cycle,
-not decided here):**
+### 3.2 The smallest bounded follow-up — PROPOSED, not accepted, not implemented
+
+A contract decision plus code, for the next cycle (§8); nothing here is decided:
 
 1. **One additional closed entry per actor** — a third and fourth `TaskEntry` member
    (`kalpamani-production-acquire-verify`, `kalpamani-research-build-verify`) whose composed path is
    the accepted bootstrap **and nothing after `RELEASED`**, exiting with one new closed
    `TaskOutcome` (`VERIFIED_BOOTSTRAP`, a non-zero exit code so that `0` stays `COMPLETED` alone)
-   and the same receipt line; the build verify entry additionally makes the R-2 origin probe (one
-   bounded connection attempt to the pinned provider origin that must time out or be refused at the
-   network layer) and reports its result as a closed member. Factories for the acquisition verify
-   entry construct **no Secrets Manager client and no transport**, so the verification image cannot
-   perform the operations it exists to prove it did not.
+   and the same receipt line. The build verify entry additionally makes the R-2 origin probe (§3.3).
+   Factories for the acquisition verify entry construct **no Secrets Manager client and no
+   transport**, so the verification image cannot perform the operations it exists to prove it did not.
 2. **Two verification task-definition families** (`…-acquire-verify`, `…-build-verify`) declared at
    stage a beside the production ones, each with its actor's task role, the same network placement
    and the verification image; **each launcher set gains exactly one more `ecs:RunTask` resource**
-   (its actor's verification revision) — the dependency reconciliation in §4.2 explains why this
-   is the least-privilege way to run R-1/R-2 without rescoping the launcher between images.
-3. **An ADR** amending ADR-0043 §2 (two entries → four, with the verification entries stated as
+   (its actor's verification revision) — §4.2 item 4 explains why this is the least-privilege way to
+   run R-1/R-2 without rescoping the launcher between images.
+3. **An ADR** amending ADR-0043 §2 (two entries → four, the verification entries stated as
    bootstrap-only), ADR-0036 §2.9 (the launcher's `RunTask` resource set) and §3 (R-1/R-2 as
-   verification-image cells with the exact expected exit code), with the static guard A-8 extended
-   to the verify entries and a test that a verify entry's factories have no secret and no transport.
+   verification-image cells with the exact expected exit code, and the probe's own accounting), with
+   the static guard A-8 extended to the verify entries and a test that a verify entry's factories have
+   no secret and no transport.
 
 The alternative — running R-1/R-2 with the production image and a **deliberately absent release**,
 so that only the negative cells are exercised — is recorded as **insufficient** for the positive
 cell and is not proposed as a substitute.
+
+### 3.3 Verification-image evidence boundaries
+
+**A verification-image success does not prove production-image execution.** The two tasks share a
+code commit and the bootstrap implementation and differ in entry, image, configuration digest and
+what follows the barrier. For each property: what a verification task **directly establishes**
+(D), what a **configuration-equivalence check** establishes (E — the launch tool compares the two
+`CompiledLaunch` records and the two task definitions field by field), and what stays **untested
+until the production image is exercised** (U).
+
+| Property | Verification task | Production task | D / E / U |
+|---|---|---|---|
+| code commit; bootstrap implementation | the same `code_commit` compiled in, the same `run_task_bootstrap`, the same `pre_entry_refusal`, metadata, identity and barrier modules | the same | **D** for the bootstrap code path on this commit; **U** for the entry's own composition (`run_acquisition_entry` / `run_build_entry` are never entered by a verify entry) |
+| image digest | the verification image's registry digest, attested by `DescribeTasks` and bound by its release | a different digest | **D** only for the verification image; **U** for the production image — a different image is a different set of bytes, however identical the source |
+| configuration digest; entry / family | the verification entry's compiled configuration (same owner inputs, different `entry`, therefore a different digest); family `…-verify` | the production entry's file and family | **E** that the two configurations differ **only** in `entry` (the generator is deterministic: same inputs, same commit, same instant); **U** that the production entry reads and applies its file — only the production task does |
+| task role; execution role | the actor's task role and the shared execution role, from the verification task definition | the same two ARNs from the production task definition | **E** (the two task definitions name the same roles; the launcher's `iam:PassRole` allowlist is the same two roles); **D** for the identity proof under that role on the verify task; **U** for the production task's own proof (repeated per launch by design) |
+| network placement (subnet, security groups, public IP) | the compiled per-actor placement, verified by the launch tool's `DescribeTasks` / `DescribeNetworkInterfaces` | the same compiled values | **E** (same `CompiledLaunch` placement fields); **D** that the verify task was placed there; **U** that the production task is — verified per launch |
+| platform version; `user`; read-only root; `/work` tmpfs | pinned at `RunTask`; the task definition's `user = 10001:10001`, `readonlyRootFilesystem`, tmpfs `/work` | the same declared shape | **E** (the same declaration fields); **D** that `/work` was writable for uid 10001 on the verify task (the working directory step passed, §4.3 S9a); **U** that the production image's process finds the same — the same platform and declaration, a different image |
+| binding processing | two `ssm:GetParameter` reads, the same loader, the same actor constants | the same | **D** for the binding parameter's decryptability and shape under the task role; **U** nothing further — the parameter and loader are identical |
+| input processing | the real acquisition input v2 / build input v1 admitted (`bind_plan`, spent identities, ledger digest); **no** reservation follows | the same admission, then processing | **D** for admission of that input; **U** for everything the production path does with it |
+| release processing | a v2 release bound to the verify task ARN, revision, image digest, configuration digest, identity, input digest | a release bound to the production task's values | **D** that the barrier accepts a matching release and refuses the negative cells; **U** that the production task's barrier does — same code, a different release |
+| provider-origin probe (build verify only) | **one** bounded connection attempt (proposed: TCP connect, 443, ≤ 5 s, no request bytes — values the §3.2 ADR decides) to one resolved address of the pinned origin from the build subnet; outcome classified `REFUSED_AT_NETWORK` / `TIMED_OUT` / **`CONNECTED`** (a failure: the subnet must not reach the provider) and counted as `probe_attempts = 1` in the receipt | no probe; the build image imports no transport (A-8) | **D** that the build subnet's routing and security group deny the origin at the moment of the probe; **U** nothing about the production build image, which makes no such attempt; the probe is **not** an assertion about every address or every moment |
+| processing capabilities deliberately absent | the acquisition verify entry has no secrets client and no transport; the build verify entry has no S3 client at all; **zero** `GetSecretValue`, provider API requests and data-plane S3 operations by construction, asserted by counting fakes | present | **D** only that the verify image lacks them; **U** every production capability — reservation, credential, provider requests, Bronze writes, locator; locator read, exact reads, Silver, Gold, manifest |
+
+**What "zero" means, precisely.** A verification task makes AWS requests: the metadata read, two or
+three `ssm:GetParameter` reads (plus up to 60 barrier polls), one `sts:GetCallerIdentity`, the image
+pull and log writes by the agent, and — build verify only — one provider-origin connection attempt.
+What is zero is **provider API requests**, **`GetSecretValue`** and **data-plane S3 operations**.
+"Zero network attempts" is never claimed.
+
+**What a pass authorizes.** Nothing beyond the recorded cell. The production image is exercised for
+the first time by the first authorized production run, whose own release, identity proof and receipt
+are the evidence for it; every U row above is closed only by that run.
 
 ---
 
@@ -203,27 +239,42 @@ cell and is not proposed as a substitute.
 ### 4.1 Ordering, derived from the accepted decisions and the declared configuration
 
 ```text
-S0  owner inputs           secret (created outside Terraform), origin address set, release commit,
-                           I-8/I-9 decisions, ledger initialized, tfvars values, private bindings
-S1  compiled configuration production_compiled_configuration.py per entry (image gate)
-S2  build context + image  production_build_context.py; docker build; step-6 local verification
-S3  publish                push to the ONE research repository; record RepoDigests (registry digest)
-S4  stage a (Terraform)    plan review; apply: policies, bucket-policy statements, task roles, bootstrap
-                           policies, KMS key + alias, binding parameters, network, task definitions
-                           (pinned by the S3 digests), the four permission sets + policy references;
-                           NO assignments; administrator-binding and shared-route effects (4.4)
-S5  R-3                    server-side conditional-write verification by the control principal,
-                           nine expected-path operations, failure-path cleanup budget 10;
-                           record + digest -> production_r3_verification_digest
-S6  stage b (Terraform)    the four account assignments and nothing else
-S7  human profiles         materialize the four governed profiles; identity preflights; the two
-                           production human bindings under the ADR-0023 trust boundary
-S8  R-4 .. R-9             permitted/denied matrix: IAM simulation (L2) then live cells (L3),
-                           synthetic objects only, deletion-role cleanup
-S9  R-1 / R-2              runtime verification -- BLOCKED on the verification-only path (3)
-S10 first bounded run      acquisition (one authorized run), then the first build configuration
-                           (schema digests observed), then one authorized build
+S0   owner inputs           secret (created outside Terraform), origin address set, release commit,
+                            I-8/I-9 decisions, ledger initialized, tfvars values, private bindings
+S1   compiled configuration production_compiled_configuration.py per entry (image gate). The build
+                            entry's accepted_schemas is Route A digests (attributed) or Route B's
+                            explicitly empty set (an OBSERVATION configuration) -- 4.2 item 6
+S2   build context + image  production_build_context.py; docker build; step-6 local verification
+S3   publish                push to the ONE research repository; record RepoDigests (registry digest)
+S4   stage a (Terraform)    plan review; apply: policies, bucket-policy statements, task roles, bootstrap
+                            policies, KMS key + alias, binding parameters, network, task definitions
+                            (pinned by the S3 digests), the four permission sets + policy references;
+                            NO assignments; administrator-binding and shared-route effects (4.4)
+S5   R-3                    server-side conditional-write verification by the control principal,
+                            nine expected-path operations, failure-path cleanup budget 10;
+                            record + digest -> production_r3_verification_digest
+S6   stage b (Terraform)    the four account assignments and nothing else. FROM HERE ON EVERY APPLY
+                            KEEPS production_stage = "b" AND THE R-3 DIGEST (4.6)
+S7   human profiles         materialize the four governed profiles; identity preflights; the two
+                            production human bindings under the ADR-0023 trust boundary
+S8   R-4 .. R-9             permitted/denied matrix: IAM simulation (L2) then live cells (L3),
+                            synthetic objects only, deletion-role cleanup
+S9   R-1 / R-2              runtime verification -- BLOCKED on the verification-only path (3.2)
+S10a first acquisition      one authorized run -> production Bronze exists
+S10b schema digests         Route A: attributed digests already compiled at S1, nothing to do here;
+                            Route B: one authorized OBSERVATION build (zero writes) -> per-dataset
+                            digests in its refusal receipt -> a new build configuration -> S1-S3 for
+                            the build image only -> a stage-b-PRESERVING apply (4.6)
+S10c first build            one authorized build -> Silver, Gold, one manifest
 ```
+
+**What exists before the first acquisition, and what becomes available afterwards.** Before S10a:
+both images published and registered (the build image compiled either with Route A digests or as
+Route B's observation image); stage b; the four profiles; every human binding; no production Bronze,
+no locator, no observed production schema digest, no ledger row. After S10a: production Bronze, one
+locator, one completed ledger row — and, under Route B, the possibility of observing the digests
+(S10b); only after S10b does a Silver-producing build image exist. Under Route A the digests are
+compiled before S10a, and the first build confirms them or refuses `SCHEMA_UNSTABLE` with zero writes.
 
 ### 4.2 The dependency cycle, reconciled
 
@@ -254,10 +305,35 @@ It resolves as follows, and each arrow is a fact of the declaration or of an acc
    is §3's**: separate verification families whose revisions the launcher may also run, so that the
    production revision is registered once, the verification revision beside it, and one stage-a
    apply covers both.
-5. **Rotation re-enters the cycle at S1.** A secret rename, an origin address change or a build
-   configuration change is a new compiled configuration → a new image → a new digest → a new
-   revision → a stage-a apply (ADR-0044 §2). The launcher's `RunTask` resource follows the revision
-   automatically because it references the Terraform resource, not a literal.
+5. **Rotation re-enters the cycle at S1 and never leaves stage b.** A secret rename, an origin address
+   change or a build configuration change is a new compiled configuration → a new image → a new
+   digest → a new revision → an apply **at the stage already established** (ADR-0044 §2; §4.6). The
+   launcher's `RunTask` resource follows the revision automatically because it references the
+   Terraform resource, not a literal — only the rotated actor's launcher policy changes.
+6. **The first-build cycle is a second cycle, and separate verification families do not touch it.**
+   Stage a requires the **build** digest too (item 1) → the build image needs per-dataset accepted
+   schema digests baked into its configuration (`compiled.py`, `silver._parse`) → production digests
+   are observable only inside the boundary, by the build task, from production Bronze (ADR-0036 §2.3,
+   §2.10; the acquisition path parses nothing) → production Bronze needs stage b and an authorized run.
+   Two routes, and no third: **Route A** (accepted, evidence-backed, *conditional*) — the private
+   combined qualification report records `observed_schema_digests` computed by the very parser and
+   `schema_digest_of` Silver imports, over real deliveries of the same three tables; but the set is
+   unattributed to datasets, was observed under the ticker-keyed request form, and header identity
+   across the two forms is documented (PSR-SHD-110/-112/-113 list columns) and not empirically
+   established; attribution is an owner-side offline equality check between `schema_digest_of` over a
+   documented header and an observed digest — complete column list in the register for `actions`
+   only, and no documented delivered order — so the route is **available in part and unproven**, and a
+   digest it cannot attribute is simply not compiled (the build then refuses, zero writes; nothing is
+   relaxed). **Route B** (PROPOSED / BLOCKING pending an ADR and its implementation): the first build
+   image is an **observation image** — a real compiled configuration whose accepted set is explicitly
+   empty (parses; admits nothing) — run once after S10a, reading the locator and exactly what it names,
+   refusing `REFUSED_NORMALIZATION` with zero writes, and reporting the **per-dataset observed schema
+   digests** in its receipt; a second build image is then compiled from them (one more image cycle,
+   stage b preserved). Affected by Route B: ADR-0044 §4 (the receipt's closed field set), the ADR-0036
+   §2.9 output rule as ADR-0044 narrowed it, `silver.normalize` (collect every page's digest before
+   refusing), `build_processing`, `receipts.py`; **no new permission and no new S3 operation**. Neither
+   route invents a digest, registers a placeholder image, uses a fixture configuration or admits an
+   unobserved header. See the disposition record F-1.
 
 ### 4.3 The execution matrix
 
@@ -269,7 +345,7 @@ missing inputs; nothing below invents an identifier, a budget, a permission or a
 | # | Step | Prerequisites · authorization | Actor · minimum permissions | Command / implementation | Side effects · limits | Evidence (positive / negative) | Halt · cleanup · residue |
 |---|---|---|---|---|---|---|---|
 | S0 | Owner inputs | the owner's written authorization for the image gate; the production secret created by the owner outside Terraform (never by this repository) | the owner; Secrets Manager `CreateSecret` under an owner profile is **outside** this design's principals and is not enumerated here | no command in this repository; the checklist in `production-owner-inputs.md` | none | positive: every checklist row has a value held outside the repository; negative: any row still `MISSING` | halt on any missing row; nothing to clean |
-| S1 | Compiled configuration | S0; a clean checkout at the release commit | the owner, workstation; no AWS permission | `python scripts/production_compiled_configuration.py --entry <entry> --inputs <owner path> --generated-at <ISO> --output docker/production/build/<entry>` — **needs**: release commit checked out, the owner inputs files | writes the git-ignored staging directory only; no network | positive: `configuration_digest=<64 hex>` printed, `generation-record.json` names the commit and tree; negative: `compiled configuration refused: <reason>` (dirty tree, forbidden field, ARN as secret name, empty or non-IPv4 addresses, build configuration refused) | halt on refusal; residue is the staging directory, deletable |
+| S1 | Compiled configuration | S0; a clean checkout at the release commit; for the build entry, either Route A attributed digests or the Route B observation set (explicitly empty) — never a fixture set | the owner, workstation; no AWS permission | `python scripts/production_compiled_configuration.py --entry <entry> --inputs <owner path> --generated-at <ISO> --output docker/production/build/<entry>` — **needs**: release commit checked out, the owner inputs files | writes the git-ignored staging directory only; no network | positive: `configuration_digest=<64 hex>` printed, `generation-record.json` names the commit and tree; negative: `compiled configuration refused: <reason>` (dirty tree, forbidden field, ARN as secret name, empty or non-IPv4 addresses, build configuration refused) | halt on refusal; residue is the staging directory, deletable |
 | S2 | Context, build, local verification | S1; image-gate authorization; `BASE_IMAGE_DIGEST` resolved | the owner, workstation Docker; no AWS permission | `production-image-build.md` steps 3–6 (context preparer, `docker build`, the task-shaped container checks) — **needs**: base digest, build arguments read from `context-manifest.json` | local images only; no push; the local verification's `--network none` shape | positive: the step-6 checks (`exit 4` with no credentials, `exit 2` on an extra argument, `exit 3` on an absent or other-actor configuration, `exit 6` with `/work` unwritable, configuration bytes hash to the digest); negative: any other exit or a traceback | halt on any mismatch; residue: local images and contexts |
 | S3 | Publish and record the digest | S2; image-publication authorization | an owner profile with `ecr:GetAuthorizationToken`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage`, `ecr:BatchCheckLayerAvailability` on the one research repository — **the foundation's existing principals grant only pulls**; which profile pushes is an owner decision | `docker login` via `aws ecr get-login-password` (the token is never printed), `docker tag`, `docker push`; then `docker inspect --format '{{index .RepoDigests 0}}'` — **needs**: the repository URI (a Terraform output) | one image manifest and its layers per actor in the research repository; the untagged-image lifecycle rule applies to superseded pushes | positive: a `sha256:` registry digest per actor recorded beside the generation record; negative: a push refused, or a digest that is a local image id | halt on refusal; residue: pushed layers (deletable by the owner; not part of the licensed store) |
 | S4 | Stage a — plan review and apply | S3; §4.21 authorization for the apply **and** separately for recurring spend (KMS key; endpoints only if toggled); tfvars complete for stage a | the `kalpamani-foundation` profile (the Terraform-apply principal); the §4.24 identity gate | `scripts/aws_foundation_verify.py` identity gate; `terraform plan -out=<saved plan>` reviewed in full; `terraform apply <saved plan>`; independent post-apply verification — **needs**: every §2.4 value | creates: 8 policies, 2 task roles, KMS key + alias, 2 binding parameters, build subnet + route table, endpoint SGs, S3 gateway endpoint, task SGs, 2 task definitions, 4 permission sets + attachments; changes: the licensed **bucket policy** (three Deny statements) and the **public route table** (S3 gateway association); no assignment | positive: plan shows exactly the stage-a resource set and `0 to destroy`; the account precondition passes; post-apply verification reads each object; negative: the precondition fails, KMS's lockout check refuses the key policy (administrator binding wrong), any destroy | halt before apply on any unexpected plan line; the saved plan is the only thing applied; residue after a failed apply is whatever Terraform recorded — resolved by a further governed apply, never by hand |
@@ -283,8 +359,8 @@ missing inputs; nothing below invents an identifier, a budget, a permission or a
 | S9 | R-1 / R-2 | S6, S7; the §3 follow-up merged, built, published and registered; runtime-verification authorization | the actor's launcher set (`RunTask` on the verification revision), the actor's human set (input), the task role | **BLOCKED — no verification-only path exists** (§3); once it does: the launch tool (which also does not exist — §7) launches the verification revision with a real input; positive cell = a matching release; negative cells = no release, a mismatched release, and (build) the origin probe | one task per cell; two parameter reads (binding, input) then ≤ 60 barrier reads of the release; 1 `GetCallerIdentity`; **zero** S3, secret and provider operations by construction | positive: `VERIFIED_BOOTSTRAP` with a receipt whose `binding_digest` matches the launch record; negative: `REFUSED_NO_RELEASE` at the ceiling, `REFUSED_RELEASE_MISMATCH`, the build probe timing out or refused | halt on any data-plane count above zero; cleanup: release and input `DeleteParameter`; residue: the run identity used by the verification input is **spent** only if a reservation was written — a verify entry writes none |
 | S9a | `/work` mount under uid 10001 | S9 | the same | inside the verification task, the working directory is created under `/work` after the credential-environment check (`REFUSED_DEPENDENCY` if not) | none | positive: the verify entry passes the working-directory step (not `exit 6`); negative: `REFUSED_DEPENDENCY` — Fargate did not give uid 10001 a writable `/work` (§5) | halt: a task-definition change (mount options `uid`/`gid`/`mode`, which the API documents as valid values) is a declaration change under its own apply |
 | S10a | First bounded acquisition | S9 verified; ADR-0035 §5.2 I-8…I-12 supplied; one written authorization for one run | acquisition human set (input), acquisition launcher set (launch, release), acquisition task role | the launch tool — **missing implementation** (§7) | 1 run reservation + 3 writes per request + 1 locator (`1 + 3R + 1` conditional `PutObject`, R ≤ 96); 1 `GetSecretValue`; R provider requests, zero retries, 1,800 s deadline; a spent identity | positive: `COMPLETED` receipt with observed counts equal to the plan; negative: any halt outcome — `REFUSED_RESERVATION`, `REFUSED_CREDENTIAL`, `ACQUISITION_HALTED`, `LOCATOR_*` | halt: no retry under the same identity (spent); cleanup: input and release parameters; residue: Bronze objects (deletable only under the runbook) |
-| S10b | First build configuration | S10a `COMPLETED` | the owner | observe the accepted schema digests from the first real deliveries under the private boundary; generate the build configuration → S1–S6 again for the build image (a new build image, digest and revision) | a second image cycle | — | — |
-| S10c | First bounded build | S10b; one written authorization for one build | build human set, build launcher set, build task role | the launch tool — **missing implementation** | 1 locator read + exact reads of what it names; Silver, Gold and one manifest **last**; 3,600 s deadline | positive: `COMPLETED` with a manifest; negative: `REFUSED_INPUTS`/`REFUSED_NORMALIZATION`/… with zero writes | halt on any refusal; residue: LICENSED Silver/Gold/manifest objects |
+| S10b | Schema digests (Route B only) | S10a `COMPLETED`; the Route B ADR accepted and implemented; one written authorization for one observation build | build human set (input), build launcher set, build task role | the launch tool — **missing implementation** (§7) — launches the **observation** build revision with a real build input | 1 locator read + exact reads of the objects it names; **zero writes** (the empty accepted set refuses before any Silver object); 3,600 s deadline | positive: `REFUSED_NORMALIZATION` with a receipt carrying one 64-hex digest set per dataset and zero data-plane writes; negative: `REFUSED_INPUTS` (nothing read past the locator), or any write count above zero (a defect) | halt on any write; cleanup: input and release parameters; residue: none in the store. Then: generate the build configuration from the reported digests → S1–S3 for the build image only → a **stage-b-preserving** apply (§4.6) |
+| S10c | First bounded build | a Silver-producing build image registered at stage b — Route A: compiled before S10a; Route B: after S10b — and one written authorization for one build | build human set, build launcher set, build task role | the launch tool — **missing implementation** | 1 locator read + exact reads of what it names; Silver, Gold and one manifest **last**; 3,600 s deadline | positive: `COMPLETED` with a manifest; negative: `REFUSED_INPUTS`/`REFUSED_NORMALIZATION`/… with zero writes | halt on any refusal; residue: LICENSED Silver/Gold/manifest objects |
 
 ### 4.4 Effects the owner accepts in writing before stage a
 
@@ -313,6 +389,38 @@ purpose** and deleted under the runbook afterwards (a repository-owned synthetic
 vendor row), or they are exercised after S10a against real objects with the same counts. Which of the
 two is chosen is an owner decision recorded with the R-5 authorization; the cells and their expected
 refusals are unchanged either way.
+
+### 4.6 Preserving stage b — rotation, re-verification, and what invalidates evidence
+
+**The declaration.** The four account assignments exist only while `production_stage == "b"`
+(`production_principals.tf`, `count = local.production_count_b`), and `"b"` requires
+`production_r3_verification_digest` (`production_variables.tf`). An apply at `"a"` after the assignments
+exist plans **four destroys** and removes every generated Identity Center role with them; an apply at
+`"none"` plans the destruction of the whole production set.
+
+**The rule, for every apply after S6.** `production_stage = "b"` and the recorded R-3 digest stay in
+`terraform.tfvars`; a rotation changes `production_image_digests` (and, for an origin-address change,
+`production_provider_origin_cidrs`) and nothing else; the reviewed plan for a rotation shows the new
+task-definition revision(s) and the corresponding launcher policy update(s) and **no
+`aws_ssoadmin_account_assignment` change**. **Assignment removal is a separate governed decision**,
+planned and reviewed as such, and is never an incidental step of an image update. Initial establishment
+is `a` → R-3 evidence → `b`, once.
+
+| Change | Renews or invalidates | Basis |
+|---|---|---|
+| a new image digest (any actor) | a new task-definition revision and that actor's launcher policy; the release binds the new digest and revision per launch; **R-3 unaffected** | ADR-0044 §2; `production_policies.tf` references the task-definition resource |
+| a new compiled configuration (secret name, origin set, build configuration) | the same as above — it is an image rebuild | ADR-0044 §2 |
+| a change to the licensed bucket-policy statements (`storage.tf`) | **invalidates R-3**; a new R-3 record and digest are required before any apply that keeps `"b"` | ADR-0036 §2.7, §3 (R-3 is evidence about the bucket policy) |
+| a change to a data-plane, bootstrap or launcher policy | the affected R-4 … R-9 cells are re-exercised for that principal | ADR-0036 §3 |
+| a new verification image (proposed, §3.2) | that image's R-1/R-2 evidence is bound to its own digest and revision and is renewed by re-running the cells | §3.3 |
+| a new **production** image after a verification pass | **unresolved policy** — no accepted text says whether R-1/R-2 must be repeated for every production revision; recorded as G-12, to be decided in the §3.2 ADR | — |
+
+**Launcher-revision implications.** A rotation of one actor's image updates only that actor's launcher
+policy; the other launcher is untouched. Under the proposed §3.2 design each launcher holds two `RunTask`
+resources (production and verification revisions), and a rotation of either image leaves the other
+resource alone. Terraform's replacement ordering for a task definition whose container definition changed
+— a new revision registered and the previous deregistered, with the launcher policy re-pointed in the
+same apply — was **not planned or verified here**, and the declaration is unchanged.
 
 ---
 
@@ -355,40 +463,51 @@ Read on 2026-09-14 from the public AWS documentation; no AWS call was made.
 | G-4 | **No production human-binding materializer** for the two ADR-0036 §2.5 private files (the qualification materializer writes a different contract) | code | S7 |
 | G-5 | **No R-3 tool** executing the nine counted rows, classifying the access-denied context (resource-based explicit deny vs. other) and running the budgeted failure-path cleanup | code (the procedure is accepted) | S5 |
 | G-6 | **No R-4 … R-9 cell runner** (L2 simulation + L3 live cells with counted operations) | code | S8 |
-| G-7 | **Accepted schema digests are observable only from real deliveries**, so the first build image can be compiled only after the first acquisition completes — a sequencing constraint, not a defect, but one no document stated | sequencing | S10b |
+| G-7 | **The first-build cycle** (§4.2 item 6): stage a needs the build digest, the build image needs attributed per-dataset schema digests, production digests are observable only inside the boundary after the first acquisition. Route A (qualification `observed_schema_digests`) is accepted and evidence-backed but unattributed and unproven for the ticker-less form; **Route B (observation build + receipt amendment) is PROPOSED / BLOCKING** — an ADR amending ADR-0044 §4 and the narrowed ADR-0036 §2.9 output rule, plus `silver.normalize`, `build_processing` and `receipts.py` changes | contract + code | S1 (build), S10b |
 | G-8 | **No real exchange calendar** and no calendar source decision (the venv carries no tzdata; `sessions.py` is synthetic) | owner input + code | S10b |
 | G-9 | **Receipt collection**: deferred by decision (§6); the ledger row is hand-completed until then | contract (deferred) | S10 ledger completion |
 | G-10 | **Fargate `tmpfs` documentation conflict** (§5) — resolved only by S4's registration and S9a's mount check; a fallback declaration (`uid`/`gid`/`mode` options, or a bind mount) is available and not made | evidence | S4, S9a |
 | G-11 | **ECR push permissions**: no principal in the foundation or production design holds image-push actions; which owner profile publishes is undecided | owner decision | S3 |
+| G-12 | **Re-verification policy for production revisions**: no accepted text states whether R-1/R-2 must be repeated per new production image; the §3.2 ADR must decide it | contract | every rotation after S9 |
+| G-13 | **Route A attribution evidence**: the register documents a complete column list for `actions` only (PSR-SHD-112) and no delivered order for any table; attributing `stocks` and `tickers` needs the vendor pages re-read (public documentation, a later authorized lookup) and still proves nothing about the ticker-less form until the first build | evidence | S1 (build) |
 
 ---
 
 ## 8. The single next bounded cycle
 
-**Scope: close G-1 and G-2 together — the verification-only path and the launch tool — as one
-offline, synthetic-only implementation cycle with its ADR, so that S9 has both a task that stops at
-the barrier and a tool that can launch it.** Concretely:
+**Scope: one offline, synthetic-only implementation cycle with one ADR, making the verification
+path coherent end to end — G-1, G-2, the Route B receipt amendment (G-7) and the re-verification
+policy (G-12) — so that S9 has a task that stops at the barrier, a tool that can launch it, and S10b a
+way to observe the schema digests without a placeholder.** Concretely:
 
-1. an ADR (proposed, no authority until merged) amending ADR-0043 §2 to four closed entries, ADR-0036
-   §2.9's launcher `RunTask` resource set (one production and one verification revision per actor) and
-   §3's R-1/R-2 cells with the exact closed exit code;
+1. **an ADR** (proposed; no authority until merged) amending ADR-0043 §2 to four closed entries,
+   ADR-0036 §2.9's launcher `RunTask` resource set (one production and one verification revision per
+   actor), §3's R-1/R-2 cells with the exact closed exit code and the probe's own accounting
+   (`probe_attempts`, three classified outcomes), ADR-0044 §4's receipt field set (`observed_schema_digests`
+   per dataset on build refusals, and the probe fields on verify receipts) and the narrowed ADR-0036 §2.9
+   output rule, and deciding G-12;
 2. `TaskEntry` + `TaskOutcome.VERIFIED_BOOTSTRAP` (non-zero), `run_acquisition_verify_entry` /
-   `run_build_verify_entry` composing `run_task_bootstrap` and nothing after `RELEASED`, factories
-   without a secrets client or transport, the build-side origin probe as a closed member, the receipt
-   line unchanged in shape; the Dockerfile's two verify targets and entry executables; the static
-   guard extended;
-3. `scripts/production_launch.py`: the owner-side launch tool — human bootstrap, input materialization
+   `run_build_verify_entry` composing `run_task_bootstrap` and nothing after `RELEASED`, factories without
+   a secrets client, transport or (build) S3 client, the build-side origin probe as one bounded connection
+   attempt with a closed outcome, the receipt line extended exactly as the ADR states; the Dockerfile's two
+   verify targets and entry executables; the static guard extended;
+3. `silver.normalize` collecting every page's observed digest before refusing, `build_processing`
+   surfacing the per-dataset set on `REFUSED_NORMALIZATION`, `receipts.py` validating it — the observation
+   build needs no other code;
+4. `scripts/production_launch.py`: the owner-side launch tool — human bootstrap, input materialization
    from an owner ledger file and a slice document (`plan_digest_for`, `spent_identities_block`,
-   `ledger_digest`), `CompiledLaunch` compiled from a Terraform-output record, `launch_authorized_run`
-   on real clients under the two profiles with pinned `AWS_PROFILE` and the §4.24 gate, the launch
-   record written beside the input, and the cleanup — refusing by default, one explicit flag per
-   authorized run, no output that names an identifier;
-4. the Terraform declaration of the two verification families and the launcher resource additions,
-   validated in an external copy only;
-5. tests for each, against fakes; the docs audit and status synchronization.
+   `ledger_digest`), `CompiledLaunch` compiled from a Terraform-output record, `launch_authorized_run` on
+   real clients under the two profiles with pinned `AWS_PROFILE` and the §4.24 gate, the launch record
+   written beside the input, the configuration-equivalence check of §3.3, and the cleanup — refusing by
+   default, one explicit flag per authorized run, no output that names an identifier;
+5. the Terraform declaration of the two verification families and the launcher resource additions,
+   validated in an external copy only, with a mutation test that a rotation plan at stage b touches no
+   assignment;
+6. tests for each, against fakes; the docs audit and status synchronization.
 
-**Can proceed independently alongside it** (no dependency on G-1/G-2): G-4 (the production
-human-binding materializer), G-5 (the R-3 tool — it needs only the foundation profile and stage a),
-the owner's S0 inputs (secret creation outside the repository, origin address resolution, the release
-commit choice, I-8/I-9), and G-8's calendar-source decision. **Not before the cycle above:** any AWS,
-Terraform, image, registry, launch or provider operation.
+**Can proceed independently alongside it** (no dependency on the above): G-4 (the production
+human-binding materializer), G-5 (the R-3 tool — it needs only the foundation profile and stage a), G-13
+(the owner's public-documentation re-read for Route A attribution), the owner's S0 inputs (secret creation
+outside the repository, origin address resolution, the release commit choice, I-8/I-9), and G-8's
+calendar-source decision. **Not before the cycle above:** any AWS, Terraform, image, registry, launch or
+provider operation.

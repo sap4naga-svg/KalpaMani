@@ -43,6 +43,7 @@ EXPECTED_FILES: Final[frozenset[str]] = frozenset(
         "README.md",
         "acquire-inputs.synthetic.json",
         "build-inputs.synthetic.json",
+        "build-inputs.observation.synthetic.json",
         "compiled-configuration.acquire.synthetic.json",
         "compiled-configuration.build.synthetic.json",
         "acquisition-input.v2.synthetic.json",
@@ -148,3 +149,19 @@ def test_the_build_input_example_is_admitted() -> None:
     admitted = parse_build_input(document, now=NOW)
     assert admitted.build_identity == document["build_identity"]
     assert all(row["run_identity"].startswith("synthetic-") for row in document["runs"])
+
+
+def test_the_observation_example_admits_nothing_and_differs_only_in_its_accepted_set() -> None:
+    """Route B's observation configuration (proposed): an explicitly empty accepted set is a valid
+    configuration that admits no header -- never a relaxation, never a placeholder digest."""
+    observation = _load("build-inputs.observation.synthetic.json")["build_configuration"]
+    producing = _load("build-inputs.synthetic.json")["build_configuration"]
+    parsed = parse_build_configuration(observation)
+    assert set(parsed.schemas.digests) == {"actions", "stocks", "tickers"}
+    assert all(not digests for digests in parsed.schemas.digests.values())
+    for dataset, digests in producing["accepted_schemas"]["digests"].items():
+        for digest in digests:
+            assert not parsed.schemas.admits(dataset, digest)
+    differing = {key for key in producing if producing[key] != observation.get(key)}
+    assert differing == {"accepted_schemas"}
+    assert set(observation) == set(producing)

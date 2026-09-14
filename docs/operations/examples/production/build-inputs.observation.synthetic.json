@@ -1,0 +1,109 @@
+{
+  "build_configuration": {
+    "accepted_schemas": {
+      "digests": {
+        "actions": [],
+        "stocks": [],
+        "tickers": []
+      },
+      "version": "observation-empty-v1"
+    },
+    "action_selection_version": "sharadar-action-selection-v1",
+    "adjustment_convention": "FORWARD_BASE_NORMALIZED",
+    "adjustment_derivation_version": "sharadar-adjusted-bars-v2",
+    "adjustment_policy": "SPLIT_ONLY",
+    "as_of": "2026-09-16T00:00:00+00:00",
+    "calendar": {
+      "sessions": [
+        {
+          "open_at": "2019-03-04T13:30:00+00:00",
+          "session_date": "2019-03-04"
+        },
+        {
+          "open_at": "2019-03-05T13:30:00+00:00",
+          "session_date": "2019-03-05"
+        },
+        {
+          "open_at": "2026-08-24T13:30:00+00:00",
+          "session_date": "2026-08-24"
+        },
+        {
+          "open_at": "2026-08-25T13:30:00+00:00",
+          "session_date": "2026-08-25"
+        },
+        {
+          "open_at": "2026-08-26T13:30:00+00:00",
+          "session_date": "2026-08-26"
+        },
+        {
+          "open_at": "2026-08-27T13:30:00+00:00",
+          "session_date": "2026-08-27"
+        },
+        {
+          "open_at": "2026-08-28T13:30:00+00:00",
+          "session_date": "2026-08-28"
+        },
+        {
+          "open_at": "2026-08-31T13:30:00+00:00",
+          "session_date": "2026-08-31"
+        },
+        {
+          "open_at": "2026-09-01T13:30:00+00:00",
+          "session_date": "2026-09-01"
+        },
+        {
+          "open_at": "2026-09-02T13:30:00+00:00",
+          "session_date": "2026-09-02"
+        },
+        {
+          "open_at": "2026-09-03T13:30:00+00:00",
+          "session_date": "2026-09-03"
+        },
+        {
+          "open_at": "2026-09-04T13:30:00+00:00",
+          "session_date": "2026-09-04"
+        },
+        {
+          "open_at": "2026-09-14T13:30:00+00:00",
+          "session_date": "2026-09-14"
+        },
+        {
+          "open_at": "2026-09-15T13:30:00+00:00",
+          "session_date": "2026-09-15"
+        }
+      ],
+      "version": "synthetic-calendar-v1"
+    },
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "decision_sessions": [
+      "2026-09-14",
+      "2026-09-15"
+    ],
+    "evidence": {
+      "items": [],
+      "version": "synthetic-evidence-v0"
+    },
+    "jump_ratio": "2",
+    "reconciliation_tolerance": "0.001",
+    "silver_normalization_version": "sharadar-silver-v2",
+    "source_schema_version": "sharadar-csv-production-v1",
+    "universe_rule": {
+      "addv_floor": "1000000",
+      "addv_window_sessions": 3,
+      "common_stock_categories": [
+        "Domestic Common Stock",
+        "Domestic Common Stock Primary Class",
+        "Domestic Common Stock Secondary Class"
+      ],
+      "decision_margin_seconds": 1800,
+      "eligible_exchanges": [
+        "NASDAQ",
+        "NYSE",
+        "NYSEMKT"
+      ],
+      "history_sessions": 3,
+      "price_floor": "5",
+      "universe_rule_version": "breakout-long-v1"
+    }
+  }
+}

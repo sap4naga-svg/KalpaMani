@@ -3323,7 +3323,9 @@ preparation record that authorizes nothing — in [`docs/operations/production-r
 with its owner-input checklist [`docs/operations/production-owner-inputs.md`](docs/operations/production-owner-inputs.md);
 that record finds that **no verification-only task path exists** (a released bootstrap continues directly into processing on
 both composed entries, so ADR-0036 R-1/R-2 cannot be run with the accepted images), that **no owner-side launch, input,
-binding, R-3 or cell tool exists**, and that the receipt collector stays deferred.
+binding, R-3 or cell tool exists**, that the receipt collector stays deferred, and (second revision) that the first
+build's schema digests close a second dependency cycle only through an accepted-but-unattributed qualification route or a
+**proposed, blocking** observation-build receipt amendment, with every later apply preserving stage b.
 
 ```text
 Run B:                                            COMPLETED / 12 SEPTEMBER 2026 (UTC)
