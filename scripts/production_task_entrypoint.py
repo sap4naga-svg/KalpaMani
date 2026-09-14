@@ -340,7 +340,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ``0`` means the selected actor's processing completed with every operation
     confirmed; non-zero names what refused or stopped short. **Neither is a data
-    verdict.** This function has never been run.
+    verdict.** This function has run only inside local, network-disabled verification
+    containers built with synthetic configurations (docs/operations/production-image-build.md);
+    it has never run as an ECS task, and never against AWS.
     """
     arguments = list(sys.argv[1:] if argv is None else argv)
 

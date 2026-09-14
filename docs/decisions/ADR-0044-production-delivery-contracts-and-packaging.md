@@ -37,7 +37,8 @@ now takes the archive with end-of-line conversion disabled and holds every extra
 tree's blob; the Dockerfile runs as the task definitions' numeric user, creates the configuration
 directory traversable, takes the build backend from the pinned base, and refuses with a closed reason;
 the entrypoint creates its working directory under `/work` after the credential-environment check. See
-`docs/operations/production-image-build.md`, *Local verification*. **No image was published, no digest
+`docs/operations/production-image-build.md`, *Local verification*; those corrections merged as **PR #102**
+(2026-09-14T10:25:40Z, merge commit `02998fa9bde853d4262269c3b9032bd7fc171461`). **No image was published, no digest
 was registered, no AWS, STS, provider or registry request was made, and nothing ran as a task**: local
 success is packaging evidence, not runtime verification.
 

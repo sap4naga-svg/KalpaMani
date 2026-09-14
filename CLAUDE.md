@@ -3477,9 +3477,17 @@ offline code** — see *The production runtime foundations* below — the **acqu
 `main`** (PR #96), the **research-build processing path is on `main`** (PR #97), the **production provider adapter is on `main`** (PR #98,
 ADR-0041 accepted), the **build-side pagination gate is on `main`** (PR #99, ADR-0042 accepted), the **two offline task
 entrypoints composing those paths are on `main`** (PR #100, ADR-0043 accepted), the **delivery contracts and packaging
-are on `main`** (PR #101, ADR-0044 accepted), **no production image exists** — two local verification images were built
-once from prepared contexts with synthetic configurations and never published — and **no entrypoint has ever run as a
-task** (the packaged entrypoints have run only inside local, network-disabled verification containers).
+are on `main`** (PR #101, ADR-0044 accepted), the **locally verified packaging corrections are on `main`** (PR #102, merged
+2026-09-14T10:25:40Z, merge commit `02998fa9bde853d4262269c3b9032bd7fc171461`, ordered parents `98addd070857143b2bd79ef3e2bf6c06539555ba` then
+`82d0a3b24e29aa309ad501fd8b7404db1e4c3644`, merge tree identical to the reviewed head tree), **no production image exists** — two local
+verification images were built once from prepared contexts with synthetic configurations and never published — and **no
+entrypoint has ever run as a task** (the packaged entrypoints have run only inside local, network-disabled verification
+containers). What remains before a production image, and the cloud-verification sequence after it, is recorded — as a
+preparation record that authorizes nothing — in [`docs/operations/production-readiness.md`](docs/operations/production-readiness.md)
+with its owner-input checklist [`docs/operations/production-owner-inputs.md`](docs/operations/production-owner-inputs.md);
+that record finds that **no verification-only task path exists** (a released bootstrap continues directly into processing on
+both composed entries, so ADR-0036 R-1/R-2 cannot be run with the accepted images), that **no owner-side launch, input,
+binding, R-3 or cell tool exists**, and that the receipt collector stays deferred.
 
 ```text
 Run B:                                            COMPLETED / 12 SEPTEMBER 2026 (UTC)
@@ -3528,7 +3536,9 @@ ADR-0041 (production provider request form):     ACCEPTED / IN FORCE — PR #98 
 ADR-0042 (build-side pagination admission):      ACCEPTED / IN FORCE — PR #99 merged 2026-09-12T18:15:35Z
 ADR-0043 (production task entrypoint composition): ACCEPTED / IN FORCE — PR #100 merged 2026-09-12T19:55:44Z; its §3/§4 proposals resolved by ADR-0044, accepted on the PR #101 merge
 ADR-0044 (delivery contracts and packaging):       ACCEPTED / IN FORCE — PR #101 merged 2026-09-14T01:09:53Z; receipt collector, logs:GetLogEvents IAM delta and deployment DEFERRED
-local image verification (after PR #101):         TWO LOCAL ACTOR IMAGES BUILT ONCE FROM PREPARED CONTEXTS WITH SYNTHETIC CONFIGURATIONS AND VERIFIED NETWORK-DISABLED — NOT PUBLISHED, NOT REGISTERED, NOT RUN ON AWS
+local image verification (after PR #101):         TWO LOCAL ACTOR IMAGES BUILT ONCE FROM PREPARED CONTEXTS WITH SYNTHETIC CONFIGURATIONS AND VERIFIED NETWORK-DISABLED — NOT PUBLISHED, NOT REGISTERED, NOT RUN ON AWS; ITS PACKAGING CORRECTIONS MERGED AS PR #102 (2026-09-14T10:25:40Z)
+production readiness record (after PR #102):       PREPARED — docs/operations/production-readiness.md; every production owner input MISSING; verification-only task path ABSENT (R-1/R-2 BLOCKED); owner-side launch/input/binding/R-3/cell tools ABSENT; receipt collector DEFERRED; nothing run
+production image / registry digest / task-definition revision:   NONE — stage none; R-3 NOT VERIFIED; stage a and b NOT APPLIED
 production ingestion/backfill/update:             NOT AUTHORIZED / NOT RUN
 a Run A or Run B retry, a third acquisition:      NOT AUTHORIZED / NOT RUN — the provider budget is spent
 backtesting:                                      NOT STARTED
