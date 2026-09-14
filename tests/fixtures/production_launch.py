@@ -43,6 +43,7 @@ from kalpamani.data.production.sharadar.launch_records import (
     LEDGER_CONTRACT_ID,
     RECORD_SCHEMA_VERSION,
     LaunchKind,
+    LaunchSpecification,
     build_specification,
     parse_launch_inputs,
     parse_owner_ledger,
@@ -173,7 +174,7 @@ def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> di
     return document
 
 
-def specification_digest_for(
+def specification_for(
     *,
     actor: ProductionActor,
     kind: str,
@@ -182,8 +183,8 @@ def specification_digest_for(
     inputs: dict[str, Any] | None = None,
     slice_doc: dict[str, Any] | None = None,
     run_identities: list[str] | None = None,
-) -> str:
-    """The specification digest the fixtures' records produce for one launch."""
+) -> LaunchSpecification:
+    """The specification the fixtures' records produce for one launch."""
     from kalpamani.data.contracts.canonical import canonical_bytes
 
     rows = [ledger_row(RUN_ID)] if actor is BLD else []
@@ -205,7 +206,12 @@ def specification_digest_for(
         run_identities=([RUN_ID] if run_identities is None else run_identities)
         if actor is BLD
         else None,
-    ).digest
+    )
+
+
+def specification_digest_for(**fields: Any) -> str:
+    """The specification digest the fixtures' records produce for one launch."""
+    return specification_for(**fields).digest
 
 
 def authorization_document(

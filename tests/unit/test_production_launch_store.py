@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from fixtures.production_launch import ACQ, ledger_document, ledger_row
-from fixtures.production_runtime import NOW, OTHER_RUN_ID, RUN_ID, encode
+from fixtures.production_launch import ACQ, ledger_document, ledger_row, specification_for
+from fixtures.production_runtime import NOW, OTHER_RUN_ID, RUN_ID, encode, slice_document
 from kalpamani.data.production.sharadar import launch_records as lr
 from kalpamani.data.production.sharadar import launch_store as ls
 
@@ -33,16 +33,28 @@ def _store(tmp_path: Path, rows: list[dict[str, Any]] | None = None) -> ls.Launc
     return ls.LaunchStore(ledger_path=ledger, records_dir=tmp_path / "records")
 
 
-def _reservation(identity: str = RUN_ID, **overrides: Any) -> ls.Reservation:
+def _reservation(
+    identity: str = RUN_ID, *, window: str = "2025-01-01/2025-12-31", **overrides: Any
+) -> ls.Reservation:
+    specification = specification_for(
+        actor=ACQ,
+        kind="production",
+        identity=identity,
+        slice_doc=slice_document(windows={"actions": window, "tickers": "SNAPSHOT"}),
+    )
     fields_: dict[str, Any] = {
         "identity": identity,
         "actor": ACQ,
         "kind": lr.LaunchKind.PRODUCTION,
-        "specification_digest": "ab" * 32,
+        "specification": specification,
         "reserved_at": NOW,
     }
     fields_.update(overrides)
     return ls.Reservation(**fields_)
+
+
+DIGEST = _reservation().specification_digest
+OTHER_DIGEST = _reservation(window="2024-01-01/2024-12-31").specification_digest
 
 
 class TestReservations:
@@ -52,11 +64,14 @@ class TestReservations:
         path = store.reservation_path(RUN_ID)
         assert path.is_file()
         with pytest.raises(ls.StoreError, match="RESERVATION_EXISTS"):
-            store.reserve(_reservation(specification_digest="cd" * 32))
+            store.reserve(_reservation(window="2024-01-01/2024-12-31"))
         # Untouched by the refused second attempt.
-        assert json.loads(path.read_bytes())["specification_digest"] == "ab" * 32
+        assert json.loads(path.read_bytes())["specification_digest"] == DIGEST != OTHER_DIGEST
         found = store.reservation(RUN_ID)
-        assert found is not None and found.specification_digest == "ab" * 32
+        assert found is not None and found.specification_digest == DIGEST
+        assert found.specification.workload["slice"]["windows"]["actions"] == (
+            "2025-01-01/2025-12-31"
+        )
         assert store.reservation(OTHER_RUN_ID) is None
         # Far later, with a ledger that never recorded it, it is still there and still
         # the one thing that names the identity as consumed.
@@ -108,6 +123,18 @@ class TestReservations:
             lambda d: d.__setitem__("contract_id", "kalpamani-launch-reservation/v2"),
             lambda d: d.__setitem__("extra", 1),
             lambda d: d.pop("reserved_at"),
+            # The first revision's shape: no specification carried.
+            lambda d: d.pop("specification"),
+            # A specification whose digest is not the one named.
+            lambda d: d.__setitem__("specification_digest", OTHER_DIGEST),
+            # A specification for another identity, or another kind, than the reservation.
+            lambda d: d["specification"].__setitem__("identity", OTHER_RUN_ID),
+            lambda d: d["specification"].__setitem__("kind", "verification"),
+            # A specification that does not parse.
+            lambda d: d["specification"]["placement"].__setitem__("subnet_id", "subnet-x"),
+            lambda d: d["specification"]["placement"].__setitem__("security_group_ids", []),
+            lambda d: d["specification"]["workload"].__setitem__("plan_digest", "00" * 32),
+            lambda d: d["specification"].__setitem__("workload", {"runs": []}),
         ],
     )
     def test_reservation_documents_are_closed(self, mutate: Any) -> None:
@@ -115,6 +142,90 @@ class TestReservations:
         mutate(document)
         with pytest.raises(ls.StoreError, match="RESERVATION_MALFORMED"):
             ls.parse_reservation(encode(document))
+
+    def test_a_reservation_names_its_own_specification(self) -> None:
+        other = specification_for(actor=ACQ, kind="production", identity=OTHER_RUN_ID)
+        with pytest.raises(ValueError, match="identity, actor and kind"):
+            ls.Reservation(
+                identity=RUN_ID,
+                actor=ACQ,
+                kind=lr.LaunchKind.PRODUCTION,
+                specification=other,
+                reserved_at=NOW,
+            )
+
+
+class TestReservationLocation:
+    """PR #104 review, second cycle, finding 1: the location never depends on the records dir."""
+
+    def test_reservations_live_beside_the_ledger_and_not_under_the_records(
+        self, tmp_path: Path
+    ) -> None:
+        store = _store(tmp_path)
+        store.reserve(_reservation())
+        assert store.reservations_path == tmp_path / "ledger.json.reservations"
+        assert store.reservation_path(RUN_ID).parent == store.reservations_path
+        assert not (tmp_path / "records").exists()
+        # Another records directory over the same ledger: the same reservation, the same
+        # lock, the same pending recovery.
+        other = ls.LaunchStore(ledger_path=tmp_path / "ledger.json", records_dir=tmp_path / "b")
+        assert other.reservations_path == store.reservations_path
+        assert other.lock_path == store.lock_path == tmp_path / "ledger.json.lock"
+        found = other.reservation(RUN_ID)
+        assert found is not None and found.specification_digest == DIGEST
+        ledger, _ = other.read_ledger()
+        assert other.unreconciled(ledger) == [RUN_ID]
+        with pytest.raises(ls.StoreError, match="RESERVATION_EXISTS"):
+            other.reserve(_reservation())
+        # And the records directory received nothing but what was written to it.
+        other.write_record("launch-evidence", {"n": 1}, at=NOW)
+        assert [p.name for p in (tmp_path / "b").iterdir()] != []
+        assert not (tmp_path / "b" / ls.LEGACY_RESERVATIONS_DIRECTORY).exists()
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            lambda root: root / "ledger.json",
+            lambda root: root / "records" / ".." / "ledger.json",
+            lambda root: Path(str(root / "ledger.json").upper()),
+            lambda root: Path(str(root / "ledger.json").replace("\\", "/")),
+            lambda root: Path(os.path.relpath(root / "ledger.json")),
+        ],
+    )
+    def test_equivalent_spellings_of_one_ledger_share_one_reservation_store(
+        self, tmp_path: Path, spelling: Any
+    ) -> None:
+        canonical = _store(tmp_path)
+        canonical.reserve(_reservation())
+        spelled = ls.LaunchStore(ledger_path=spelling(tmp_path), records_dir=tmp_path / "x")
+        assert spelled.ledger_path == canonical.ledger_path
+        assert spelled.reservations_path == canonical.reservations_path
+        assert spelled.lock_path == canonical.lock_path
+        assert spelled.reservation(RUN_ID) is not None
+        with pytest.raises(ls.StoreError, match="RESERVATION_EXISTS"):
+            spelled.reserve(_reservation())
+        with canonical.locked(now=lambda: NOW), pytest.raises(ls.StoreError, match="LOCKED"):
+            with spelled.locked(now=lambda: NOW):
+                pass
+
+    def test_first_revision_reservations_under_the_records_directory_refuse(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy state is refused, never read, moved or deleted (synthetic directories)."""
+        store = _store(tmp_path)
+        store.refuse_legacy_state()  # nothing there: fine
+        legacy = tmp_path / "records" / ls.LEGACY_RESERVATIONS_DIRECTORY
+        legacy.mkdir(parents=True)
+        store.refuse_legacy_state()  # an empty directory hides nothing
+        stale = legacy / f"{RUN_ID}.json"
+        stale.write_bytes(b'{"first": "revision"}')
+        with pytest.raises(ls.StoreError, match="LEGACY_RESERVATIONS_PRESENT"):
+            store.refuse_legacy_state()
+        assert stale.read_bytes() == b'{"first": "revision"}' and legacy.is_dir()
+        assert store.reservation(RUN_ID) is None  # never read as a reservation
+        # A records directory the owner did not name is not looked at.
+        other = ls.LaunchStore(ledger_path=tmp_path / "ledger.json", records_dir=tmp_path / "b")
+        other.refuse_legacy_state()
 
 
 class TestLedgerLock:

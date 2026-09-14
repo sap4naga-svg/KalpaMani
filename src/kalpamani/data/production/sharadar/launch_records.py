@@ -178,6 +178,11 @@ def decode_record(raw: object, *, contract_id: str, fields: frozenset[str]) -> d
         document = decode_document(raw, max_bytes=MAX_RECORD_BYTES)
     except Exception:
         raise _refuse(LaunchRecordDefect.DOCUMENT_MALFORMED) from None
+    return _closed_record(document, contract_id=contract_id, fields=fields)
+
+
+def _closed_record(document: object, *, contract_id: str, fields: frozenset[str]) -> dict[str, Any]:
+    """An already-decoded object held to a closed shape and the named contract."""
     if type(document) is not dict or not all(type(k) is str for k in document):
         raise _refuse(LaunchRecordDefect.DOCUMENT_MALFORMED)
     names = set(document)
@@ -1029,12 +1034,211 @@ class LaunchSpecification:
         """The SHA-256 of the canonical document -- the value an authorization names."""
         return sha256_hex(canonical_bytes(self.document()))
 
+    @property
+    def compiled(self) -> CompiledLaunch:
+        """The compiled launch this specification names: its placement over its target.
+
+        The same object :func:`compile_launch` produced at preparation, rebuilt from the
+        specification alone -- which is what lets a later mode (recovery, the verdict)
+        take the placement from the reservation's specification rather than from a
+        freshly supplied launch-inputs file.
+        """
+        return CompiledLaunch(
+            actor=self.actor,
+            cluster_arn=self.placement["cluster_arn"],
+            task_definition_arn=self.target.task_definition_arn,
+            image_digest=self.target.image_digest,
+            configuration_digest=self.target.configuration_digest,
+            task_role_arn=self.placement["task_role_arn"],
+            execution_role_arn=self.placement["execution_role_arn"],
+            subnet_id=self.placement["subnet_id"],
+            security_group_ids=tuple(self.placement["security_group_ids"]),
+            assign_public_ip=self.placement["assign_public_ip"],
+            platform_version=self.placement["platform_version"],
+            binding_key_arn=self.placement["binding_key_arn"],
+        )
+
     def __repr__(self) -> str:
         """Actor, kind and entry only."""
         return (
             f"LaunchSpecification(actor={self.actor.value!r}, kind={self.kind.value!r}, "
             f"entry={self.entry.value!r})"
         )
+
+
+_SPECIFICATION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "actor",
+        "kind",
+        "identity",
+        "entry",
+        "workload",
+        "target",
+        "placement",
+        "gate_evidence",
+    }
+)
+_PLACEMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "cluster_arn",
+        "subnet_id",
+        "security_group_ids",
+        "assign_public_ip",
+        "task_role_arn",
+        "execution_role_arn",
+        "platform_version",
+        "binding_key_arn",
+    }
+)
+_GATE_EVIDENCE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"r3_verification_digest", "r3_applicable", "generation_record_digest"}
+)
+_WORKLOAD_RUN_FIELDS: Final[frozenset[str]] = frozenset(
+    {"identity", "plan_digest", "outcome", "evidence", "completed_at"}
+)
+
+
+def parse_specification(raw: object) -> LaunchSpecification:
+    """A launch specification document, every block to its grammar, or refuse.
+
+    The workload is re-validated the way :func:`build_specification` built it (the slice
+    through the accepted parser with its plan digest recomputed; the build runs as closed
+    rows), the target through the launch-inputs target parser, the placement by building
+    the :class:`CompiledLaunch` it names, and the gate evidence against the kind. A
+    document that parses is exactly one :func:`build_specification` could have produced,
+    so its digest is the digest an authorization named.
+    """
+    # Embedded in a reservation the document arrives already decoded (the reservation's
+    # own decoding refused duplicate keys); on its own it arrives as bytes.
+    document = (
+        _closed_record(raw, contract_id=SPECIFICATION_CONTRACT_ID, fields=_SPECIFICATION_FIELDS)
+        if type(raw) is dict
+        else decode_record(raw, contract_id=SPECIFICATION_CONTRACT_ID, fields=_SPECIFICATION_FIELDS)
+    )
+    actor_value = exact_str(document["actor"])
+    kind_value = exact_str(document["kind"])
+    entry_value = exact_str(document["entry"])
+    if (
+        actor_value not in {m.value for m in ProductionActor}
+        or kind_value not in {m.value for m in LaunchKind}
+        or entry_value not in {m.value for m in TaskEntry}
+    ):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    actor = ProductionActor(actor_value)
+    kind = LaunchKind(kind_value)
+    entry = TaskEntry(entry_value)
+    if ENTRY_ACTOR[entry] is not actor or (entry in VERIFICATION_ENTRIES) != (
+        kind is LaunchKind.VERIFICATION
+    ):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    identity = _identity(document["identity"])
+    if identity_kind(identity) is not kind:
+        raise _refuse(LaunchRecordDefect.IDENTITY_KIND_MISMATCH)
+    target = _target(document["target"])
+    if target is None:
+        raise _refuse(LaunchRecordDefect.FIELD_MISSING)
+    workload = document["workload"]
+    if type(workload) is not dict:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    if actor is ProductionActor.ACQUISITION:
+        if set(workload) != {"slice", "plan_digest"}:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        try:
+            covered = parse_slice(workload["slice"])
+            expected = plan_digest_for(
+                covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode)
+            )
+        except Exception:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
+        if workload["plan_digest"] != expected or workload["slice"] != covered.canonical():
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        canonical_workload: dict[str, Any] = {"slice": covered.canonical(), "plan_digest": expected}
+    else:
+        runs = workload.get("runs")
+        if set(workload) != {"runs"} or type(runs) is not list or not runs:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        seen: set[str] = set()
+        canonical_runs: list[dict[str, Any]] = []
+        for run in runs:
+            if type(run) is not dict or set(run) != _WORKLOAD_RUN_FIELDS:
+                raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+            run_identity = _identity(run["identity"])
+            plan = hex_digest(run["plan_digest"])
+            outcome = exact_str(run["outcome"])
+            evidence = exact_str(run["evidence"])
+            completed_at = instant(run["completed_at"])
+            if (
+                plan is None
+                or outcome not in LEDGER_OUTCOMES
+                or evidence not in {m.value for m in LedgerEvidence}
+                or completed_at is None
+            ):
+                raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+            if run_identity in seen:
+                raise _refuse(LaunchRecordDefect.IDENTITY_DUPLICATE)
+            seen.add(run_identity)
+            canonical_runs.append(
+                {
+                    "identity": run_identity,
+                    "plan_digest": plan,
+                    "outcome": outcome,
+                    "evidence": evidence,
+                    "completed_at": completed_at.isoformat(),
+                }
+            )
+        canonical_workload = {"runs": canonical_runs}
+    placement = document["placement"]
+    if type(placement) is not dict or set(placement) != _PLACEMENT_FIELDS:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    groups = placement["security_group_ids"]
+    if (
+        type(groups) is not list
+        or any(type(group) is not str for group in groups)
+        or len(set(groups)) != len(groups)
+        or any(
+            type(placement[key]) is not str
+            for key in _PLACEMENT_FIELDS - {"security_group_ids", "assign_public_ip"}
+        )
+        or type(placement["assign_public_ip"]) is not bool
+    ):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    canonical_placement = {key: placement[key] for key in _PLACEMENT_FIELDS}
+    canonical_placement["security_group_ids"] = list(groups)
+    gate = document["gate_evidence"]
+    if type(gate) is not dict or set(gate) != _GATE_EVIDENCE_FIELDS:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    applicable = kind is LaunchKind.PRODUCTION
+    r3 = gate["r3_verification_digest"]
+    if (
+        gate["r3_applicable"] is not applicable
+        or (applicable and hex_digest(r3) is None)
+        or (not applicable and r3 is not None)
+        or gate["generation_record_digest"] != target.generation_record_digest
+    ):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    specification = LaunchSpecification(
+        actor=actor,
+        kind=kind,
+        identity=identity,
+        entry=entry,
+        workload=canonical_workload,
+        target=target,
+        placement=canonical_placement,
+        gate_evidence={
+            "r3_verification_digest": r3,
+            "r3_applicable": applicable,
+            "generation_record_digest": target.generation_record_digest,
+        },
+    )
+    try:
+        compiled = specification.compiled
+    except (TypeError, ValueError):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
+    if compiled.verification != (kind is LaunchKind.VERIFICATION):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    return specification
 
 
 def build_specification(
@@ -1290,6 +1494,8 @@ _LAUNCH_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
         "recorded_at",
         "network_interface_id",
         "subnet_id",
+        "security_group_ids",
+        "specification_digest",
     }
 )
 
@@ -1305,7 +1511,16 @@ class LaunchRecord:
     real), which is why it lives beside the ledger under the owner's private root
     and never in evidence. It is exactly what a receipt is verified against
     (:class:`~kalpamani.data.production.sharadar.receipts.ReceiptExpectation`), plus
-    the slice and plan digest an acquisition row needs.
+    the slice and plan digest an acquisition row needs, plus the **binding to the
+    launch it belongs to**: the digest of the specification the owner authorized
+    (the reservation carries that specification) and the placement the launcher
+    verified -- interface, subnet and the security groups the interface carried.
+
+    **The trust boundary is the owner's private root.** These digests bind the
+    reservation, the record, the ledger row and the receipt to one launch so that a
+    substituted or mislaid artifact is refused; they are not protection against an
+    owner who deliberately rewrites every artifact consistently, and nothing here
+    claims to be.
     """
 
     entry: TaskEntry
@@ -1323,14 +1538,31 @@ class LaunchRecord:
     #: When the tool recorded the launch's terminal (or last observed) state.
     recorded_at: datetime
     #: The placement the launcher verified and the release named; ``None`` when no
-    #: release was written. The R-2 verdict binds the analysis source to this interface.
+    #: release was written. The R-2 verdict binds the analysis source to this interface
+    #: and its components to these groups.
     network_interface_id: str | None
     subnet_id: str | None
+    security_group_ids: tuple[str, ...] | None
+    #: The digest of the specification the authorization named and the reservation holds.
+    specification_digest: str
 
     def __post_init__(self) -> None:
-        """Interface and subnet come together, and the record is not earlier than the launch."""
-        if (self.network_interface_id is None) != (self.subnet_id is None):
-            raise ValueError("the verified interface and subnet are recorded together")
+        """The verified placement comes whole, and the record is not earlier than the launch."""
+        present = {
+            self.network_interface_id is None,
+            self.subnet_id is None,
+            self.security_group_ids is None,
+        }
+        if len(present) != 1:
+            raise ValueError("the verified interface, subnet and groups are recorded together")
+        if self.security_group_ids is not None and (
+            type(self.security_group_ids) is not tuple
+            or not self.security_group_ids
+            or len(set(self.security_group_ids)) != len(self.security_group_ids)
+        ):
+            raise ValueError("the verified security groups are a non-empty tuple")
+        if hex_digest(self.specification_digest) is None:
+            raise ValueError("the specification digest is a hex SHA-256")
         if self.recorded_at < self.launched_at:
             raise ValueError("a launch is recorded no earlier than it was made")
 
@@ -1380,6 +1612,10 @@ class LaunchRecord:
             "recorded_at": self.recorded_at.isoformat(),
             "network_interface_id": self.network_interface_id,
             "subnet_id": self.subnet_id,
+            "security_group_ids": (
+                None if self.security_group_ids is None else list(self.security_group_ids)
+            ),
+            "specification_digest": self.specification_digest,
         }
 
     def __repr__(self) -> str:
@@ -1413,6 +1649,8 @@ def parse_launch_record(raw: object) -> LaunchRecord:
     input_digest_value = hex_digest(document["input_digest"])
     interface = document["network_interface_id"]
     subnet = document["subnet_id"]
+    groups = document["security_group_ids"]
+    specification_digest = hex_digest(document["specification_digest"])
     definition = exact_str(document["task_definition_arn"])
     image = exact_str(document["image_digest"])
     configuration = exact_str(document["configuration_digest"])
@@ -1432,7 +1670,8 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         or CONFIGURATION_DIGEST_RE.fullmatch(configuration) is None
         or commit is None
         or CODE_COMMIT_RE.fullmatch(commit) is None
-        or (interface is None) != (subnet is None)
+        or specification_digest is None
+        or len({interface is None, subnet is None, groups is None}) != 1
         or (
             interface is not None
             and (
@@ -1440,6 +1679,13 @@ def parse_launch_record(raw: object) -> LaunchRecord:
                 or NETWORK_INTERFACE_ID_RE.fullmatch(interface) is None
                 or type(subnet) is not str
                 or SUBNET_ID_RE.fullmatch(subnet) is None
+                or type(groups) is not list
+                or not groups
+                or any(
+                    type(group) is not str or SECURITY_GROUP_ID_RE.fullmatch(group) is None
+                    for group in groups
+                )
+                or len(set(groups)) != len(groups)
             )
         )
     ):
@@ -1476,6 +1722,8 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         recorded_at=recorded_at,
         network_interface_id=interface,
         subnet_id=subnet,
+        security_group_ids=None if groups is None else tuple(groups),
+        specification_digest=specification_digest,
     )
 
 
@@ -1635,6 +1883,7 @@ __all__ = [
     "parse_launch_inputs",
     "parse_launch_record",
     "parse_owner_ledger",
+    "parse_specification",
     "provisional_ledger_outcome",
     "provisional_ledger_row",
 ]

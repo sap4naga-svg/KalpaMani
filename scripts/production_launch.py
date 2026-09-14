@@ -12,25 +12,46 @@ prepare      (no flag) the canonical LAUNCH SPECIFICATION is built from the admi
              written beside the ledger for review, and its digest printed -- the value the
              owner's authorization must name; no client, no reservation, nothing launched
 launch       (flag + authorization naming this specification) the identity is RESERVED durably
-             and exclusively BEFORE any bootstrap or client; then human_bootstrap under the
-             human and launcher profiles, launch_authorized_run on real clients built only
-             here, a launch record and a sanitized evidence document under names that cannot
-             collide, and one EXIT_CODE_ONLY ledger row written atomically under the ledger lock
+             and exclusively BEFORE any bootstrap or client -- beside the ledger, carrying the
+             specification; then human_bootstrap under the human and launcher profiles,
+             launch_authorized_run on real clients built only here, a launch record (naming
+             the specification digest and the verified placement) and a sanitized evidence
+             document under names that cannot collide, and one EXIT_CODE_ONLY ledger row
+             written atomically under the ledger lock
 completion   --complete-row: the receipt line the owner read from the log stream, verified
-             against the launch record, completes the row -- under the same lock and replacement
+             against the launch record (itself bound to its reservation), completes the row --
+             under the same lock and replacement
 recovery     --recover: an identity reserved but never recorded (an interruption) receives its
-             ledger row and is never launched again; nothing is launched
-verdict      --isolation-verdict: the R-2 verdict from the verified receipt, the launch record
-             and the owner's transcribed Reachability Analyzer evidence, derived and recorded
+             ledger row from the reservation's own specification and is never launched again;
+             nothing is launched; the reservation is found beside the ledger whatever records
+             directory is named
+verdict      --isolation-verdict: the R-2 verdict from the verified receipt, the launch record,
+             the reservation's specification and the owner's transcribed Reachability Analyzer
+             evidence, derived and recorded; the placement is the recorded one, never a
+             freshly supplied file's
 ```
+
+**The records directory is an evidence destination.** Reservations and the ledger lock hang
+off the ledger's canonical path (``<ledger>.reservations/``, ``<ledger>.lock``), so naming a
+different ``--records-dir`` -- or the same one spelled differently -- changes where evidence
+lands and nothing about which identities are consumed or await recovery. A ``reservations``
+directory left under the supplied records directory by the first revision refuses until the
+owner has moved its files beside the ledger by hand; the tool moves, reads and deletes none
+of them.
 
 **What the tool never does.** It never retries a ``RunTask`` (the adapter issues exactly
 one; an ambiguous outcome is recorded as such and the identity stays consumed); it never
-launches an identity the ledger or the reservations directory already holds, for either
+launches an identity the ledger or the ledger's reservations already hold, for either
 kind; it never lets a verification launch spend a production identity (the ``verify-``
 prefix is reserved and checked on every record); it never reads a receipt for the task
 (the owner hands it the line); it never prints an ARN, an account id, a bucket, a key or
 an identity; it never removes a reservation or another process's lock.
+
+**The trust boundary is the owner's private root.** The digests that bind the
+specification, the reservation, the launch record, the ledger row and the receipt to one
+launch make a substituted or mislaid artifact a refusal; they are not protection against an
+owner who deliberately rewrites every owner-controlled artifact consistently, and nothing
+here claims otherwise.
 
 **An ordinary import does nothing observable**, and so does an invocation without the
 authorization flag. Every SDK import sits inside the authorized branch. **This tool has
@@ -88,6 +109,7 @@ EXIT_REFUSED_LEDGER_LOCKED: Final = 13
 EXIT_INTERRUPTED_AFTER_LAUNCH: Final = 14
 EXIT_RECOVERED: Final = 0
 EXIT_VERDICT_RECORDED: Final = 0
+EXIT_REFUSED_LEGACY_RESERVATIONS: Final = 15
 
 #: Allowlisted output sentences. Nothing else reaches stdout.
 SENTENCES: Final[dict[str, str]] = {
@@ -101,6 +123,10 @@ SENTENCES: Final[dict[str, str]] = {
     "refused_reservation": "launch refused: the identity is already reserved",
     "refused_recovery_pending": "launch refused: an interrupted attempt awaits recovery",
     "refused_ledger_locked": "launch refused: the ledger is locked by another process",
+    "refused_legacy_reservations": (
+        "launch refused: first-revision reservations under the records directory must be moved"
+        " beside the ledger by hand"
+    ),
     "prepared": "launch prepared offline; no client was constructed and nothing was launched",
     "launched": "launch sequence finished; see the evidence document",
     "interrupted_after_launch": (
@@ -311,12 +337,24 @@ def _private_root(root_source: Callable[[], Path] | None) -> Path:
 
 
 def _store(arguments: LaunchArguments, root: Path) -> Any:
-    """The launch store, after containment: the ledger and records under the private root."""
-    from kalpamani.data.production.sharadar.launch_store import LaunchStore
+    """The launch store, after containment: the ledger and records under the private root.
+
+    The store anchors reservations and the lock to the ledger's canonical path; the
+    records directory only receives evidence. First-revision reservations under the
+    supplied records directory refuse until the owner has moved them.
+    """
+    from kalpamani.data.production.sharadar.launch_store import LaunchStore, StoreError
 
     if not _contained(arguments.ledger, root) or not _contained(arguments.records_dir, root):
         raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
-    return LaunchStore(ledger_path=arguments.ledger, records_dir=arguments.records_dir)
+    store = LaunchStore(ledger_path=arguments.ledger, records_dir=arguments.records_dir)
+    try:
+        store.refuse_legacy_state()
+    except StoreError:
+        raise LaunchRefusalError(
+            "refused_legacy_reservations", EXIT_REFUSED_LEGACY_RESERVATIONS
+        ) from None
+    return store
 
 
 def prepare_launch(
@@ -432,7 +470,7 @@ def prepare_launch(
 def write_specification(
     arguments: LaunchArguments, prepared: PreparedLaunch, *, now: datetime
 ) -> Path:
-    """Write the reviewable specification beside the ledger; the owner authorizes its digest."""
+    """Write the reviewable specification to the records directory; the owner authorizes it."""
     from kalpamani.data.production.sharadar.launch_store import LaunchStore, StoreError
 
     store = LaunchStore(ledger_path=arguments.ledger, records_dir=arguments.records_dir)
@@ -572,10 +610,11 @@ def reserve_identity(
     """Consume the identity durably and exclusively, bound to the specification, or refuse.
 
     Under the ledger lock: the ledger is re-read (a concurrent attempt may have written
-    it since preparation), the identity re-checked against it and against the
-    reservations directory, and the reservation created with exclusive semantics --
-    **before** any bootstrap, client or external mutation. A reservation that cannot be
-    persisted refuses; one that already exists refuses; neither launches.
+    it since preparation), the identity re-checked against it and against the ledger's
+    reservations, and the reservation -- carrying the whole authorized specification --
+    created with exclusive semantics beside the ledger, **before** any bootstrap, client
+    or external mutation. A reservation that cannot be persisted refuses; one that
+    already exists refuses; neither launches.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.launch_store import (
@@ -601,7 +640,7 @@ def reserve_identity(
                     identity=arguments.identity,
                     actor=prepared.actor,
                     kind=prepared.kind,
-                    specification_digest=prepared.specification.digest,
+                    specification=prepared.specification,
                     reserved_at=now(),
                 )
             )
@@ -736,6 +775,8 @@ def execute_launch(
             recorded_at=recorded_at,
             network_interface_id=report.network_interface_id,
             subnet_id=report.subnet_id,
+            security_group_ids=report.security_group_ids,
+            specification_digest=prepared.specification.digest,
         )
         row = lr.provisional_ledger_row(record, outcome=outcome, completed_at=recorded_at)
     else:
@@ -821,6 +862,7 @@ def _record_and_receipt(
         or record.actor.value != arguments.actor
     ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    _bound_reservation(store, record)
     try:
         text = _read(arguments.receipt_lines).decode("utf-8")
     except UnicodeDecodeError:
@@ -830,6 +872,61 @@ def _record_and_receipt(
     except ReceiptError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     return store, record, verified
+
+
+def _bound_reservation(store: Any, record: Any) -> Any:
+    """The reservation this launch record belongs to, or refuse.
+
+    The record names the specification digest the authorization named; the reservation
+    beside the ledger carries that specification. They bind when the digests agree and
+    the record's target and verified placement are the specification's own -- the
+    revision, image, configuration and commit it registered, its subnet, and its
+    security groups as a set -- and, for an acquisition, the record's slice and plan
+    digest are the specification's workload. A missing reservation, a different
+    specification or a placement the specification did not name is not this launch,
+    and refuses.
+    """
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    try:
+        reservation = store.reservation(record.identity)
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if reservation is None:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    specification = reservation.specification
+    try:
+        compiled = specification.compiled
+    except (TypeError, ValueError):
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    target = specification.target
+    workload = specification.workload
+    if (
+        reservation.specification_digest != record.specification_digest
+        or reservation.actor is not record.actor
+        or reservation.kind is not record.kind
+        or specification.entry is not record.entry
+        or (
+            record.slice is not None
+            and (
+                record.plan_digest != workload.get("plan_digest")
+                or record.slice.canonical() != workload.get("slice")
+            )
+        )
+        or target.task_definition_arn != record.task_definition_arn
+        or target.image_digest != record.image_digest
+        or target.configuration_digest != record.configuration_digest
+        or target.code_commit != record.code_commit
+        or (
+            record.subnet_id is not None
+            and (
+                compiled.subnet_id != record.subnet_id
+                or frozenset(compiled.security_group_ids) != frozenset(record.security_group_ids)
+            )
+        )
+    ):
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    return reservation
 
 
 def complete_row(
@@ -881,9 +978,18 @@ def recover(
     end, the tool does not know -- the row is ``HALTED`` with ``EXIT_CODE_ONLY``
     evidence, and the owner reviews ECS by hand. Nothing is launched, and the
     reservation is kept: recovery makes the ledger agree with it, never the reverse.
+
+    The reservation lives beside the ledger, so it is found whatever records directory
+    the owner names. The row's slice and plan digest come from the reservation's own
+    specification; a launch record for the identity in the named records directory
+    refines the launch instant when it names the same specification, contradicts the
+    reservation (and refuses) when it names another, and is simply absent -- an honest
+    ``HALTED`` from the reservation alone -- when the owner named another directory.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.inputs import parse_slice
     from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+    from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
     store = _store(arguments, _private_root(root_source))
     try:
@@ -898,16 +1004,23 @@ def recover(
                 raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
             covered: Any = None
             plan_digest: str | None = None
+            workload = reservation.specification.workload
+            if reservation.actor is ProductionActor.ACQUISITION:
+                covered = parse_slice(workload["slice"])
+                plan_digest = workload["plan_digest"]
             launched_at = reservation.reserved_at
-            # A launch record written before the interruption names what started.
+            # A launch record written before the interruption names what started; one
+            # that names another specification is not this launch's and refuses.
             for path in store.launch_records():
                 try:
                     candidate = lr.parse_launch_record(path.read_bytes())
                 except (lr.LaunchRecordError, OSError):
                     continue
-                if candidate.identity == arguments.identity:
-                    covered, plan_digest = candidate.slice, candidate.plan_digest
-                    launched_at = candidate.launched_at
+                if candidate.identity != arguments.identity:
+                    continue
+                if candidate.specification_digest != reservation.specification_digest:
+                    raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+                launched_at = candidate.launched_at
             recorded_at = now()
             row = lr.OwnerLedgerRow(
                 identity=arguments.identity,
@@ -938,11 +1051,17 @@ def record_isolation_verdict(
     """Derive the R-2 verdict from the verified receipt and the owner's evidence; record it.
 
     The receipt must be a build verification receipt that verified against the launch
-    record; the record must carry the verified interface; the evidence, when supplied,
-    is parsed closed and bound by derivation (:func:`probe.isolation_verdict`). The
-    verdict document -- verdict, reason, components, whether the analysis bound -- is
-    written beside the record under an exclusive name. ``VERIFIED`` is unreachable
-    without evidence, and this tool collects none.
+    record; the record must carry the verified placement and be bound to its
+    reservation (:func:`_bound_reservation`) and to a ledger row; the evidence, when
+    supplied, is parsed closed and bound by derivation (:func:`probe.isolation_verdict`).
+    **The placement the verdict binds to is the recorded one** -- the interface, subnet
+    and security groups the launcher verified and the reservation's specification
+    named -- never a freshly supplied file's. The ``--launch-inputs`` argument is
+    retained for the invocation's shape and is verified against the recorded
+    specification: a file compiling to another placement or target refuses. The verdict
+    document -- verdict, reason, components, whether the analysis bound, the
+    specification digest -- is written into the records directory under an exclusive
+    name. ``VERIFIED`` is unreachable without evidence, and this tool collects none.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar import probe as pp
@@ -956,13 +1075,25 @@ def record_isolation_verdict(
         or verified.probe is None
         or record.network_interface_id is None
         or record.subnet_id is None
+        or record.security_group_ids is None
     ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    reservation = _bound_reservation(store, record)
+    try:
+        ledger, _ = store.read_ledger()
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if ledger.row(record.identity) is None:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    # The launch-inputs file is checked against the recorded specification, never used.
     try:
         inputs = lr.parse_launch_inputs(_read(arguments.launch_inputs))
-        compiled, _ = lr.compile_launch(inputs, actor=record.actor, kind=record.kind)
+        compiled, target = lr.compile_launch(inputs, actor=record.actor, kind=record.kind)
     except lr.LaunchRecordError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    specification = reservation.specification
+    if compiled != specification.compiled or target != specification.target:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     evidence: Any = None
     if arguments.reachability_evidence is not None:
         try:
@@ -972,7 +1103,7 @@ def record_isolation_verdict(
     binding = pp.VerdictBinding(
         network_interface_id=record.network_interface_id,
         subnet_id=record.subnet_id,
-        security_group_ids=frozenset(compiled.security_group_ids),
+        security_group_ids=frozenset(record.security_group_ids),
         launched_at=record.launched_at,
         recorded_at=record.recorded_at,
         binding_key=record.input_digest,
@@ -984,6 +1115,7 @@ def record_isolation_verdict(
         "contract_id": "kalpamani-isolation-verdict/v1",
         "actor": record.actor.value,
         "kind": record.kind.value,
+        "specification_digest": record.specification_digest,
         "probe": verified.probe.document(),
         "verdict": result.document(),
         "evidence_supplied": evidence is not None,

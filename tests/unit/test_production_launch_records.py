@@ -29,6 +29,7 @@ from fixtures.production_launch import (
     ledger_document,
     ledger_row,
     specification_digest_for,
+    specification_for,
     target_document,
     task_definition_document,
 )
@@ -41,8 +42,10 @@ from fixtures.production_runtime import (
     INTERFACE_ID,
     NOW,
     OTHER_RUN_ID,
+    OTHER_SECURITY_GROUP,
     PLAN_DIGEST,
     RUN_ID,
+    SECURITY_GROUPS,
     SUBNET_ID,
     TASK_ARN,
     TREE,
@@ -815,6 +818,89 @@ class TestSpecification:
         )
         assert first != second
 
+    def test_a_specification_parses_back_to_itself_and_names_its_compiled_launch(self) -> None:
+        """Second cycle, finding 2: the reservation carries the specification, parsed closed."""
+        for actor, kind, identity in (
+            (ACQ, "production", RUN_ID),
+            (ACQ, "verification", "verify-" + RUN_ID),
+            (BLD, "production", BUILD_ID),
+            (BLD, "verification", "verify-" + BUILD_ID),
+        ):
+            specification = specification_for(actor=actor, kind=kind, identity=identity)
+            parsed = lr.parse_specification(encode(specification.document()))
+            assert parsed == specification and parsed.digest == specification.digest
+            assert lr.parse_specification(specification.document()) == specification
+            inputs = lr.parse_launch_inputs(encode(launch_inputs_document()))
+            compiled, target = lr.compile_launch(inputs, actor=actor, kind=lr.LaunchKind(kind))
+            assert parsed.compiled == compiled and parsed.target == target
+            assert tuple(parsed.placement["security_group_ids"]) == SECURITY_GROUPS
+        for canary in CANARIES:
+            assert canary not in repr(specification)
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda d: d.__setitem__("contract_id", "kalpamani-launch-specification/v2"),
+            lambda d: d.__setitem__("extra", 1),
+            lambda d: d.pop("placement"),
+            lambda d: d.__setitem__("kind", "verification"),  # against a production identity
+            lambda d: d.__setitem__("entry", "kalpamani-research-build"),
+            lambda d: d.__setitem__("identity", "verify-" + RUN_ID),
+            lambda d: d.__setitem__("workload", {"runs": []}),
+            lambda d: d["workload"].__setitem__("plan_digest", "00" * 32),
+            lambda d: d["workload"]["slice"].__setitem__("request_count", 5),
+            lambda d: d["placement"].__setitem__("security_group_ids", []),
+            lambda d: d["placement"].__setitem__("security_group_ids", [SECURITY_GROUPS[0]] * 2),
+            lambda d: d["placement"].__setitem__("security_group_ids", ["sg-x"]),
+            lambda d: d["placement"].__setitem__("subnet_id", "subnet-x"),
+            lambda d: d["placement"].__setitem__("assign_public_ip", False),
+            lambda d: d["placement"].__setitem__("platform_version", "LATEST"),
+            lambda d: d["placement"].pop("binding_key_arn"),
+            lambda d: d["placement"].__setitem__(
+                "task_role_arn", d["placement"]["execution_role_arn"]
+            ),
+            lambda d: d["target"].__setitem__("image_digest", "sha256:" + "00" * 32),
+            lambda d: d["gate_evidence"].__setitem__("r3_applicable", False),
+            lambda d: d["gate_evidence"].__setitem__("r3_verification_digest", None),
+            lambda d: d["gate_evidence"].__setitem__("generation_record_digest", "9a" * 32),
+        ],
+    )
+    def test_a_specification_document_that_contradicts_itself_is_refused(self, mutate: Any) -> None:
+        document = specification_for(actor=ACQ, kind="production", identity=RUN_ID).document()
+        mutate(document)
+        with pytest.raises(lr.LaunchRecordError):
+            lr.parse_specification(encode(document))
+
+    def test_a_build_specification_document_is_held_to_its_runs(self) -> None:
+        document = specification_for(actor=BLD, kind="production", identity=BUILD_ID).document()
+        runs = document["workload"]["runs"]
+        assert len(runs) == 1
+        document["workload"]["runs"] = [runs[0], dict(runs[0])]
+        with _refuses(lr.LaunchRecordDefect.IDENTITY_DUPLICATE):
+            lr.parse_specification(encode(document))
+        document["workload"]["runs"] = [{**runs[0], "outcome": "PASSED"}]
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_specification(encode(document))
+        document["workload"] = {"slice": slice_document(), "plan_digest": PLAN_DIGEST}
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_specification(encode(document))
+        # A verification specification carries no R-3 reference; a production one must.
+        verify = specification_for(
+            actor=BLD, kind="verification", identity="verify-" + BUILD_ID
+        ).document()
+        verify["gate_evidence"]["r3_verification_digest"] = R3_DIGEST
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_specification(encode(verify))
+        # A placement naming a group outside the compiled set is a different specification.
+        widened = specification_for(actor=BLD, kind="production", identity=BUILD_ID).document()
+        widened["placement"]["security_group_ids"].append(OTHER_SECURITY_GROUP)
+        parsed = lr.parse_specification(encode(widened))
+        assert OTHER_SECURITY_GROUP in parsed.compiled.security_group_ids
+        assert (
+            parsed.digest
+            != specification_for(actor=BLD, kind="production", identity=BUILD_ID).digest
+        )
+
     def test_a_build_specification_carries_the_selected_run_evidence(self) -> None:
         base = specification_digest_for(actor=BLD, kind="production", identity=BUILD_ID)
         # The same run identity with different ledger evidence is a different workload.
@@ -946,6 +1032,8 @@ def _record(**overrides: Any) -> lr.LaunchRecord:
         "recorded_at": NOW + timedelta(seconds=15),
         "network_interface_id": INTERFACE_ID,
         "subnet_id": SUBNET_ID,
+        "security_group_ids": SECURITY_GROUPS,
+        "specification_digest": "ab" * 32,
     }
     fields_.update(overrides)
     return lr.LaunchRecord(**fields_)
@@ -973,6 +1061,12 @@ class TestLaunchRecord:
             lambda d: d.__setitem__("plan_digest", None),
             lambda d: d.__setitem__("input_digest", "xyz"),
             lambda d: d.__setitem__("network_interface_id", None),  # without its subnet
+            lambda d: d.__setitem__("security_group_ids", None),  # without its interface
+            lambda d: d.__setitem__("security_group_ids", []),
+            lambda d: d.__setitem__("security_group_ids", ["sg-x"]),
+            lambda d: d.__setitem__("security_group_ids", [SECURITY_GROUPS[0]] * 2),
+            lambda d: d.__setitem__("specification_digest", "xyz"),
+            lambda d: d.pop("specification_digest"),
             lambda d: d.__setitem__("recorded_at", (NOW - timedelta(days=1)).isoformat()),
         ],
     )
@@ -981,6 +1075,16 @@ class TestLaunchRecord:
         mutate(document)
         with pytest.raises(lr.LaunchRecordError):
             lr.parse_launch_record(encode(document))
+
+    def test_the_verified_placement_is_recorded_whole_or_not_at_all(self) -> None:
+        absent = _record(network_interface_id=None, subnet_id=None, security_group_ids=None)
+        assert lr.parse_launch_record(encode(absent.document())) == absent
+        with pytest.raises(ValueError):
+            _record(security_group_ids=None)
+        with pytest.raises(ValueError):
+            _record(security_group_ids=())
+        with pytest.raises(ValueError):
+            _record(specification_digest="not-a-digest")
 
     def test_a_build_record_carries_no_slice(self) -> None:
         record = _record(

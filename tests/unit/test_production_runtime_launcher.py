@@ -214,7 +214,11 @@ class TestTheSuccessPath:
             return original_put(**kwargs)
 
         scenario.launcher_ssm.put_parameter = capture  # type: ignore[method-assign]
-        scenario.run()
+        report = scenario.run()
+        # The report carries the placement the release named, groups included: what the
+        # interface description reported, equal as a set to the compiled groups.
+        assert report.network_interface_id == INTERFACE_ID and report.subnet_id == SUBNET_ID
+        assert report.security_group_ids == SECURITY_GROUPS
         release = verify_release(
             decode_release(written[scenario.constants.release_parameter]),
             expectation=ReleaseExpectation(

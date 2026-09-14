@@ -5,9 +5,10 @@ the one that runs; the identity is reserved durably before any client; the human
 under both profiles before any adapter; one launch, one ledger row written atomically,
 sanitized evidence under names that cannot collide; a misplaced task stopped with no
 release; an ambiguous outcome recorded without a retry; an interrupted attempt recovered
-and never relaunched; the receipt the owner hands back completes the row; the R-2 verdict
-derived from evidence and recorded. **Mocked results are not AWS verification**: this tool
-has never run against AWS.
+and never relaunched, whatever records directory is named; the receipt the owner hands
+back completes the row; the R-2 verdict derived from evidence against the recorded
+placement and recorded. **Mocked results are not AWS verification**: this tool has never
+run against AWS.
 """
 
 from __future__ import annotations
@@ -33,12 +34,13 @@ from fixtures.production_launch import (
     launch_inputs_document,
     ledger_document,
     ledger_row,
-    specification_digest_for,
+    specification_for,
 )
 from fixtures.production_runtime import (
     BUILD_ID,
     CANARIES,
     COMMIT,
+    CONFIGURATION_DIGEST,
     IMAGE_DIGEST,
     INTERFACE_ID,
     NOW,
@@ -243,20 +245,43 @@ class _Scenario:
         document.update(overrides)
         self.inputs.write_bytes(encode(document))
 
+    def specification(self) -> lr.LaunchSpecification:
+        """The specification this scenario's records produce for its identity."""
+        return specification_for(
+            actor=self.actor,
+            kind=self.kind,
+            identity=self.identity,
+            ledger=json.loads(self.ledger.read_bytes()),
+            inputs=json.loads(self.inputs.read_bytes()),
+            slice_doc=json.loads(self.slice.read_bytes()) if self.actor is ACQ else None,
+        )
+
     def specification_digest(self) -> str:
         try:
-            return specification_digest_for(
-                actor=self.actor,
-                kind=self.kind,
-                identity=self.identity,
-                ledger=json.loads(self.ledger.read_bytes()),
-                inputs=json.loads(self.inputs.read_bytes()),
-                slice_doc=json.loads(self.slice.read_bytes()) if self.actor is ACQ else None,
-            )
+            return self.specification().digest
         except lr.LaunchRecordError:
             # A scenario whose records refuse the launch has no specification; the
             # authorization then names a digest nothing can match.
             return "00" * 32
+
+    def store(self) -> ls.LaunchStore:
+        return ls.LaunchStore(ledger_path=self.ledger, records_dir=self.records)
+
+    def reserve(
+        self, specification: lr.LaunchSpecification | None = None
+    ) -> lr.LaunchSpecification:
+        """Write the reservation a launch of this scenario would have written."""
+        specification = self.specification() if specification is None else specification
+        self.store().reserve(
+            ls.Reservation(
+                identity=self.identity,
+                actor=self.actor,
+                kind=lr.LaunchKind(self.kind),
+                specification=specification,
+                reserved_at=NOW,
+            )
+        )
+        return specification
 
     def authorize(self, **overrides: Any) -> None:
         """Write an authorization naming this scenario's specification (or overrides)."""
@@ -360,7 +385,9 @@ class _Scenario:
         return None if not files else json.loads(files[0].read_bytes())
 
     def reservation(self) -> dict[str, Any] | None:
-        path = self.records / ls.RESERVATIONS_DIRECTORY / f"{self.identity}.json"
+        """The reservation beside the ledger -- never under the records directory."""
+        path = self.ledger.with_name("ledger.json.reservations") / f"{self.identity}.json"
+        assert not (self.records / ls.LEGACY_RESERVATIONS_DIRECTORY).exists()
         return None if not path.exists() else json.loads(path.read_bytes())
 
     @property
@@ -836,9 +863,15 @@ class TestReservation:
         rows = scenario.ledger_rows()
         assert len(rows) == 1 and rows[0]["identity"] == RUN_ID
         assert rows[0]["outcome"] == "HALTED" and rows[0]["evidence"] == "EXIT_CODE_ONLY"
-        # No launch record was written before the interruption, so the recovered row
-        # carries no slice: it is consumed and never buildable, which is the point.
-        assert rows[0]["kind"] == "production" and rows[0]["slice"] is None
+        # No launch record was written before the interruption; the recovered row takes
+        # its slice and plan digest from the reservation's own specification, and it is
+        # consumed and never buildable, which is the point.
+        reservation = scenario.reservation()
+        assert reservation is not None
+        assert rows[0]["kind"] == "production"
+        assert rows[0]["slice"] == reservation["specification"]["workload"]["slice"]
+        assert rows[0]["plan_digest"] == reservation["specification"]["workload"]["plan_digest"]
+        assert rows[0]["launched_at"] == reservation["reserved_at"]
         assert len(scenario.ecs.names("run_task")) == 1
         # And it is never launched again, nor recovered twice; the reservation stays.
         assert scenario.run() == launch.EXIT_REFUSED_RECORDS
@@ -901,30 +934,13 @@ class TestReservation:
     def test_a_reservation_already_present_refuses_before_any_client(self, tmp_path: Path) -> None:
         """Two processes prepared against one ledger: the second finds the first's reservation."""
         scenario = _Scenario(tmp_path)
-        store = ls.LaunchStore(ledger_path=scenario.ledger, records_dir=scenario.records)
-        store.reserve(
-            ls.Reservation(
-                identity=RUN_ID,
-                actor=ACQ,
-                kind=lr.LaunchKind.PRODUCTION,
-                specification_digest=scenario.specification_digest(),
-                reserved_at=NOW,
-            )
-        )
+        specification = scenario.reserve()
         assert scenario.run() == launch.EXIT_REFUSED_RECOVERY_PENDING
         assert scenario.clients.constructions == [] and scenario.ecs.calls == []
         # Even with the ledger row present (the first process finished), the second refuses
         # on the ledger, and the reservation file itself refuses a duplicate creation.
         with pytest.raises(ls.StoreError, match="RESERVATION_EXISTS"):
-            store.reserve(
-                ls.Reservation(
-                    identity=RUN_ID,
-                    actor=ACQ,
-                    kind=lr.LaunchKind.PRODUCTION,
-                    specification_digest="ab" * 32,
-                    reserved_at=NOW,
-                )
-            )
+            scenario.reserve(specification)
 
     def test_concurrent_distinct_identities_each_launch_once(self, tmp_path: Path) -> None:
         first = _Scenario(tmp_path)
@@ -935,12 +951,130 @@ class TestReservation:
         assert [row["identity"] for row in first.ledger_rows()] == [RUN_ID, OTHER_RUN_ID]
         assert len(first.files("launch-evidence")) == 2
         assert len(first.files("launch-record")) == 2
-        assert sorted(p.name for p in (first.records / "reservations").glob("*.json")) == [
+        assert sorted(p.name for p in first.store().reservations_path.glob("*.json")) == [
             f"{RUN_ID}.json",
             f"{OTHER_RUN_ID}.json",
         ]
         # The second input carried the first identity as spent.
         assert second.clients.human_ssm.calls[0][1]["Name"] == constants_for(ACQ).input_parameter
+
+    def test_a_different_records_directory_neither_hides_recovery_nor_relaunches(
+        self, tmp_path: Path
+    ) -> None:
+        """Second cycle, finding 1: before the fix a new --records-dir relaunched the identity."""
+        scenario = _Scenario(tmp_path)
+        records_a = scenario.records
+        with pytest.raises(KeyboardInterrupt):
+            scenario.run(now=_interrupting_clock(scenario, 7))  # after RunTask, before the row
+        assert len(scenario.ecs.names("run_task")) == 1 and scenario.ledger_rows() == []
+        reservation = scenario.reservation()
+        assert reservation is not None
+        constructed = len(scenario.clients.constructions)
+        # The same ledger, identity and authorization with another records directory --
+        # a fresh folder, a differently spelled one -- refuses before any client.
+        for records in (
+            scenario.root / "records-b",
+            scenario.root / "records" / ".." / "records-b",
+            Path(str(records_a).upper()),
+        ):
+            scenario.records = records
+            assert scenario.run() == launch.EXIT_REFUSED_RECOVERY_PENDING
+            assert len(scenario.ecs.names("run_task")) == 1
+            assert len(scenario.clients.constructions) == constructed
+        # Another identity is held up the same way, from any directory.
+        other = _Scenario(tmp_path, identity=OTHER_RUN_ID)
+        other.records = other.root / "records-c"
+        assert other.run() == launch.EXIT_REFUSED_RECOVERY_PENDING
+        assert other.clients.constructions == []
+        # Recovery from another records directory finds the reservation, records an
+        # honest HALTED row from its specification (no launch record is visible there,
+        # so no launch instant beyond the reservation's), launches nothing, and keeps
+        # the identity consumed everywhere afterwards.
+        scenario.records = scenario.root / "records-d"
+        assert scenario.mode("--recover") == launch.EXIT_RECOVERED
+        (row,) = scenario.ledger_rows()
+        assert row["identity"] == RUN_ID and row["outcome"] == "HALTED"
+        assert row["evidence"] == "EXIT_CODE_ONLY"
+        assert row["slice"] == reservation["specification"]["workload"]["slice"]
+        assert row["launched_at"] == reservation["reserved_at"]
+        assert not (scenario.root / "records-d").exists()  # recovery writes no evidence
+        for records in (records_a, scenario.root / "records-e"):
+            scenario.records = records
+            assert scenario.run() == launch.EXIT_REFUSED_RECORDS
+            assert scenario.mode("--recover") == launch.EXIT_REFUSED_RECORDS
+        assert len(scenario.ecs.names("run_task")) == 1
+        assert len(scenario.clients.constructions) == constructed
+        assert scenario.reservation() == reservation
+        # The evidence the interrupted attempt did write stayed where it was asked for.
+        assert list(records_a.glob("launch-evidence-*.json")) == []
+        assert not (records_a / ls.LEGACY_RESERVATIONS_DIRECTORY).exists()
+
+    def test_competing_invocations_with_different_records_directories_consume_once(
+        self, tmp_path: Path
+    ) -> None:
+        first = _Scenario(tmp_path)
+        second = _Scenario(tmp_path, ledger_rows=first.ledger_rows())
+        second.records = second.root / "records-b"
+        second.ecs, second.clock = first.ecs, first.clock
+        second.clients = first.clients
+        specification = first.specification()
+        # The first consumed the identity and completed; the second, from its own
+        # directory, is refused on the ledger before any client, and the reservation
+        # beside the ledger refuses a second creation whatever directory is named.
+        assert first.run() == launch.EXIT_LAUNCH_TERMINAL
+        constructed = len(first.clients.constructions)
+        assert second.run() == launch.EXIT_REFUSED_RECORDS
+        assert len(first.ecs.names("run_task")) == 1
+        assert len(first.clients.constructions) == constructed
+        with pytest.raises(ls.StoreError, match="RESERVATION_EXISTS"):
+            second.reserve(specification)
+        assert first.store().reservations_path == second.store().reservations_path
+        assert sorted(p.name for p in first.store().reservations_path.glob("*.json")) == [
+            f"{RUN_ID}.json"
+        ]
+        assert not (second.root / "records-b").exists()
+
+    def test_recovery_from_another_directory_keeps_a_visible_launch_record_consistent(
+        self, tmp_path: Path
+    ) -> None:
+        """A launch record that names another specification contradicts the reservation."""
+        scenario = _Scenario(tmp_path)
+        with pytest.raises(KeyboardInterrupt):
+            scenario.run(now=_interrupting_clock(scenario, 7))
+        stray = scenario.records / "launch-record-20260914T000000Z-deadbeef.json"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        record = _launch_record(
+            entry=TaskEntry.ACQUISITION,
+            identity=RUN_ID,
+            harness=None,
+            kind=lr.LaunchKind.PRODUCTION,
+            specification_digest="cd" * 32,
+        )
+        stray.write_bytes(encode(record.document()))
+        assert scenario.mode("--recover") == launch.EXIT_REFUSED_RECORDS
+        assert scenario.ledger_rows() == []
+        stray.unlink()
+        assert scenario.mode("--recover") == launch.EXIT_RECOVERED
+
+    def test_first_revision_reservations_under_the_records_directory_refuse(
+        self, tmp_path: Path
+    ) -> None:
+        scenario = _Scenario(tmp_path)
+        legacy = scenario.records / ls.LEGACY_RESERVATIONS_DIRECTORY
+        legacy.mkdir(parents=True)
+        stale = legacy / f"{RUN_ID}.json"
+        stale.write_bytes(b'{"first": "revision"}')
+        assert scenario.run(authorized=False) == launch.EXIT_REFUSED_LEGACY_RESERVATIONS
+        assert scenario.run() == launch.EXIT_REFUSED_LEGACY_RESERVATIONS
+        assert scenario.mode("--recover") == launch.EXIT_REFUSED_LEGACY_RESERVATIONS
+        assert scenario.clients.constructions == [] and scenario.ecs.calls == []
+        assert stale.read_bytes() == b'{"first": "revision"}'
+        assert scenario.store().reservation(RUN_ID) is None  # never read as one
+        # Moved by the owner (never by the tool), the launch proceeds from a clean state.
+        stale.unlink()
+        legacy.rmdir()
+        assert scenario.run() == launch.EXIT_LAUNCH_TERMINAL
+        assert scenario.reservation() is not None
 
     def test_a_held_ledger_lock_refuses_and_is_never_removed(self, tmp_path: Path) -> None:
         scenario = _Scenario(tmp_path)
@@ -963,8 +1097,19 @@ def _launch_record(
     harness: Any,
     kind: lr.LaunchKind,
     configuration_digest: str | None = None,
+    specification: lr.LaunchSpecification | None = None,
+    specification_digest: str | None = None,
 ) -> lr.LaunchRecord:
+    """A launch record; with ``specification``, one bound to it (workload and digest)."""
     actor = ACQ if entry in (TaskEntry.ACQUISITION, TaskEntry.ACQUISITION_VERIFY) else BLD
+    if specification is not None:
+        covered = parse_slice(specification.workload["slice"]) if actor is ACQ else None
+        plan_digest = specification.workload.get("plan_digest")
+        digest = specification.digest
+    else:
+        covered = parse_slice(slice_for_run(1)) if actor is ACQ else None
+        plan_digest = "ab" * 32 if actor is ACQ else None
+        digest = "ab" * 32 if specification_digest is None else specification_digest
     return lr.LaunchRecord(
         entry=entry,
         kind=kind,
@@ -982,13 +1127,15 @@ def _launch_record(
             else configuration_digest
         ),
         code_commit=compiled_task(actor).code_commit,
-        input_digest=input_digest(harness.input_bytes),
-        slice=parse_slice(slice_for_run(1)) if actor is ACQ else None,
-        plan_digest="ab" * 32 if actor is ACQ else None,
+        input_digest="ab" * 32 if harness is None else input_digest(harness.input_bytes),
+        slice=covered,
+        plan_digest=plan_digest,
         launched_at=RUN_1_AT,
         recorded_at=RUN_1_AT + timedelta(minutes=5),
         network_interface_id=INTERFACE_ID,
         subnet_id=SUBNET_ID,
+        security_group_ids=SECURITY_GROUPS,
+        specification_digest=digest,
     )
 
 
@@ -1000,11 +1147,18 @@ class TestCompleteRow:
         receipt = harness.run()
         assert receipt.outcome is TaskOutcome.COMPLETED
         scenario = _Scenario(tmp_path, identity=RUN_1)
+        # The task carried the harness's compiled configuration; the registered target
+        # says so, and the reservation carries the specification that names it.
+        inputs = scenario.inputs_document()
+        inputs["actors"]["acquisition"]["production"]["configuration_digest"] = CONFIGURATION_DIGEST
+        scenario.inputs.write_bytes(encode(inputs))
+        specification = scenario.reserve()
         record = _launch_record(
             entry=TaskEntry.ACQUISITION,
             identity=RUN_1,
             harness=harness,
             kind=lr.LaunchKind.PRODUCTION,
+            specification=specification,
         )
         ledger = lr.append_row(
             lr.OwnerLedger(rows=()),
@@ -1054,6 +1208,28 @@ class TestCompleteRow:
         scenario, record, lines = self._completed_scenario(tmp_path)
         scenario.lock.write_bytes(b"{}")
         assert scenario.mode(*self._argv(record, lines)) == launch.EXIT_REFUSED_LEDGER_LOCKED
+
+    def test_a_record_without_its_reservation_or_naming_another_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Second cycle, finding 2: the record binds to the reservation's specification."""
+        scenario, record, lines = self._completed_scenario(tmp_path)
+        document = json.loads(record.read_bytes())
+        document["specification_digest"] = "cd" * 32
+        record.write_bytes(encode(document))
+        assert scenario.mode(*self._argv(record, lines)) == launch.EXIT_REFUSED_RECORDS
+        reservation = scenario.reservation()
+        assert reservation is not None
+        document["specification_digest"] = reservation["specification_digest"]
+        document["security_group_ids"] = [OTHER_SECURITY_GROUP]
+        record.write_bytes(encode(document))
+        assert scenario.mode(*self._argv(record, lines)) == launch.EXIT_REFUSED_RECORDS
+        document["security_group_ids"] = list(SECURITY_GROUPS)
+        record.write_bytes(encode(document))
+        scenario.store().reservation_path(RUN_1).unlink()
+        assert scenario.mode(*self._argv(record, lines)) == launch.EXIT_REFUSED_RECORDS
+        row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
+        assert row is not None and row.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -1124,12 +1300,16 @@ class TestIsolationVerdict:
         )
         receipt = harness.run(configuration=harness.configuration(compiled=compiled))
         assert receipt.outcome is TaskOutcome.VERIFIED_BOOTSTRAP and receipt.probe is not None
+        # The reservation a launch would have written, carrying the specification the
+        # scenario's records produce; the record names its digest.
+        specification = scenario.reserve()
         record = _launch_record(
             entry=TaskEntry.BUILD_VERIFY,
             identity=harness.identity,
             harness=harness,
             kind=lr.LaunchKind.VERIFICATION,
             configuration_digest=file_digest,
+            specification=specification,
         )
         ledger = lr.append_row(
             lr.OwnerLedger(rows=()),
@@ -1281,6 +1461,121 @@ class TestIsolationVerdict:
             launch.EXIT_VERDICT_RECORDED
         )
         assert self._verdict(scenario)["verdict"]["blocking_components"] == ["SECURITY_GROUP"]
+
+    def _outside_placement_evidence(self, scenario: _Scenario) -> Path:
+        evidence = scenario.root / "reachability.json"
+        evidence.write_bytes(
+            encode(
+                _reachability_evidence(
+                    explanations=[
+                        {
+                            "explanation_code": "SG_HAS_NO_RULES",
+                            "component_kind": "SECURITY_GROUP",
+                            "component_id": OTHER_SECURITY_GROUP,
+                            "subnet_id": None,
+                        }
+                    ]
+                )
+            )
+        )
+        return evidence
+
+    def test_substituted_launch_inputs_cannot_widen_the_recorded_placement(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Second cycle, finding 2: before the fix a fresh --launch-inputs redefined the groups."""
+        scenario, record, lines = self._verify_scenario(tmp_path)
+        evidence = self._outside_placement_evidence(scenario)
+        assert scenario.mode(*self._argv(scenario, record, lines, evidence)) == (
+            launch.EXIT_VERDICT_RECORDED
+        )
+        assert "INCONCLUSIVE reason=COMPONENT_OUTSIDE_PLACEMENT" in capsys.readouterr().out
+        reservation = scenario.reservation()
+        assert reservation is not None
+        assert (
+            self._verdict(scenario)["specification_digest"] == (reservation["specification_digest"])
+        )
+        for path in scenario.files("isolation-verdict"):
+            path.unlink()
+        # A launch-inputs file whose build groups include the outside group: refused, no
+        # verdict recorded, and never VERIFIED.
+        inputs = scenario.inputs_document()
+        inputs["actors"]["build"]["security_group_ids"] = [*SECURITY_GROUPS, OTHER_SECURITY_GROUP]
+        scenario.inputs.write_bytes(encode(inputs))
+        assert scenario.mode(*self._argv(scenario, record, lines, evidence)) == (
+            launch.EXIT_REFUSED_RECORDS
+        )
+        assert scenario.files("isolation-verdict") == []
+        assert "VERIFIED" not in capsys.readouterr().out
+        # A launch-inputs file registering another target refuses the same way.
+        inputs = scenario.inputs_document()
+        inputs["actors"]["build"]["verification"]["code_commit"] = "f" * 40
+        scenario.inputs.write_bytes(encode(inputs))
+        assert scenario.mode(*self._argv(scenario, record, lines, evidence)) == (
+            launch.EXIT_REFUSED_RECORDS
+        )
+        # And another subnet or platform version.
+        inputs = scenario.inputs_document()
+        inputs["platform_version"] = "1.3.0"
+        scenario.inputs.write_bytes(encode(inputs))
+        assert scenario.mode(*self._argv(scenario, record, lines, evidence)) == (
+            launch.EXIT_REFUSED_RECORDS
+        )
+        assert scenario.files("isolation-verdict") == []
+        assert scenario.clients.constructions == []
+
+    def test_a_record_or_reservation_that_does_not_bind_never_verifies(
+        self, tmp_path: Path
+    ) -> None:
+        scenario, record, lines = self._verify_scenario(tmp_path)
+        evidence = scenario.root / "reachability.json"
+        evidence.write_bytes(encode(_reachability_evidence()))
+        argv = self._argv(scenario, record, lines, evidence)
+        original = record.read_bytes()
+        # The record's own groups rewritten to include the outside group: the reservation's
+        # specification did not name it, so the record does not bind.
+        document = json.loads(original)
+        document["security_group_ids"] = [*SECURITY_GROUPS, OTHER_SECURITY_GROUP]
+        record.write_bytes(encode(document))
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        # A record naming another specification digest.
+        document = json.loads(original)
+        document["specification_digest"] = "cd" * 32
+        record.write_bytes(encode(document))
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        # A record with no verified placement at all.
+        document = json.loads(original)
+        document["network_interface_id"] = None
+        document["subnet_id"] = None
+        document["security_group_ids"] = None
+        record.write_bytes(encode(document))
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        record.write_bytes(original)
+        # A reservation rewritten to name another placement: its digest no longer matches
+        # the record's.
+        reservation_path = scenario.store().reservation_path(scenario.identity)
+        kept = reservation_path.read_bytes()
+        widened = scenario.inputs_document()
+        widened["actors"]["build"]["security_group_ids"] = [*SECURITY_GROUPS, OTHER_SECURITY_GROUP]
+        other = specification_for(
+            actor=BLD,
+            kind="verification",
+            identity=scenario.identity,
+            ledger=ledger_document([ledger_row(RUN_ID)]),
+            inputs=widened,
+        )
+        reservation_path.unlink()
+        scenario.reserve(other)
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        # No reservation at all.
+        reservation_path.unlink()
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        # No ledger row for the identity.
+        reservation_path.write_bytes(kept)
+        scenario.ledger.write_bytes(encode(ledger_document([ledger_row(RUN_ID)])))
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+        assert scenario.files("isolation-verdict") == []
+        assert scenario.clients.constructions == []
 
     def test_an_observed_connection_fails_whatever_the_model_says(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
