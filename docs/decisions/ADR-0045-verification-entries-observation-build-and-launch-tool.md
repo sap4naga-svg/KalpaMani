@@ -15,6 +15,23 @@ and ADR-0044 it states, and nothing else**, effective together with the offline 
 it. **Acceptance authorizes no execution** (§9): no image build, no publication, no Terraform plan or
 apply, no launch, no run, no probe.
 
+**The condition above has since been satisfied.** **PR #104 merged** — merged **2026-09-14T17:28:56Z**,
+merge commit **`af20f36acbe8a3006830762fbad5cb01d1e9b38b`**, ordered parents **`8464128a9d890a5d43c2a685927742cad8428f8f`** then
+**`2966ed2f24f7841eea264657f75e9c081e35922a`** (the approved head, after two independently reviewed correction cycles
+recorded in §10), with a **merge tree identical to the reviewed pull-request head tree**
+(`f43beef329511e53a79777e1301ee9901d9945e3`). ADR-0045 is therefore **ACCEPTED / IN FORCE** exactly as the clause
+above states — the verification-path completion of ADR-0043 §2 and ADR-0036 §2.9 / §3, the receipt
+evidence, the isolation rule, the verification families and the launcher resource, the launch tool
+and its records, the re-verification policy, the narrow amendments to ADR-0036, ADR-0043 and ADR-0044
+it states, and its §10 corrections — effective together with the offline code merged beside it, and
+nothing else. While the pull request was open it was proposed and carried no authority — true then,
+and not rewritten. **Acceptance authorized no image build, no publication, no Terraform plan or
+apply, no launch, no run, no probe, no Reachability Analyzer analysis and no IAM change**: the
+analyzer permissions (D-14) stay a recorded delta, `ecs:DescribeTaskDefinition` (V-16) stays a
+recorded dependency, G-14 stays deferred, and every owner input stays MISSING. The owner-side tooling
+that composes these contracts — the human-binding materializer, the R-3 tool and the cell runner —
+is proposed separately as ADR-0046.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no ECS, EC2 or SSM call, no
 container image built, pulled or published, no registry contacted, no credential retrieved, no
 provider request, no TCP connection attempted, no Reachability Analyzer analysis started. Every

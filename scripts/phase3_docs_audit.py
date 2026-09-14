@@ -831,6 +831,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0043", "PR #100 merged"),
     # ADR-0044 merged as PR #101 on 2026-09-14, with the delivery contracts and the packaging.
     ("ADR-0044", "PR #101 merged"),
+    # ADR-0045 merged as PR #104 on 2026-09-14, with the verification entries and the launch tool.
+    ("ADR-0045", "PR #104 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -6494,11 +6496,14 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 #: whose credential resolver holds only the container provider (never ``boto3.client``
 #: and never the default session), and the owner-side launch tool proposed with
 #: ADR-0045, which builds its four workstation clients from ``boto3.Session`` under
-#: the actor's two pinned profiles only inside its authorized branch; no module under
-#: ``src/`` appears here, which is what keeps the data platform free of ambient
-#: credential discovery.
+#: the actor's two pinned profiles only inside its authorized branch, and the R-3
+#: verification tool proposed with ADR-0046, which builds one S3 client under the
+#: foundation control profile only inside its authorized branch after the identity
+#: gate and the environment binding; no module under ``src/`` appears here, which is
+#: what keeps the data platform free of ambient credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
     "production_launch.py",
+    "production_r3_verification.py",
     "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",
     "sharadar_binding_preflight.py",
@@ -19975,10 +19980,11 @@ def main() -> int:
         "only the authorized operator entry points construct an SDK client",
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
         # candidate adds its two operator entry points; ADR-0043 the task image
-        # entrypoint; ADR-0045 proposes the owner-side launch tool. All six are named,
-        # so a seventh arriving anywhere fails -- a count could drift, a list cannot.
+        # entrypoint; ADR-0045 the owner-side launch tool; ADR-0046 proposes the R-3
+        # verification tool. All seven are named, so an eighth arriving anywhere
+        # fails -- a count could drift, a list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
-        "six named modules, not a count that could drift",
+        "seven named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",

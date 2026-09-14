@@ -247,6 +247,17 @@ evidence, the launch record and the compiled placement, with a closed reason per
 `--isolation-verdict` records the verdict beside the launch record. `VERIFIED` is unreachable without
 a transcribed analysis, and no analysis is made and no permission granted by this cycle.
 
+## F-10 — the verification tooling (G-4, G-5, G-6), proposed ADR-0046
+
+**Disposition: implemented offline, proposed.** The human-binding materializer, the R-3 tool and the
+cell runner compose accepted contracts and add two closed records; none reaches AWS by default and each
+authorized branch is opened by its own flag under its own written authorization. **Materializing a
+binding is not verifying an identity**; **an R-3 record attests only to the declaration and binding it
+names**; **a cell matrix is derived from the ledger, the reservations and the records, never
+remembered**; **the aggregate cannot read VERIFIED while the negative R-1 cells are undecided**
+(ADR-0046 §4). ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
+request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
+
 ## Validation performed for this cycle
 
 Focused only, as the changes are documentation and one synthetic example: the docs audit
