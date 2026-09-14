@@ -95,10 +95,11 @@ class Repository:
         return str(completed.stdout).strip()
 
     def write(self, files: dict[str, str]) -> None:
+        """Write the bytes exactly: ``write_text`` would translate LF to the platform's."""
         for name, content in files.items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            path.write_bytes(content.encode("utf-8"))
 
     def commit(self, message: str) -> str:
         self("add", "-A")
@@ -285,6 +286,156 @@ def test_preparation_is_deterministic(repository: Repository, tmp_path: Path) ->
         manifests.append((output / "context-manifest.json").read_bytes())
         assert _context_files(output) == _context_files(tmp_path / "one")
     assert manifests[0] == manifests[1]
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 (image-verification cycle): the bytes are the blobs', on any workstation
+# ---------------------------------------------------------------------------
+
+
+def _write_bytes(repo: Repository, name: str, content: bytes) -> None:
+    path = repo.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+def _crlf_workstation(repo: Repository) -> None:
+    """What a Windows checkout of this repository looks like to ``git archive``.
+
+    The repository's own ``.gitattributes`` normalizes text (``* text=auto``) and the
+    workstation checks out native line endings (``core.autocrlf=true``); the setting is
+    written into the throwaway repository's configuration so that the preparer's own git
+    invocation -- not the fixture's ``-c core.autocrlf=false`` -- sees it.
+    """
+    repo.write({".gitattributes": "* text=auto\n"})
+    repo.commit("attributes")
+    repo("config", "core.autocrlf", "true")
+
+
+def test_the_context_carries_the_blob_bytes_on_a_crlf_workstation(
+    repository: Repository, tmp_path: Path
+) -> None:
+    """The defect the first local image build demonstrated: ``git archive`` on a Windows
+    checkout emitted CRLF into the POSIX entry executables, whose ``#!/bin/sh\\r``
+    shebang then no longer executed inside the container, and the source digest
+    depended on the workstation. The context must carry the tree's bytes exactly."""
+    _crlf_workstation(repository)
+    commit = repository("rev-parse", "HEAD")
+    # The workstation's own archive would carry CRLF here; the preparer must not.
+    raw = subprocess.run(  # noqa: S603
+        [repository.git, "archive", "--format=tar", commit, "--", "docker/production/entry"],
+        cwd=repository.root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert b"#!/bin/sh\r\n" in raw, "the fixture did not reproduce a CRLF workstation"
+    staging = _generate(repository, tmp_path)
+    output = tmp_path / "context"
+    assert _prepare(repository, staging, output, commit) == 0
+    for name, content in SOURCE_FILES.items():
+        assert (output / name).read_bytes() == content.encode("utf-8"), name
+    entry = (output / "docker/production/entry/kalpamani-production-acquire").read_bytes()
+    assert entry.startswith(b"#!/bin/sh\n") and b"\r" not in entry
+
+
+def test_the_source_digest_is_the_trees_whatever_the_workstation_converts(
+    tmp_path: Path,
+) -> None:
+    """Two checkouts of the same tree -- one converting line endings, one not -- prepare
+    contexts with the same source digest, because the digest is over the blobs."""
+    digests = []
+    for name, convert in (("plain", False), ("crlf", True)):
+        repo = Repository(tmp_path / name)
+        repo.write(SOURCE_FILES)
+        repo.write(OUTSIDE_FILES)
+        repo.commit("baseline")
+        if convert:
+            _crlf_workstation(repo)
+        else:
+            repo("config", "core.autocrlf", "false")  # not the workstation's global setting
+        commit = repo("rev-parse", "HEAD")
+        (tmp_path / f"{name}-staging").mkdir()
+        staging = _generate(repo, tmp_path / f"{name}-staging")
+        output = tmp_path / f"{name}-context"
+        assert _prepare(repo, staging, output, commit) == 0
+        manifest = json.loads((output / "context-manifest.json").read_text(encoding="utf-8"))
+        digests.append(manifest["source_digest"])
+    assert digests[0] == digests[1]
+
+
+def test_the_manifest_names_the_executable_sources_the_tree_marks(
+    repository: Repository, tmp_path: Path
+) -> None:
+    for name in (
+        "docker/production/entry/kalpamani-production-acquire",
+        "docker/production/entry/kalpamani-research-build",
+    ):
+        repository("update-index", "--chmod=+x", name)
+    repository("commit", "-q", "-m", "executable entries")
+    commit = repository("rev-parse", "HEAD")
+    staging = _generate(repository, tmp_path)
+    output = tmp_path / "context"
+    assert _prepare(repository, staging, output, commit) == 0
+    manifest = json.loads((output / "context-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["executable_sources"] == [
+        "docker/production/entry/kalpamani-production-acquire",
+        "docker/production/entry/kalpamani-research-build",
+    ]
+
+
+def test_an_archive_whose_bytes_are_not_the_blobs_is_refused(
+    repository: Repository, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``export-subst`` makes ``git archive`` rewrite a file's content at archive time,
+    so the extracted bytes are no longer the tree's blob: the preparer must refuse
+    rather than record a digest over bytes the commit does not hold."""
+    repository.write(
+        {
+            ".gitattributes": "src/kalpamani/marker.py export-subst\n",
+            "src/kalpamani/marker.py": "# $Format:%H$\n",
+        }
+    )
+    commit = repository.commit("substituted")
+    staging = _generate(repository, tmp_path)
+    _refuses(
+        repository,
+        staging,
+        tmp_path / "context",
+        commit,
+        capsys,
+        reason="could not be archived byte-exactly",
+    )
+
+
+def test_a_symbolic_link_under_an_admitted_path_is_refused(
+    repository: Repository, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A link is written into the index directly (mode 120000), so the test needs no
+    filesystem symlink support; the tree then carries something an image may not."""
+    object_id = (
+        subprocess.run(  # noqa: S603
+            [repository.git, "hash-object", "-w", "--stdin"],
+            cwd=repository.root,
+            check=True,
+            capture_output=True,
+            input=b"../../etc/passwd",
+        )
+        .stdout.decode()
+        .strip()
+    )
+    repository("update-index", "--add", "--cacheinfo", f"120000,{object_id},src/kalpamani/link")
+    repository("commit", "-q", "-m", "link")
+    repository("reset", "-q", "--hard")  # materialize the checkout so the generator sees it clean
+    commit = repository("rev-parse", "HEAD")
+    staging = _generate(repository, tmp_path)
+    _refuses(
+        repository,
+        staging,
+        tmp_path / "context",
+        commit,
+        capsys,
+        reason="could not be archived byte-exactly",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -482,10 +633,15 @@ def test_the_dockerfile_copies_only_the_allowlisted_sources_and_the_declared_con
     assert dockerfile.count("COPY --chmod=0444 configuration/compiled-configuration.json") == 2
     assert dockerfile.count("ARG CONFIGURATION_DIGEST") == 2
     assert (
-        dockerfile.count('hashlib.sha256(raw).hexdigest() == os.environ["CONFIGURATION_DIGEST"]')
+        dockerfile.count('hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]')
         == 2
     )
-    assert dockerfile.count('document.get("code_commit") == commit') == 2
+    assert dockerfile.count('document.get("code_commit") != commit') == 2
+    # Every refusal is a closed sentence; no clause prints a digest, a commit or a field.
+    assert dockerfile.count("image check refused: ") == 2
+    for line in dockerfile.splitlines():
+        if line.strip().startswith("refuse("):
+            assert "{" not in line and "%" not in line and "+" not in line.split("refuse(")[1]
     for entry in TaskEntry:
         assert f"EXPECTED_ENTRY={entry.value} python" in dockerfile
     # The Dockerfile itself is archived from the tree, so a build uses the commit's own.

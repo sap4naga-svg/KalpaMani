@@ -1,6 +1,7 @@
-"""ADR-0044 governance: a proposed resolution of the delivery contracts and the packaging.
+"""ADR-0044 governance: the accepted resolution of the delivery contracts and the packaging.
 
-These checks hold the document to its own claims -- proposed and not in force, the trust chain
+These checks hold the document to its own claims -- accepted on the merge of PR #101, with the
+conditional text it was proposed under preserved as history, the trust chain
 without a self-referential digest, one selected design per open question, the amendments it
 names, the gates -- and hold the offline contracts to the shape the document describes.
 """
@@ -48,8 +49,18 @@ def test_the_adr_exists_and_is_the_only_0044() -> None:
 
 
 def test_the_adr_carries_a_conditional_acceptance_status_and_the_gates() -> None:
+    # The conditional text is the record of the days before the merge, kept unedited; the
+    # post-merge note beneath it records the merge that satisfied the condition.
     assert "Status: " + PROPOSED in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
+    assert "The condition above has since been satisfied" in ADR_FLAT
+    assert "PR #101 merged" in ADR_PLAIN and "2026-09-14T01:09:53Z" in ADR_TEXT
+    assert "98addd070857143b2bd79ef3e2bf6c06539555ba" in ADR_TEXT
+    assert "0064aa0b66d03ec3b40742ac455aa78df9074536" in ADR_TEXT
+    assert "ADR-0044 is therefore ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert "remain proposed and deferred, and deployment remains a later gate" in ADR_PLAIN
+    assert "Acceptance authorized no image build, no publication" in ADR_PLAIN
+    assert "local success is packaging evidence, not runtime verification" in ADR_PLAIN
     assert f"the resolution of ADR-0043 {SECTION}3 and {SECTION}4" in ADR_PLAIN
     assert "Nothing was run to produce this decision" in ADR_FLAT
     assert "## 8. Effectiveness and execution gates" in ADR_TEXT
@@ -130,18 +141,36 @@ def test_the_implementation_matches_the_document() -> None:
 
 
 def test_the_adr_carries_no_private_value() -> None:
+    # The post-merge note carries commit and tree ids (40 hex); no 64-hex digest, account or ARN.
     assert HEX_64.search(ADR_TEXT) is None
     assert TWELVE_DIGITS.search(ADR_TEXT) is None
     assert REAL_ARN.search(ADR_TEXT) is None
 
 
 @pytest.mark.parametrize("path", [README, CLAUDE])
-def test_status_documents_record_the_adr_as_proposed(path: Path) -> None:
+def test_status_documents_record_the_adr_as_accepted_on_the_merge(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    assert re.search("ADR-0044[^\\n]{0,200}" + re.escape(PROPOSED), text) is not None
-    assert "ADR-0044 (delivery contracts and packaging):       " + PROPOSED in text
+    rows = [
+        line
+        for line in text.splitlines()
+        if line.startswith("| ")
+        and "ADR-0044](" in line
+        and "production delivery contracts and packaging" in line.split("|")[1]
+    ]
+    assert len(rows) == 1
+    flat = " ".join(rows[0].replace("**", "").replace("`", "").split())
+    assert "ACCEPTED / IN FORCE" in flat and "PR #101 merged 2026-09-14T01:09:53Z" in flat
+    assert "98addd070857143b2bd79ef3e2bf6c06539555ba" in flat
+    assert "0064aa0b66d03ec3b40742ac455aa78df9074536" in flat
+    assert "while PR #101 was open it was proposed and carried no authority" in flat
+    assert "Acceptance authorized no image, launch or run" in flat
+    assert "remain deferred" in flat and "logs:GetLogEvents" in flat
+    assert "no image published, no digest registered, nothing run on AWS" in flat
+    assert "ADR-0044 (delivery contracts and packaging):       ACCEPTED / IN FORCE" in text
     assert (
         "ADR-0044 delivery contracts + packaging (code):   "
-        "OFFLINE / SYNTHETIC-ONLY / NO IMAGE / NEVER RUN" in text
+        "OFFLINE / SYNTHETIC-ONLY / LOCAL VERIFICATION IMAGES ONLY / NEVER RUN AS A TASK" in text
     )
     assert "production image:                                  NONE" in text
+    assert "NOT PUBLISHED, NOT REGISTERED, NOT RUN ON AWS" in text
+    assert re.search("ADR-0044[^\\n]{0,200}" + re.escape(PROPOSED), text) is None
