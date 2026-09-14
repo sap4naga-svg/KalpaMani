@@ -6486,15 +6486,19 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
-#: Every file permitted to construct an AWS SDK client or session. All five are
+#: Every file permitted to construct an AWS SDK client or session. All six are
 #: entry points under ``scripts/`` that refuse by default -- four operator commands,
-#: and the production task image entrypoint accepted with ADR-0043, which builds a
+#: the production task image entrypoint accepted with ADR-0043, which builds a
 #: client only after a closed entry is selected, a compiled configuration exists and
 #: the credential environment is a task's, and does so from a fresh botocore session
 #: whose credential resolver holds only the container provider (never ``boto3.client``
-#: and never the default session); no module under ``src/`` appears here, which is
-#: what keeps the data platform free of ambient credential discovery.
+#: and never the default session), and the owner-side launch tool proposed with
+#: ADR-0045, which builds its four workstation clients from ``boto3.Session`` under
+#: the actor's two pinned profiles only inside its authorized branch; no module under
+#: ``src/`` appears here, which is what keeps the data platform free of ambient
+#: credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
+    "production_launch.py",
     "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",
     "sharadar_binding_preflight.py",
@@ -19970,11 +19974,11 @@ def main() -> int:
     f.check(
         "only the authorized operator entry points construct an SDK client",
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
-        # candidate adds its two operator entry points; ADR-0043 proposes the task
-        # image entrypoint. All five are named, so a sixth arriving anywhere fails
-        # -- a count could drift, a list cannot.
+        # candidate adds its two operator entry points; ADR-0043 the task image
+        # entrypoint; ADR-0045 proposes the owner-side launch tool. All six are named,
+        # so a seventh arriving anywhere fails -- a count could drift, a list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
-        "five named modules, not a count that could drift",
+        "six named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
