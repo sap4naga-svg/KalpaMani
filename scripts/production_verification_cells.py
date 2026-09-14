@@ -65,6 +65,7 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
 
 from kalpamani.data.contracts.canonical import canonical_bytes  # noqa: E402
 from kalpamani.data.production.sharadar import verification_cells as vc  # noqa: E402
+from kalpamani.data.production.sharadar.release import ReleaseMode  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-cell-launch"
 CELLS_SUFFIX: Final = ".cells.json"
@@ -214,18 +215,19 @@ def write_prepared(store: Any, prepared: dict[str, vc.PreparedCell]) -> None:
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
 
-def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
-    """Every verdict record in the records directory, parsed closed.
+def _closed_records(
+    store: Any, prefix: str, parse: Callable[[Any], Any]
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every ``<prefix>-*.json`` record in the records directory, parsed closed.
 
     Returns the parsed documents grouped by the specification digest they name, the
     digests named by files that decode but do not parse closed (malformed evidence for a
     launch is reported against that launch, never ignored), and the count of files that
     could not be decoded at all. Nothing is ranked here: the cell matrix resolves the
-    documents deterministically (:func:`verification_cells.resolve_verdicts`).
+    documents deterministically.
     """
     from kalpamani.data.production.sharadar.documents import decode_document
     from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
-    from kalpamani.data.production.sharadar.probe import parse_isolation_verdict_document
 
     parsed: dict[str, list[Any]] = {}
     malformed: set[str] = set()
@@ -233,7 +235,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
     records_dir: Path = store._records_dir
     if not records_dir.is_dir():
         return {}, frozenset(), 0
-    for path in sorted(records_dir.glob("isolation-verdict-*.json")):
+    for path in sorted(records_dir.glob(f"{prefix}-*.json")):
         try:
             raw = path.read_bytes()
             document = decode_document(raw, max_bytes=MAX_RECORD_BYTES)
@@ -241,7 +243,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
             unreadable += 1
             continue
         try:
-            verdict = parse_isolation_verdict_document(document)
+            record = parse(document)
         except ValueError:
             digest = document.get("specification_digest") if type(document) is dict else None
             if type(digest) is str and digest:
@@ -249,7 +251,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
             else:
                 unreadable += 1
             continue
-        parsed.setdefault(verdict.specification_digest, []).append(verdict)
+        parsed.setdefault(record.specification_digest, []).append(record)
     return (
         {
             digest: tuple(sorted(docs, key=lambda d: d.recorded_at))
@@ -258,6 +260,18 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
         frozenset(malformed),
         unreadable,
     )
+
+
+def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every verdict record, parsed closed (:func:`_closed_records`)."""
+    from kalpamani.data.production.sharadar.probe import parse_isolation_verdict_document
+
+    return _closed_records(store, "isolation-verdict", parse_isolation_verdict_document)
+
+
+def _negative_evidence(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every negative launch evidence record, parsed closed (:func:`_closed_records`)."""
+    return _closed_records(store, "negative-launch-evidence", vc.parse_negative_launch_evidence)
 
 
 def recorded_evidence(
@@ -302,6 +316,7 @@ def recorded_evidence(
             continue
         launch_records[record.identity] = record
     verdicts, malformed_verdicts, unreadable_verdicts = _verdicts(store)
+    negative, malformed_negative, unreadable_negative = _negative_evidence(store)
     inputs = None
     try:
         inputs = lr.parse_launch_inputs(arguments.launch_inputs.read_bytes())
@@ -331,6 +346,9 @@ def recorded_evidence(
         inputs=inputs,
         r3_record=r3_record,
         r3_binding=r3_binding,
+        negative_evidence=negative,
+        malformed_negative_evidence=malformed_negative,
+        unreadable_negative_evidence=unreadable_negative,
     )
 
 
@@ -356,7 +374,11 @@ def _current_r3_binding() -> Any:
 
 
 def _launch_argv(
-    arguments: argparse.Namespace, cell: vc.CellDefinition, identity: str
+    arguments: argparse.Namespace,
+    cell: vc.CellDefinition,
+    identity: str,
+    *,
+    with_release_mode: bool = True,
 ) -> list[str]:
     assert cell.actor is not None
     argv = [
@@ -386,7 +408,19 @@ def _launch_argv(
     ):
         if value is not None:
             argv += [flag, str(value)]
+    # A negative cell's release mode is the cell definition's, bound into the prepared
+    # specification (and so into the authorization's digest) -- never an owner argument.
+    if (
+        with_release_mode
+        and cell.release_mode is not None
+        and cell.release_mode is not ReleaseMode.NORMAL
+    ):
+        argv += ["--release-mode", cell.release_mode.value.lower()]
     return argv
+
+
+#: The cells the launch tool executes: the positive bootstrap cells and the negative ones.
+_LAUNCH_KINDS: Final[set[vc.CellKind]] = {vc.CellKind.RUNTIME_LAUNCH, vc.CellKind.NEGATIVE_LAUNCH}
 
 
 def _cell(cell_id: str | None, kinds: set[vc.CellKind]) -> vc.CellDefinition:
@@ -403,7 +437,7 @@ def prepare_cell(
     arguments: argparse.Namespace, launch: Any, store: Any, *, now: datetime, root_source: Any
 ) -> vc.PreparedCell:
     """The launch tool's offline preparation for one runtime cell, recorded beside the ledger."""
-    cell = _cell(arguments.prepare_cell, {vc.CellKind.RUNTIME_LAUNCH})
+    cell = _cell(arguments.prepare_cell, _LAUNCH_KINDS)
     identity = arguments.identity
     if identity is None or not identity.startswith("verify-"):
         raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
@@ -432,6 +466,44 @@ def prepare_cell(
             raise CellsRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     return record
+
+
+def _record_negative_evidence(
+    launch: Any,
+    store: Any,
+    cell: vc.CellDefinition,
+    prepared: vc.PreparedCell,
+    mode_argv: list[str],
+    *,
+    now: datetime,
+    root_source: Any,
+) -> None:
+    """Write the negative launch evidence record for a completed negative cell.
+
+    The receipt is read again through the launch tool's own record-and-receipt reader
+    (the same verification ``--complete-row`` performed), so the outcome recorded is
+    the one bound to the launch record; the record is written under an exclusive name.
+    A failure here leaves the ledger row as completed and the cell reads UNBOUND until
+    the evidence is recorded, never PASSED.
+    """
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    assert cell.release_mode is not None
+    try:
+        _store, record, verified = launch._record_and_receipt(
+            launch.parse_arguments(mode_argv), root_source=root_source
+        )
+        document = vc.negative_evidence_document(
+            cell=cell,
+            identity=prepared.identity,
+            specification_digest=record.specification_digest,
+            release_mode=record.release_mode,
+            receipt=verified,
+            recorded_at=now,
+        )
+        store.write_record("negative-launch-evidence", document, at=now)
+    except (launch.LaunchRefusalError, StoreError, ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
 
 def _require_state(
@@ -537,7 +609,7 @@ def main(
         prepared = read_prepared(store)
         states = vc.derive_states(evidence, prepared)
         if arguments.execute_cell is not None:
-            cell = _cell(arguments.execute_cell, {vc.CellKind.RUNTIME_LAUNCH})
+            cell = _cell(arguments.execute_cell, _LAUNCH_KINDS)
             if not arguments.authorized or arguments.authorization is None:
                 raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
             _require_state(states, cell, {vc.CellStatus.PREPARED})
@@ -574,7 +646,7 @@ def main(
             completing = arguments.complete_cell is not None
             cell = _cell(
                 arguments.complete_cell if completing else arguments.verdict_cell,
-                {vc.CellKind.RUNTIME_LAUNCH} if completing else {vc.CellKind.ISOLATION_VERDICT},
+                _LAUNCH_KINDS if completing else {vc.CellKind.ISOLATION_VERDICT},
             )
             if arguments.launch_record is None or arguments.receipt_lines is None:
                 raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
@@ -587,7 +659,9 @@ def main(
                 # matrix resolves the records deterministically afterwards.
                 _require_state(states, cell, {vc.CellStatus.UNEXECUTED, vc.CellStatus.INCONCLUSIVE})
             record = prepared[launch_cell.cell_id]
-            mode_argv = _launch_argv(arguments, launch_cell, record.identity)
+            mode_argv = _launch_argv(
+                arguments, launch_cell, record.identity, with_release_mode=False
+            )
             mode_argv = [
                 a for a in mode_argv if a != "--authorization" and a != str(arguments.authorization)
             ]
@@ -604,6 +678,17 @@ def main(
                 if arguments.reachability_evidence is not None:
                     mode_argv += ["--reachability-evidence", str(arguments.reachability_evidence)]
             code = launch.main(mode_argv, **seams)
+            if (
+                completing
+                and cell.kind is vc.CellKind.NEGATIVE_LAUNCH
+                and code == launch.EXIT_ROW_COMPLETED
+            ):
+                # The row now reads REFUSED and no more. Record which refusal the verified
+                # receipt established -- re-verified against the launch record by the launch
+                # tool's own reader -- so the matrix can hold the cell to the expected one.
+                _record_negative_evidence(
+                    launch, store, cell, record, mode_argv, now=clock(), root_source=root_source
+                )
             evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):

@@ -69,7 +69,9 @@ from kalpamani.data.production.sharadar.parameters import (
 )
 from kalpamani.data.production.sharadar.release import (
     ReleaseError,
+    ReleaseMode,
     build_release_document,
+    mismatched_task_arn,
 )
 from kalpamani.data.production.sharadar.vocabulary import (
     MAX_ADVANCED_PARAMETER_BYTES,
@@ -165,17 +167,24 @@ class LaunchReport:
     #: The placement the launcher verified and the release named -- the task's network
     #: interface, its subnet and the security groups ``DescribeNetworkInterfaces``
     #: reported on it (equal to the compiled set, or the task was misplaced) -- present
-    #: exactly when a release was written. Held for the launch record (the R-2 verdict
-    #: binds the analysis source to this interface and its components to these groups);
-    #: never rendered.
+    #: exactly when the placement was verified and the sequence reached the release
+    #: step (a release is then written in every mode but ``WITHHELD``). Held for the
+    #: launch record (the R-2 verdict binds the analysis source to this interface and
+    #: its components to these groups); never rendered.
     network_interface_id: str | None = None
     subnet_id: str | None = None
     security_group_ids: tuple[str, ...] | None = None
+    #: The release behaviour this sequence applied (proposed ADR-0047). Under
+    #: ``WITHHELD`` no release was written; under ``MISMATCHED`` the release named a
+    #: task ARN derived from, and never equal to, the launched task's.
+    release_mode: ReleaseMode = ReleaseMode.NORMAL
 
     def __post_init__(self) -> None:
         """Closed members and integers only; a handle exactly when a task started."""
         if type(self.outcome) is not LaunchOutcome:
             raise TypeError("outcome must be an exact LaunchOutcome member")
+        if type(self.release_mode) is not ReleaseMode:
+            raise TypeError("release_mode must be an exact ReleaseMode member")
         if type(self.counts) is not OperationCounts:
             raise TypeError("counts must be an exact OperationCounts")
         if self.incident is not None and type(self.incident) is not PlacementIncident:
@@ -199,6 +208,18 @@ class LaunchReport:
             raise ValueError("the verified security groups are a non-empty tuple")
         if self.network_interface_id is not None and self.handle is None:
             raise ValueError("a verified placement belongs to a started task")
+
+    @property
+    def observed_exit_code(self) -> int | None:
+        """The one exit code observed at a terminal state, or ``None``.
+
+        ``None`` for anything but exactly one integer code at ``TASK_TERMINAL``: no
+        terminal state observed, no code reported, or an ambiguous multi-container
+        answer. Never a default.
+        """
+        if self.outcome is not LaunchOutcome.TASK_TERMINAL or len(self.task_exit_codes) != 1:
+            return None
+        return self.task_exit_codes[0]
 
     def __repr__(self) -> str:
         """Outcome and counts of failures. **Never a handle.**"""
@@ -323,6 +344,7 @@ def launch_authorized_run(
     now: Callable[[], datetime],
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
+    release_mode: ReleaseMode = ReleaseMode.NORMAL,
 ) -> LaunchReport:
     """Run the whole launch sequence for one authorized run; one sanitized report.
 
@@ -332,11 +354,28 @@ def launch_authorized_run(
     refusal at any proof stops the sequence with ``REFUSED_IDENTITY`` and a proof
     that raises stops it with ``REFUSED_IDENTITY_UNAVAILABLE``; at a cleanup proof
     either is a cleanup failure for that stage alone, and the primary outcome stands.
+
+    ``release_mode`` (proposed ADR-0047) is ``NORMAL`` for every production launch and
+    the positive verification cells. A negative mode is admitted only for a
+    verification launch -- a compiled verification target and a ``verify-`` identity --
+    and changes exactly one step: under ``WITHHELD`` step 1a writes **no** release and
+    the sequence proceeds to observe the task, which exits ``REFUSED_NO_RELEASE`` at
+    its barrier ceiling; under ``MISMATCHED`` the release written names
+    :func:`mismatched_task_arn` of the launched task -- never the task itself -- and
+    the task exits ``REFUSED_RELEASE_MISMATCH``. Everything else -- the proofs, the
+    input, placement and image verification, the observation, the prescribed cleanup
+    -- is the same sequence, and no retry or relaunch exists in any mode.
     """
     if type(compiled) is not CompiledLaunch or type(adapters) is not LaunchAdapters:
         raise TypeError("compiled and adapters must be exact values")
     if type(authorization) is not LaunchAuthorization:
         raise TypeError("authorization must be an exact LaunchAuthorization")
+    if type(release_mode) is not ReleaseMode:
+        raise TypeError("release_mode must be an exact ReleaseMode member")
+    if release_mode is not ReleaseMode.NORMAL and (
+        not compiled.verification or not authorization.identity.startswith("verify-")
+    ):
+        raise ValueError("a negative release mode is a verification launch's alone")
     constants = constants_for(compiled.actor)
     before = _AdapterCounts.of(adapters)
     identity_calls = 0
@@ -491,41 +530,57 @@ def launch_authorized_run(
             exit_codes = task.exit_codes
             raise _AbortedError(LaunchOutcome.TASK_TERMINAL)
 
-        # Step 1a, completed: the launcher profile writes the release, create-only.
+        # Step 1a, completed: the launcher profile writes the release, create-only --
+        # unless the authorized specification withholds it (the R-1 negative cell: the
+        # task must then refuse at its barrier ceiling, and the launcher only observes).
+        # Under MISMATCHED the release names a derived task ARN that is never the
+        # launched task's. The verified placement is recorded in every mode: it is what
+        # the launcher established, whether or not a release then named it.
         verified_at = now()
-        try:
-            release = build_release_document(
-                actor=compiled.actor,
-                task_arn=task_arn,
-                task_definition_arn=task.task_definition_arn,
-                image_digest=compiled.image_digest,
-                configuration_digest=compiled.configuration_digest,
-                identity=authorization.identity,
-                input_digest=digest,
-                network_interface_id=verified_interface,
-                subnet_id=verified_subnet,
-                verified_at=verified_at,
-            )
-        except ReleaseError:
-            stop_own_task(STOP_REASON_MISPLACED)
-            raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
-        try:
-            adapters.launcher_parameters.create_parameter(
-                constants.release_parameter,
-                release,
-                key_id=compiled.binding_key_arn,
-                expires_at_iso=(verified_at + RELEASE_EXPIRATION).isoformat(),
-            )
-        except ParameterError as error:
-            if error.failure is ParameterFailure.ALREADY_EXISTS:
-                stop_own_task(STOP_REASON_RELEASE_EXISTS)
-                raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_EXISTS) from None
-            stop_own_task(STOP_REASON_RELEASE_EXISTS)
-            raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
-        release_written = True
         released_interface = verified_interface
         released_subnet = verified_subnet
         released_groups = observed_groups
+        if release_mode is ReleaseMode.WITHHELD:
+            release_task_arn = None
+        elif release_mode is ReleaseMode.MISMATCHED:
+            try:
+                release_task_arn = mismatched_task_arn(task_arn)
+            except ValueError:
+                stop_own_task(STOP_REASON_MISPLACED)
+                raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
+        else:
+            release_task_arn = task_arn
+        if release_task_arn is not None:
+            try:
+                release = build_release_document(
+                    actor=compiled.actor,
+                    task_arn=release_task_arn,
+                    task_definition_arn=task.task_definition_arn,
+                    image_digest=compiled.image_digest,
+                    configuration_digest=compiled.configuration_digest,
+                    identity=authorization.identity,
+                    input_digest=digest,
+                    network_interface_id=verified_interface,
+                    subnet_id=verified_subnet,
+                    verified_at=verified_at,
+                )
+            except ReleaseError:
+                stop_own_task(STOP_REASON_MISPLACED)
+                raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
+            try:
+                adapters.launcher_parameters.create_parameter(
+                    constants.release_parameter,
+                    release,
+                    key_id=compiled.binding_key_arn,
+                    expires_at_iso=(verified_at + RELEASE_EXPIRATION).isoformat(),
+                )
+            except ParameterError as error:
+                if error.failure is ParameterFailure.ALREADY_EXISTS:
+                    stop_own_task(STOP_REASON_RELEASE_EXISTS)
+                    raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_EXISTS) from None
+                stop_own_task(STOP_REASON_RELEASE_EXISTS)
+                raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
+            release_written = True
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
@@ -577,6 +632,7 @@ def launch_authorized_run(
         network_interface_id=released_interface,
         subnet_id=released_subnet,
         security_group_ids=released_groups,
+        release_mode=release_mode,
     )
 
 

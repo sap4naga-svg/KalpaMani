@@ -208,6 +208,8 @@ class RecordBinding(StrEnum):
     PLACEMENT_MISMATCH = "PLACEMENT_MISMATCH"
     #: The specification cannot be compiled, so nothing can be held to it.
     UNCOMPILABLE = "UNCOMPILABLE"
+    #: The record's release mode is not the one the specification authorized.
+    MODE_MISMATCH = "MODE_MISMATCH"
 
 
 def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding:
@@ -218,8 +220,9 @@ def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding
     kind and entry agree; when the record's slice and plan digest are exactly the
     specification's workload (``None`` for a build, whose workload names runs); when the
     record's target is the specification's own -- revision, image, configuration and
-    commit; and when any verified placement the record carries is the specification's
-    subnet and its security groups as a set. A record with no verified placement (no
+    commit; when any verified placement the record carries is the specification's
+    subnet and its security groups as a set; and when the record's release mode is the
+    one the specification authorized. A record with no verified placement (no
     release was written) is not held to a placement here; a caller that needs one checks
     for it. The launch tool refuses on anything but ``BOUND`` before completing a row or
     deciding a verdict, and the cell runner reads anything else as unbound evidence.
@@ -254,6 +257,8 @@ def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding
         or frozenset(compiled.security_group_ids) != frozenset(record.security_group_ids or ())
     ):
         return RecordBinding.PLACEMENT_MISMATCH
+    if record.release_mode is not specification.release_mode:
+        return RecordBinding.MODE_MISMATCH
     return RecordBinding.BOUND
 
 

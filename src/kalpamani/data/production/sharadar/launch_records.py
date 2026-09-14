@@ -105,6 +105,7 @@ from kalpamani.data.production.sharadar.release import (
     SUBNET_ID_RE,
     TASK_ARN_RE,
     TASK_DEFINITION_ARN_RE,
+    ReleaseMode,
 )
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
@@ -1013,6 +1014,16 @@ class LaunchSpecification:
     target: LaunchTarget
     placement: dict[str, Any]
     gate_evidence: dict[str, Any]
+    #: The release behaviour the owner authorizes with this specification; a negative
+    #: mode is admissible for a verification launch only (proposed ADR-0047).
+    release_mode: ReleaseMode = ReleaseMode.NORMAL
+
+    def __post_init__(self) -> None:
+        """A negative release mode names a verification launch and nothing else."""
+        if type(self.release_mode) is not ReleaseMode:
+            raise TypeError("release_mode must be an exact ReleaseMode")
+        if self.release_mode is not ReleaseMode.NORMAL and self.kind is not LaunchKind.VERIFICATION:
+            raise ValueError("a negative release mode is a verification launch's alone")
 
     def document(self) -> dict[str, Any]:
         """The canonical document."""
@@ -1027,6 +1038,7 @@ class LaunchSpecification:
             "target": self.target.document(),
             "placement": dict(self.placement),
             "gate_evidence": dict(self.gate_evidence),
+            "release_mode": self.release_mode.value,
         }
 
     @property
@@ -1078,6 +1090,7 @@ _SPECIFICATION_FIELDS: Final[frozenset[str]] = frozenset(
         "target",
         "placement",
         "gate_evidence",
+        "release_mode",
     }
 )
 _PLACEMENT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -1136,6 +1149,12 @@ def parse_specification(raw: object) -> LaunchSpecification:
     identity = _identity(document["identity"])
     if identity_kind(identity) is not kind:
         raise _refuse(LaunchRecordDefect.IDENTITY_KIND_MISMATCH)
+    mode_value = exact_str(document["release_mode"])
+    if mode_value not in {m.value for m in ReleaseMode}:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    release_mode = ReleaseMode(mode_value)
+    if release_mode is not ReleaseMode.NORMAL and kind is not LaunchKind.VERIFICATION:
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     target = _target(document["target"])
     if target is None:
         raise _refuse(LaunchRecordDefect.FIELD_MISSING)
@@ -1231,6 +1250,7 @@ def parse_specification(raw: object) -> LaunchSpecification:
             "r3_applicable": applicable,
             "generation_record_digest": target.generation_record_digest,
         },
+        release_mode=release_mode,
     )
     try:
         compiled = specification.compiled
@@ -1250,13 +1270,19 @@ def build_specification(
     identity: str,
     slice_document: object | None,
     run_identities: list[str] | None,
+    release_mode: ReleaseMode = ReleaseMode.NORMAL,
 ) -> LaunchSpecification:
     """The specification of one launch from the admitted records, or refuse.
 
     The workload is validated the way the input will be: the slice through the accepted
     parser with its plan digest computed by the accepted function; the build runs
-    through the same buildable-row rule the input materialization applies.
+    through the same buildable-row rule the input materialization applies. A negative
+    ``release_mode`` is admitted for a verification launch only.
     """
+    if type(release_mode) is not ReleaseMode:
+        raise TypeError("release_mode must be an exact ReleaseMode")
+    if release_mode is not ReleaseMode.NORMAL and kind is not LaunchKind.VERIFICATION:
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     admitted = admit_identity(ledger, identity, kind=kind)
     compiled, target = compile_launch(inputs, actor=actor, kind=kind)
     if actor is ProductionActor.ACQUISITION:
@@ -1328,6 +1354,7 @@ def build_specification(
         target=target,
         placement=placement,
         gate_evidence=gate_evidence,
+        release_mode=release_mode,
     )
 
 
@@ -1496,6 +1523,8 @@ _LAUNCH_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
         "subnet_id",
         "security_group_ids",
         "specification_digest",
+        "release_mode",
+        "observed_exit_code",
     }
 )
 
@@ -1545,9 +1574,23 @@ class LaunchRecord:
     security_group_ids: tuple[str, ...] | None
     #: The digest of the specification the authorization named and the reservation holds.
     specification_digest: str
+    #: The release behaviour the launcher applied -- the specification's (proposed ADR-0047).
+    release_mode: ReleaseMode = ReleaseMode.NORMAL
+    #: The exit code the launcher itself observed at the task's terminal state, or ``None``
+    #: when it observed no terminal state; the terminal-state confirmation a negative cell
+    #: needs beside the receipt (proposed ADR-0047).
+    observed_exit_code: int | None = None
 
     def __post_init__(self) -> None:
         """The verified placement comes whole, and the record is not earlier than the launch."""
+        if type(self.release_mode) is not ReleaseMode:
+            raise TypeError("release_mode must be an exact ReleaseMode")
+        if self.release_mode is not ReleaseMode.NORMAL and self.kind is not LaunchKind.VERIFICATION:
+            raise ValueError("a negative release mode is a verification launch's alone")
+        if self.observed_exit_code is not None and (
+            type(self.observed_exit_code) is not int or not 0 <= self.observed_exit_code <= 255
+        ):
+            raise ValueError("an observed exit code is an integer 0..255, or None")
         present = {
             self.network_interface_id is None,
             self.subnet_id is None,
@@ -1616,6 +1659,8 @@ class LaunchRecord:
                 None if self.security_group_ids is None else list(self.security_group_ids)
             ),
             "specification_digest": self.specification_digest,
+            "release_mode": self.release_mode.value,
+            "observed_exit_code": self.observed_exit_code,
         }
 
     def __repr__(self) -> str:
@@ -1655,8 +1700,12 @@ def parse_launch_record(raw: object) -> LaunchRecord:
     image = exact_str(document["image_digest"])
     configuration = exact_str(document["configuration_digest"])
     commit = exact_str(document["code_commit"])
+    mode_value = exact_str(document["release_mode"])
+    observed = document["observed_exit_code"]
     if (
-        task_arn is None
+        mode_value not in {m.value for m in ReleaseMode}
+        or (observed is not None and (type(observed) is not int or not 0 <= observed <= 255))
+        or task_arn is None
         or TASK_ARN_RE.fullmatch(task_arn) is None
         or launched_at is None
         or recorded_at is None
@@ -1694,6 +1743,9 @@ def parse_launch_record(raw: object) -> LaunchRecord:
     assert family is not None
     if family.group(2) != entry_family(entry):
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    release_mode = ReleaseMode(mode_value)
+    if release_mode is not ReleaseMode.NORMAL and kind is not LaunchKind.VERIFICATION:
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     covered: Slice | None = None
     plan_digest: str | None = None
     if ENTRY_ACTOR[entry] is ProductionActor.ACQUISITION:
@@ -1724,6 +1776,8 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         subnet_id=subnet,
         security_group_ids=None if groups is None else tuple(groups),
         specification_digest=specification_digest,
+        release_mode=release_mode,
+        observed_exit_code=observed,
     )
 
 
@@ -1866,6 +1920,7 @@ __all__ = [
     "LedgerEvidence",
     "OwnerLedger",
     "OwnerLedgerRow",
+    "ReleaseMode",
     "TaskDefinitionEvidence",
     "admit_identity",
     "append_row",

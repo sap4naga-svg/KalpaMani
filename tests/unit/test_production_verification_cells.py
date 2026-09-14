@@ -35,15 +35,23 @@ from fixtures.production_launch import (
     ledger_row,
     specification_for,
 )
-from fixtures.production_runtime import CANARIES, RUN_ID, encode
+from fixtures.production_runtime import CANARIES, OTHER_RUN_ID, RUN_ID, encode
 from kalpamani.data.contracts.canonical import canonical_bytes
 from kalpamani.data.production.sharadar import launch_records as lr
 from kalpamani.data.production.sharadar import launch_store as ls
 from kalpamani.data.production.sharadar import probe as pp
 from kalpamani.data.production.sharadar import r3_verification as r3
 from kalpamani.data.production.sharadar import verification_cells as vc
-from kalpamani.data.production.sharadar.entry import TaskEntry
+from kalpamani.data.production.sharadar.entry import (
+    EXIT_STATUS,
+    TaskEntry,
+    TaskOutcome,
+    TaskReceipt,
+)
+from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
 from kalpamani.data.production.sharadar.probe import IsolationVerdict, VerdictReason
+from kalpamani.data.production.sharadar.receipts import receipt_line
+from kalpamani.data.production.sharadar.release import ReleaseMode
 
 pytestmark = pytest.mark.unit
 
@@ -134,6 +142,9 @@ def _evidence(
     r3_binding: r3.R3Binding | None = BINDING,
     inputs_digest: str | None = None,
     inputs: lr.LaunchInputs | None = None,
+    negative_evidence: dict[str, tuple[vc.NegativeLaunchEvidence, ...]] | None = None,
+    malformed_negative_evidence: frozenset[str] | set[str] | None = None,
+    unreadable_negative_evidence: int = 0,
 ) -> vc.RecordedEvidence:
     return vc.RecordedEvidence(
         ledger=lr.parse_owner_ledger(encode(ledger_document(rows or []))),
@@ -147,6 +158,9 @@ def _evidence(
         inputs=_inputs(inputs_digest) if inputs is None else inputs,
         r3_record=r3_record,
         r3_binding=r3_binding,
+        negative_evidence=negative_evidence or {},
+        malformed_negative_evidence=frozenset(malformed_negative_evidence or set()),
+        unreadable_negative_evidence=unreadable_negative_evidence,
     )
 
 
@@ -160,12 +174,32 @@ def _prepared(**cells: str) -> dict[str, vc.PreparedCell]:
 
 
 class _Chain:
-    """A complete, bound evidence chain for one runtime cell on the fixtures' records."""
+    """A complete, bound evidence chain for one runtime cell on the fixtures' records.
 
-    def __init__(self, actor: Any = BLD, *, inputs: dict[str, Any] | None = None) -> None:
+    With a negative ``release_mode`` it is the chain of the corresponding negative cell
+    (proposed ADR-0047): the reservation's specification carries the mode, the launch
+    record carries it and the launcher's observed exit code, the ledger row reads
+    ``REFUSED``, and one negative launch evidence record names the expected refusal.
+    """
+
+    def __init__(
+        self,
+        actor: Any = BLD,
+        *,
+        inputs: dict[str, Any] | None = None,
+        release_mode: ReleaseMode = ReleaseMode.NORMAL,
+        identity: str | None = None,
+    ) -> None:
         self.actor = actor
-        self.identity = "verify-" + RUN_ID
-        self.cell_id = "R1-BLD-BOOTSTRAP" if actor is BLD else "R1-ACQ-BOOTSTRAP"
+        self.release_mode = release_mode
+        self.identity = ("verify-" + RUN_ID) if identity is None else identity
+        short = "BLD" if actor is BLD else "ACQ"
+        self.cell_id = {
+            ReleaseMode.NORMAL: f"R1-{short}-BOOTSTRAP",
+            ReleaseMode.WITHHELD: f"R1-{short}-NO-RELEASE",
+            ReleaseMode.MISMATCHED: f"R1-{short}-RELEASE-MISMATCH",
+        }[release_mode]
+        self.cell = vc.definition(self.cell_id)
         self.entry = TaskEntry.BUILD_VERIFY if actor is BLD else TaskEntry.ACQUISITION_VERIFY
         self.inputs_document = launch_inputs_document() if inputs is None else inputs
         self.specification = specification_for(
@@ -174,6 +208,7 @@ class _Chain:
             identity=self.identity,
             inputs=self.inputs_document,
             ledger=ledger_document([ledger_row(RUN_ID)]),
+            release_mode=release_mode,
         )
         self.reservation = ls.Reservation(
             identity=self.identity,
@@ -182,14 +217,46 @@ class _Chain:
             specification=self.specification,
             reserved_at=NOW,
         )
-        self.record = _launch_record(
+        record = _launch_record(
             entry=self.entry,
             identity=self.identity,
             harness=None,
             kind=lr.LaunchKind.VERIFICATION,
             specification=self.specification,
         )
-        self.row = ledger_row(self.identity, actor=actor, kind="verification", outcome="VERIFIED")
+        expected = self.cell.expected_outcome
+        self.record = lr.LaunchRecord(
+            **{
+                **{f: getattr(record, f) for f in lr.LaunchRecord.__slots__},
+                "release_mode": release_mode,
+                "observed_exit_code": (
+                    EXIT_STATUS[TaskOutcome.VERIFIED_BOOTSTRAP]
+                    if expected is None
+                    else EXIT_STATUS[expected]
+                ),
+            }
+        )
+        self.row = ledger_row(
+            self.identity,
+            actor=actor,
+            kind="verification",
+            outcome="VERIFIED" if expected is None else "REFUSED",
+        )
+        self.negative = (
+            None
+            if expected is None
+            else vc.NegativeLaunchEvidence(
+                cell_id=self.cell_id,
+                actor=actor,
+                identity=self.identity,
+                specification_digest=self.specification.digest,
+                release_mode=release_mode,
+                receipt_outcome=expected,
+                counts={"s3_operations": 0, "secret_retrievals": 0, "provider_requests": 0},
+                released=False,
+                recorded_at=NOW,
+            )
+        )
 
     def prepared(self, digest: str | None = None) -> dict[str, vc.PreparedCell]:
         return {
@@ -212,8 +279,33 @@ class _Chain:
                 encode({**self.inputs_document, "r3_verification_digest": record.digest})
             ),
         }
+        if self.negative is not None:
+            fields["negative_evidence"] = {self.specification.digest: (self.negative,)}
         fields.update(overrides)
         return _evidence(**fields)
+
+    def with_bootstrap(self, **overrides: Any) -> vc.RecordedEvidence:
+        """This negative chain's evidence beside its PASSED bootstrap cell's chain."""
+        bootstrap = _Chain(self.actor)
+        fields: dict[str, Any] = {
+            "rows": [ledger_row(RUN_ID), bootstrap.row, self.row],
+            "reservations": {
+                self.identity: self.reservation,
+                bootstrap.identity: bootstrap.reservation,
+            },
+            "launch_records": {self.identity: self.record, bootstrap.identity: bootstrap.record},
+        }
+        fields.update(overrides)
+        return self.evidence(**fields)
+
+    def prepared_with_bootstrap(self) -> dict[str, vc.PreparedCell]:
+        return {**_Chain(self.actor).prepared(), **self.prepared()}
+
+    def negative_record(self, **fields: Any) -> vc.NegativeLaunchEvidence:
+        assert self.negative is not None
+        base = {f: getattr(self.negative, f) for f in vc.NegativeLaunchEvidence.__slots__}
+        base.update(fields)
+        return vc.NegativeLaunchEvidence(**base)
 
 
 def _verdict_document(
@@ -333,9 +425,10 @@ def test_the_r3_cell_passes_only_with_attesting_verified_evidence_named_by_the_i
     assert states["R3"].status is vc.CellStatus.PASSED
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.UNEXECUTED
     assert states["R4-ACQUISITION"].status is vc.CellStatus.UNEXECUTED
+    # The negative cells wait behind their bootstrap cell (proposed ADR-0047).
     for cell_id in ("R1-ACQ-NO-RELEASE", "R1-BLD-RELEASE-MISMATCH"):
         assert states[cell_id].status is vc.CellStatus.BLOCKED
-        assert "withholds" in states[cell_id].reason
+        assert "prerequisite R1-" in states[cell_id].reason
     assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
 
 
@@ -1119,6 +1212,445 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
     assert (
         cells.main(*verdict, "--reachability-evidence", str(evidence))
         == runner.EXIT_REFUSED_CELL_STATE
+    )
+
+
+class TestNegativeCells:
+    """The negative R-1 cells (proposed ADR-0047): the expected refusal passes, nothing else."""
+
+    @pytest.mark.parametrize(
+        ("actor", "mode"),
+        [
+            (BLD, ReleaseMode.WITHHELD),
+            (BLD, ReleaseMode.MISMATCHED),
+            (ACQ, ReleaseMode.WITHHELD),
+            (ACQ, ReleaseMode.MISMATCHED),
+        ],
+        ids=["bld-withheld", "bld-mismatched", "acq-withheld", "acq-mismatched"],
+    )
+    def test_a_bound_expected_refusal_passes_its_negative_cell_only(
+        self, actor: Any, mode: ReleaseMode
+    ) -> None:
+        chain = _Chain(actor, release_mode=mode, identity="verify-" + OTHER_RUN_ID)
+        states = vc.derive_states(chain.with_bootstrap(), chain.prepared_with_bootstrap())
+        assert states[chain.cell_id].status is vc.CellStatus.PASSED, states[chain.cell_id]
+        assert chain.cell.expected_outcome is not None
+        assert chain.cell.expected_outcome.value in states[chain.cell_id].reason
+        # The row stays REFUSED: it is never a successful bootstrap and never buildable.
+        row = chain.with_bootstrap().ledger.row(chain.identity)
+        assert row is not None and row.outcome == "REFUSED" and not row.buildable
+        # Without its bootstrap cell the negative cell waits, whatever evidence exists.
+        alone = vc.derive_states(chain.evidence(), chain.prepared())
+        assert alone[chain.cell_id].status is vc.CellStatus.PASSED
+        assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
+
+    def test_an_unexpected_success_or_another_refusal_fails(self) -> None:
+        chain = _Chain(BLD, release_mode=ReleaseMode.WITHHELD, identity="verify-" + OTHER_RUN_ID)
+        prepared = chain.prepared_with_bootstrap()
+        # The task accepted a release it must have refused: a VERIFIED row.
+        success = chain.with_bootstrap(
+            rows=[
+                ledger_row(RUN_ID),
+                _Chain(BLD).row,
+                ledger_row(chain.identity, actor=BLD, kind="verification", outcome="VERIFIED"),
+            ]
+        )
+        states = vc.derive_states(success, prepared)
+        assert states[chain.cell_id].status is vc.CellStatus.FAILED
+        assert "unexpected success" in states[chain.cell_id].reason
+        assert vc.aggregate(states) is vc.AggregateStatus.FAILED
+        # The wrong refusal: the receipt says RELEASE_MISMATCH under a WITHHELD release.
+        wrong = chain.negative_record(receipt_outcome=TaskOutcome.REFUSED_RELEASE_MISMATCH)
+        other_exit = chain.with_bootstrap(
+            negative_evidence={chain.specification.digest: (wrong,)},
+            launch_records={
+                chain.identity: lr.LaunchRecord(
+                    **{
+                        **{f: getattr(chain.record, f) for f in lr.LaunchRecord.__slots__},
+                        "observed_exit_code": EXIT_STATUS[TaskOutcome.REFUSED_RELEASE_MISMATCH],
+                    }
+                ),
+                _Chain(BLD).identity: _Chain(BLD).record,
+            },
+        )
+        states = vc.derive_states(other_exit, prepared)
+        assert states[chain.cell_id].status is vc.CellStatus.FAILED
+        assert "REFUSED_RELEASE_MISMATCH" in states[chain.cell_id].reason
+        # A refused task that reported a release, a data-plane operation or no counts.
+        for fields in (
+            {"released": True},
+            {"counts": {"s3_operations": 1, "secret_retrievals": 0, "provider_requests": 0}},
+            {"counts": None},
+        ):
+            record = chain.negative_record(**fields)
+            states = vc.derive_states(
+                chain.with_bootstrap(negative_evidence={chain.specification.digest: (record,)}),
+                prepared,
+            )
+            assert states[chain.cell_id].status is vc.CellStatus.FAILED, fields
+        # A halted or misplaced launch is a failed cell, receipt or no receipt.
+        for outcome in ("HALTED", "MISPLACED"):
+            halted = chain.with_bootstrap(
+                rows=[
+                    ledger_row(RUN_ID),
+                    _Chain(BLD).row,
+                    ledger_row(
+                        chain.identity,
+                        actor=BLD,
+                        kind="verification",
+                        outcome=outcome,
+                        evidence="EXIT_CODE_ONLY",
+                    ),
+                ]
+            )
+            states = vc.derive_states(halted, prepared)
+            assert states[chain.cell_id].status is vc.CellStatus.FAILED
+
+    def test_incomplete_missing_or_conflicting_evidence_is_unbound_never_passed(self) -> None:
+        chain = _Chain(ACQ, release_mode=ReleaseMode.MISMATCHED, identity="verify-" + OTHER_RUN_ID)
+        prepared = chain.prepared_with_bootstrap()
+        digest = chain.specification.digest
+        bootstrap = _Chain(ACQ)
+
+        def status(**overrides: Any) -> vc.CellState:
+            return vc.derive_states(chain.with_bootstrap(**overrides), prepared)[chain.cell_id]
+
+        # No evidence record yet: the receipt verified, but which refusal it was is not
+        # recorded.
+        state = status(negative_evidence={})
+        assert state.status is vc.CellStatus.UNBOUND and "--complete-cell" in state.reason
+        # Two records disagreeing; malformed or unreadable evidence.
+        wrong = chain.negative_record(receipt_outcome=TaskOutcome.REFUSED_NO_RELEASE)
+        assert status(negative_evidence={digest: (chain.negative, wrong)}).status is (
+            vc.CellStatus.UNBOUND
+        )
+        assert status(malformed_negative_evidence={digest}).status is vc.CellStatus.UNBOUND
+        assert status(unreadable_negative_evidence=1).status is vc.CellStatus.UNBOUND
+        # Evidence for another cell, identity or mode does not bind.
+        assert chain.negative is not None
+        for fields in (
+            {"cell_id": "R1-ACQ-NO-RELEASE", "release_mode": ReleaseMode.WITHHELD},
+            {"identity": "verify-" + RUN_ID},
+        ):
+            record = chain.negative_record(**fields)
+            assert status(negative_evidence={digest: (record,)}).status is vc.CellStatus.UNBOUND
+        # The launcher observed no terminal state, or another exit code.
+        for observed in (None, EXIT_STATUS[TaskOutcome.REFUSED_NO_RELEASE], 0):
+            observed_record = lr.LaunchRecord(
+                **{
+                    **{f: getattr(chain.record, f) for f in lr.LaunchRecord.__slots__},
+                    "observed_exit_code": observed,
+                }
+            )
+            state = status(
+                launch_records={
+                    chain.identity: observed_record,
+                    bootstrap.identity: bootstrap.record,
+                }
+            )
+            assert state.status is vc.CellStatus.UNBOUND and "terminal" in state.reason, observed
+        # The reservation carries the ordinary mode: the launch was not the negative one.
+        ordinary = ls.Reservation(
+            identity=chain.identity,
+            actor=ACQ,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=specification_for(
+                actor=ACQ, kind="verification", identity=chain.identity
+            ),
+            reserved_at=NOW,
+        )
+        state = status(
+            reservations={chain.identity: ordinary, bootstrap.identity: bootstrap.reservation}
+        )
+        assert state.status is vc.CellStatus.UNBOUND
+        # A record whose mode is not the specification's does not bind (MODE_MISMATCH).
+        crossed = lr.LaunchRecord(
+            **{
+                **{f: getattr(chain.record, f) for f in lr.LaunchRecord.__slots__},
+                "release_mode": ReleaseMode.WITHHELD,
+            }
+        )
+        state = status(
+            launch_records={chain.identity: crossed, bootstrap.identity: bootstrap.record}
+        )
+        assert state.status is vc.CellStatus.UNBOUND and "MODE_MISMATCH" in state.reason
+        # Missing reservation, record or placement.
+        assert status(reservations={bootstrap.identity: bootstrap.reservation}).status is (
+            vc.CellStatus.UNBOUND
+        )
+        assert status(launch_records={bootstrap.identity: bootstrap.record}).status is (
+            vc.CellStatus.UNBOUND
+        )
+        # A REFUSED row from the exit code alone awaits its receipt.
+        launched = status(
+            rows=[
+                ledger_row(RUN_ID),
+                bootstrap.row,
+                ledger_row(
+                    chain.identity,
+                    actor=ACQ,
+                    kind="verification",
+                    outcome="REFUSED",
+                    evidence="EXIT_CODE_ONLY",
+                ),
+            ]
+        )
+        assert launched.status is vc.CellStatus.LAUNCHED
+
+    def test_a_changed_registration_makes_the_refusal_historical(self) -> None:
+        chain = _Chain(BLD, release_mode=ReleaseMode.WITHHELD, identity="verify-" + OTHER_RUN_ID)
+        inputs = launch_inputs_document()
+        inputs["actors"]["build"]["verification"]["code_commit"] = "f" * 40
+        r3_record = _r3_record()
+        inputs["r3_verification_digest"] = r3_record.digest
+        states = vc.derive_states(
+            chain.with_bootstrap(inputs=lr.parse_launch_inputs(encode(inputs))),
+            chain.prepared_with_bootstrap(),
+        )
+        assert states[chain.cell_id].status is vc.CellStatus.HISTORICAL
+        assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.HISTORICAL
+
+    def test_a_positive_cell_prepared_under_a_negative_mode_does_not_pass(self) -> None:
+        negative = _Chain(BLD, release_mode=ReleaseMode.WITHHELD)
+        positive = _Chain(BLD)
+        # The positive cell's prepared digest is a WITHHELD specification's, with a
+        # VERIFIED row and a record carrying the same mode: still not a bootstrap pass.
+        record = lr.LaunchRecord(
+            **{
+                **{f: getattr(negative.record, f) for f in lr.LaunchRecord.__slots__},
+                "observed_exit_code": 18,
+            }
+        )
+        evidence = _evidence(
+            rows=[ledger_row(RUN_ID), positive.row],
+            reservations={negative.identity: negative.reservation},
+            launch_records={negative.identity: record},
+            r3_record=_r3_record(),
+            inputs=positive.evidence().inputs,
+        )
+        states = vc.derive_states(
+            evidence,
+            negative.prepared(digest=None)
+            | {
+                "R1-BLD-BOOTSTRAP": vc.PreparedCell(
+                    cell_id="R1-BLD-BOOTSTRAP",
+                    identity=negative.identity,
+                    specification_digest=negative.specification.digest,
+                    prepared_at=NOW,
+                )
+            },
+        )
+        assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.UNBOUND
+        assert "release mode" in states["R1-BLD-BOOTSTRAP"].reason
+
+    def test_the_negative_evidence_contract_is_closed(self) -> None:
+        chain = _Chain(BLD, release_mode=ReleaseMode.MISMATCHED)
+        assert chain.negative is not None
+        document = chain.negative.document()
+        assert vc.parse_negative_launch_evidence(canonical_bytes(document)) == chain.negative
+        mutations: list[Any] = [
+            lambda d: d.__setitem__("cell_id", "R1-BLD-BOOTSTRAP"),
+            lambda d: d.__setitem__("actor", "acquisition"),
+            lambda d: d.__setitem__("identity", RUN_ID),
+            lambda d: d.__setitem__("release_mode", "normal"),
+            lambda d: d.__setitem__("receipt_outcome", "VERIFIED"),
+            lambda d: d.__setitem__("counts", {"s3_operations": 0}),
+            lambda d: d.__setitem__(
+                "counts", {"s3_operations": True, "secret_retrievals": 0, "provider_requests": 0}
+            ),
+            lambda d: d.__setitem__("released", "no"),
+            lambda d: d.pop("recorded_at"),
+            lambda d: d.__setitem__("extra", 1),
+        ]
+        for mutate in mutations:
+            broken = dict(document)
+            mutate(broken)
+            with pytest.raises(ValueError):
+                vc.parse_negative_launch_evidence(canonical_bytes(broken))
+        with pytest.raises(ValueError):
+            vc.negative_evidence_document(
+                cell=vc.definition("R1-BLD-BOOTSTRAP"),
+                identity=chain.identity,
+                specification_digest=chain.specification.digest,
+                release_mode=ReleaseMode.NORMAL,
+                receipt=None,  # type: ignore[arg-type]
+                recorded_at=NOW,
+            )
+
+
+def _refused_receipt_lines(record: lr.LaunchRecord, outcome: TaskOutcome) -> str:
+    """The receipt a task refusing at its barrier would print, bound to ``record``."""
+    runner_outcome = {
+        TaskOutcome.REFUSED_NO_RELEASE: RunnerOutcome.REFUSED_NO_RELEASE,
+        TaskOutcome.REFUSED_RELEASE_MISMATCH: RunnerOutcome.REFUSED_RELEASE_MISMATCH,
+    }[outcome]
+    receipt = TaskReceipt(
+        entry=record.entry,
+        outcome=outcome,
+        runner=runner_outcome,
+        counts=OperationCounts(parameter_reads=3),
+        counts_observed=True,
+        cleanup_failures=(),
+        code_commit=record.code_commit,
+        configuration_digest=record.configuration_digest,
+    )
+    return receipt_line(receipt) + "\n"
+
+
+def test_a_negative_cell_end_to_end_through_the_runner_on_fakes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Prepare, execute (the launch tool under WITHHELD), complete: the cell passes.
+
+    No release is written by the launcher, one task runs and is observed to its refusal,
+    the receipt completes the row to REFUSED, the negative evidence record is written,
+    and the matrix reads the cell PASSED -- with the bootstrap cell still PASSED and
+    the identity never buildable.
+    """
+    case = TestIsolationVerdict()
+    scenario, record_path, lines_path = case._verify_scenario(tmp_path)
+    # The bootstrap cell: its record in the records directory, the RUN_ID row the build
+    # workload needs, the prepared-cells document, and the R-3 record.
+    scenario.records.mkdir(parents=True, exist_ok=True)
+    (scenario.records / "launch-record-20260905T020500Z-0001.json").write_bytes(
+        record_path.read_bytes()
+    )
+    rows = json.loads(scenario.ledger.read_bytes())["rows"]
+    scenario.ledger.write_bytes(encode(ledger_document([ledger_row(RUN_ID), *rows])))
+    cells = _Cells.__new__(_Cells)
+    cells.scenario = scenario
+    cells.record = _r3_record()
+    cells.r3 = scenario.root / "r3-record.json"
+    cells.r3.write_bytes(canonical_bytes(cells.record.document()))
+    inputs = scenario.inputs_document()
+    inputs["r3_verification_digest"] = cells.record.digest
+    scenario.inputs.write_bytes(encode(inputs))
+    reservation = scenario.reservation()
+    assert reservation is not None
+    scenario.ledger.with_name("ledger.json" + runner.CELLS_SUFFIX).write_bytes(
+        canonical_bytes(
+            vc.cells_document(
+                [
+                    vc.PreparedCell(
+                        cell_id="R1-BLD-BOOTSTRAP",
+                        identity=scenario.identity,
+                        specification_digest=reservation["specification_digest"],
+                        prepared_at=NOW,
+                    )
+                ]
+            )
+        )
+    )
+    complete_bootstrap = [
+        *cells.base(),
+        "--complete-cell",
+        "R1-BLD-BOOTSTRAP",
+        "--launch-record",
+        str(record_path),
+        "--receipt-lines",
+        str(lines_path),
+    ]
+    assert cells.main(*complete_bootstrap) == launch.EXIT_ROW_COMPLETED
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=UNEXECUTED" in out
+
+    # Prepare the negative cell under its own identity: the specification carries the
+    # WITHHELD mode, so the digest the owner authorizes covers it.
+    identity = "verify-synthetic-production-build-0002"
+    prepare = [
+        *cells.base(),
+        "--prepare-cell",
+        "R1-BLD-NO-RELEASE",
+        "--identity",
+        identity,
+        *cells.cell_argv(),
+    ]
+    assert cells.main(*prepare) == runner.EXIT_PREPARED
+    out = capsys.readouterr().out
+    digest = out.split("specification_digest=")[1].split()[0]
+    specification = scenario.store().reservation(identity)
+    assert specification is None  # prepared, not reserved
+    written = json.loads(scenario.files("launch-specification")[-1].read_bytes())
+    assert written["release_mode"] == "WITHHELD" and written["identity"] == identity
+    assert lr.parse_specification(encode(written)).digest == digest
+    # The ordinary command line cannot smuggle a mode into the positive cell.
+    assert (
+        cells.main(
+            *cells.base(),
+            "--prepare-cell",
+            "R1-BLD-BOOTSTRAP",
+            "--identity",
+            "verify-synthetic-production-build-0003",
+            *cells.cell_argv(),
+            "--release-mode",
+            "withheld",
+        )
+        == runner.EXIT_REFUSED_ARGUMENTS
+    )
+
+    # Execute: the fake task exits 15 (REFUSED_NO_RELEASE); the launcher writes no release.
+    scenario.authorize(identity=identity, specification_digest=digest)
+    scenario.ecs.descriptions[-1]["containers"][0]["exitCode"] = 15
+    execute = [
+        *cells.base(),
+        "--execute-cell",
+        "R1-BLD-NO-RELEASE",
+        *cells.cell_argv(),
+        "--authorization",
+        str(scenario.authorization),
+        runner.AUTHORIZATION_FLAG,
+    ]
+    assert cells.main(*execute) == launch.EXIT_LAUNCH_TERMINAL
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=LAUNCHED" in out
+    assert len(scenario.ecs.names("run_task")) == 1
+    assert scenario.clients.launcher_ssm.names("put_parameter") == []
+    assert len(scenario.clients.human_ssm.names("put_parameter")) == 1
+    row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row["outcome"] == "REFUSED" and row["evidence"] == "EXIT_CODE_ONLY"
+    negative_record_path = scenario.files("launch-record")[-1]
+    record = lr.parse_launch_record(negative_record_path.read_bytes())
+    assert record.release_mode is ReleaseMode.WITHHELD and record.observed_exit_code == 15
+    # Never twice.
+    assert cells.main(*execute) == runner.EXIT_REFUSED_CELL_STATE
+    assert len(scenario.ecs.names("run_task")) == 1
+
+    # Complete with the refused receipt: the row reads REFUSED / RECEIPT_VERIFIED, the
+    # negative evidence record is written, the cell PASSED.
+    lines = scenario.root / "negative-receipt.txt"
+    lines.write_text(_refused_receipt_lines(record, TaskOutcome.REFUSED_NO_RELEASE), "utf-8")
+    complete = [
+        *cells.base(),
+        "--complete-cell",
+        "R1-BLD-NO-RELEASE",
+        "--launch-record",
+        str(negative_record_path),
+        "--receipt-lines",
+        str(lines),
+    ]
+    assert cells.main(*complete) == launch.EXIT_ROW_COMPLETED
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=PASSED" in out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "aggregate=INCOMPLETE" in out
+    evidence_files = scenario.files("negative-launch-evidence")
+    assert len(evidence_files) == 1
+    parsed = vc.parse_negative_launch_evidence(evidence_files[0].read_bytes())
+    assert parsed.receipt_outcome is TaskOutcome.REFUSED_NO_RELEASE and not parsed.released
+    assert parsed.data_plane_operations == 0 and parsed.release_mode is ReleaseMode.WITHHELD
+    row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row["outcome"] == "REFUSED" and row["evidence"] == "RECEIPT_VERIFIED"
+    # Completion is evidence recording only: no task, no client.
+    assert len(scenario.ecs.names("run_task")) == 1
+    for canary in (*CANARIES, identity):
+        assert canary not in out
+    # A wrong receipt -- the mismatch refusal handed for the withheld cell -- would have
+    # completed the row all the same; the matrix then reads the cell FAILED, never PASSED.
+    wrong = scenario.root / "wrong-receipt.txt"
+    wrong.write_text(_refused_receipt_lines(record, TaskOutcome.REFUSED_RELEASE_MISMATCH), "utf-8")
+    assert cells.main(*complete[:-2], "--receipt-lines", str(wrong)) == (
+        runner.EXIT_REFUSED_CELL_STATE
     )
 
 

@@ -39,6 +39,7 @@ from fixtures.production_runtime import (
     interface_entry,
     revision_arn,
     task_entry,
+    verification_revision_arn,
 )
 from kalpamani.data.production.sharadar import compute as pc
 from kalpamani.data.production.sharadar import launcher as pl
@@ -56,8 +57,12 @@ from kalpamani.data.production.sharadar.parameters import (
     SsmParameterAdapter,
 )
 from kalpamani.data.production.sharadar.release import (
+    MISMATCH_DEFECTS,
+    ReleaseError,
     ReleaseExpectation,
+    ReleaseMode,
     decode_release,
+    mismatched_task_arn,
     verify_release,
 )
 from kalpamani.data.production.sharadar.vocabulary import (
@@ -966,3 +971,153 @@ class TestCompiledLaunch:
         assert info.value.failure is pc.ComputeFailure.NOT_FOUND and info.value.__cause__ is None
         assert "synthetic backend message" not in str(info.value)
         assert pc.classify_compute_failure(RuntimeError()) is pc.ComputeFailure.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# The negative release modes (proposed ADR-0047): withheld, mismatched
+# ---------------------------------------------------------------------------
+
+
+def _verification_scenario(actor: ProductionActor, *, exit_code: int) -> _Scenario:
+    """A verification launch: the verification revision, a ``verify-`` identity."""
+    scenario = _Scenario(actor)
+    revision = verification_revision_arn(actor)
+    scenario.compiled = compiled_launch(actor, task_definition_arn=revision)
+    for description in scenario.ecs.descriptions:
+        description["taskDefinitionArn"] = revision
+        if description["lastStatus"] == "STOPPED":
+            description["containers"][0]["exitCode"] = exit_code
+    assert scenario.ecs.run_response is not None
+    scenario.ecs.run_response["tasks"][0]["taskDefinitionArn"] = revision
+    scenario.authorization = pl.LaunchAuthorization(
+        identity="verify-" + scenario.authorization.identity,
+        input_bytes=scenario.authorization.input_bytes,
+    )
+    return scenario
+
+
+def _run(scenario: _Scenario, mode: ReleaseMode) -> pl.LaunchReport:
+    return pl.launch_authorized_run(
+        compiled=scenario.compiled,
+        adapters=scenario.adapters(),
+        authorization=scenario.authorization,
+        identity_proof=scenario.proof,
+        now=scenario.clock.now,
+        monotonic=scenario.clock.monotonic,
+        sleep=scenario.clock.sleep,
+        release_mode=mode,
+    )
+
+
+class TestNegativeReleaseModes:
+    @pytest.mark.parametrize("actor", (ACQ, BLD), ids=lambda a: a.value)
+    def test_withheld_writes_no_release_and_still_observes_and_cleans_up(
+        self, actor: ProductionActor
+    ) -> None:
+        scenario = _verification_scenario(actor, exit_code=15)
+        report = _run(scenario, ReleaseMode.WITHHELD)
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL
+        assert report.release_mode is ReleaseMode.WITHHELD
+        assert report.observed_exit_code == 15
+        # The input was written and deleted; no release was ever created or deleted.
+        assert scenario.launcher_ssm.names("put_parameter") == []
+        assert scenario.launcher_ssm.names("delete_parameter") == []
+        assert len(scenario.human_ssm.names("put_parameter")) == 1
+        assert len(scenario.human_ssm.names("delete_parameter")) == 1
+        # The verified placement is recorded all the same -- it is what the launcher
+        # established -- and one task was started, observed to its end, never stopped.
+        assert report.network_interface_id == INTERFACE_ID and report.subnet_id == SUBNET_ID
+        assert report.counts.run_task == 1 and report.counts.stop_task == 0
+        scenario.assert_counts_match_call_logs(report)
+
+    @pytest.mark.parametrize("actor", (ACQ, BLD), ids=lambda a: a.value)
+    def test_mismatched_writes_a_release_the_launched_task_can_only_refuse(
+        self, actor: ProductionActor
+    ) -> None:
+        scenario = _verification_scenario(actor, exit_code=16)
+        written: dict[str, bytes] = {}
+        original_put = scenario.launcher_ssm.put_parameter
+
+        def capture(**kwargs: Any) -> dict[str, Any]:
+            written[kwargs["Name"]] = kwargs["Value"].encode("utf-8")
+            return original_put(**kwargs)
+
+        scenario.launcher_ssm.put_parameter = capture  # type: ignore[method-assign]
+        report = _run(scenario, ReleaseMode.MISMATCHED)
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL
+        assert report.release_mode is ReleaseMode.MISMATCHED
+        assert report.observed_exit_code == 16
+        release = decode_release(written[scenario.constants.release_parameter])
+        assert release["task_arn"] == mismatched_task_arn(TASK_ARN) != TASK_ARN
+        # Verified against the launched task's own expectation, the release mismatches;
+        # verified against the derived ARN, everything else in it is the launch's own.
+        expectation = ReleaseExpectation(
+            actor=actor,
+            task_arn=TASK_ARN,
+            task_definition_arn=verification_revision_arn(actor),
+            image_digest=IMAGE_DIGEST,
+            configuration_digest=CONFIGURATION_DIGEST,
+            identity=scenario.authorization.identity,
+            input_digest=input_digest(scenario.authorization.input_bytes),
+        )
+        with pytest.raises(ReleaseError) as info:
+            verify_release(release, expectation=expectation, now=scenario.clock.now())
+        assert info.value.defect in MISMATCH_DEFECTS
+        derived = ReleaseExpectation(
+            actor=actor,
+            task_arn=mismatched_task_arn(TASK_ARN),
+            task_definition_arn=verification_revision_arn(actor),
+            image_digest=IMAGE_DIGEST,
+            configuration_digest=CONFIGURATION_DIGEST,
+            identity=scenario.authorization.identity,
+            input_digest=input_digest(scenario.authorization.input_bytes),
+        )
+        assert verify_release(release, expectation=derived, now=scenario.clock.now())
+        # The mismatched release is deleted in the prescribed cleanup like any other.
+        assert len(scenario.launcher_ssm.names("delete_parameter")) == 1
+        scenario.assert_counts_match_call_logs(report)
+
+    def test_a_negative_mode_belongs_to_a_verification_launch_only(self) -> None:
+        production = _Scenario(ACQ)
+        for mode in (ReleaseMode.WITHHELD, ReleaseMode.MISMATCHED):
+            with pytest.raises(ValueError, match="verification"):
+                _run(production, mode)
+        # A verification target under a production identity is refused as well.
+        crossed = _verification_scenario(ACQ, exit_code=15)
+        crossed.authorization = pl.LaunchAuthorization(
+            identity=RUN_ID, input_bytes=crossed.authorization.input_bytes
+        )
+        with pytest.raises(ValueError, match="verification"):
+            _run(crossed, ReleaseMode.WITHHELD)
+        # Nothing was asked of any fake by a refused call.
+        assert production.ecs.calls == [] and crossed.ecs.calls == []
+        with pytest.raises(TypeError):
+            _run(production, "WITHHELD")  # type: ignore[arg-type]
+
+    def test_the_ordinary_mode_is_unchanged_and_is_the_default(self) -> None:
+        scenario = _Scenario(ACQ)
+        report = scenario.run()
+        assert report.release_mode is ReleaseMode.NORMAL and report.observed_exit_code == 0
+        assert len(scenario.launcher_ssm.names("put_parameter")) == 1
+
+    def test_the_derived_task_arn_is_never_the_launched_one(self) -> None:
+        derived = mismatched_task_arn(TASK_ARN)
+        assert derived != TASK_ARN and derived.rsplit("/", 1)[0] == TASK_ARN.rsplit("/", 1)[0]
+        assert mismatched_task_arn(TASK_ARN) == derived
+        assert mismatched_task_arn(OTHER_TASK_ARN) != derived
+        with pytest.raises(ValueError):
+            mismatched_task_arn("not-an-arn")
+
+    def test_observed_exit_code_is_the_one_terminal_code_or_none(self) -> None:
+        scenario = _verification_scenario(ACQ, exit_code=15)
+        scenario.ecs.descriptions[-1]["containers"][0]["exitCode"] = None
+        report = _run(scenario, ReleaseMode.WITHHELD)
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL and report.observed_exit_code is None
+        timed_out = _verification_scenario(ACQ, exit_code=15)
+        timed_out.ecs.descriptions[-1] = task_entry(
+            ACQ, status="RUNNING", attachment_status="ATTACHED"
+        )
+        timed_out.ecs.descriptions[-1]["taskDefinitionArn"] = verification_revision_arn(ACQ)
+        report = _run(timed_out, ReleaseMode.WITHHELD)
+        assert report.outcome is LaunchOutcome.OBSERVATION_TIMEOUT
+        assert report.observed_exit_code is None
