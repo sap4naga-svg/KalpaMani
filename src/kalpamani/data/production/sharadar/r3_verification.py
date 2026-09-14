@@ -1,6 +1,6 @@
 """R-3 -- server-side conditional-write verification, executed on an injected client.
 
-**ADR-0036 §2.7 / §3 (the R-3 procedure), proposed ADR-0046 (the record).** The
+**ADR-0036 §2.7 / §3 (the R-3 procedure), ADR-0046 (the record).** The
 procedure is transcribed from the accepted text and nothing is added to it: one
 identity proof first (the tool's, not this module's), then **nine expected-path S3
 operations** under ``_verification/<stamp>/`` with a fixed 64-byte synthetic marker, each

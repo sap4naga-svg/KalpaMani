@@ -1,7 +1,8 @@
 """The verification cell matrix: the required cells, and each one's state derived from records.
 
 **ADR-0036 §3 (L3 cells R-1 … R-9), ADR-0045 (the verification entries, the R-2 verdict rule,
-the launch tool), readiness §4.3 (S5, S8, S9); proposed ADR-0046 (this matrix and its state).**
+the launch tool), readiness §4.3 (S5, S8, S9); ADR-0046 (this matrix and its state); proposed
+ADR-0047 (the negative cells and the permission subcells).**
 
 Nothing here launches, reserves, reads a receipt or decides a verdict: those are the
 accepted launch tool's, the reservation store's, the receipt validator's and the
