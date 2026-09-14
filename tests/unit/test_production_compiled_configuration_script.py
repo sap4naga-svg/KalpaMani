@@ -225,7 +225,7 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
     # into it; the working root is the task definitions' tmpfs path; the build backend
     # comes from the pinned base, never from an unpinned fetch during the wheel build.
     assert "mkdir --mode=0555 /etc/kalpamani" in dockerfile
-    assert "mkdir --mode=0700 /work && chown 10001:10001 /work" in dockerfile
+    assert "mkdir --mode=1777 /work" in dockerfile and "chown 10001:10001 /work" not in dockerfile
     assert "pip install --no-deps --no-build-isolation ." in dockerfile
     assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
     assert "BUILD_BACKEND" in dockerfile

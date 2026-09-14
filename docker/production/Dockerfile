@@ -48,13 +48,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # the image says the same number and the number has a passwd entry. The task holds no
 # shell session (ecs:ExecuteCommand is denied) and the root filesystem is read-only under
 # the task definition; the only writable space is the task definition's tmpfs at /work,
-# which the entrypoint uses as its working root. The mount point is created here, owned
-# by the runtime user, so the path exists in a local container that carries no tmpfs.
-# The configuration directory is created here with mode 0555 -- see the target stages.
+# which the entrypoint uses as its working root. The mount point is created here with
+# /tmp's mode (1777, sticky): a container runtime that mounts the tmpfs over an existing
+# directory may copy the directory's MODE onto the tmpfs while leaving it root-owned
+# (Docker does; a 0700 mount point made the tmpfs unwritable by uid 10001 in the local
+# verification), and a runtime that does not copy it defaults to 1777 -- so the runtime
+# user can create its working directory under either behaviour, and a local container
+# that carries no tmpfs still has the path. The configuration directory is created here
+# with mode 0555 -- see the target stages.
 RUN groupadd --system --gid 10001 kalpamani \
     && useradd --system --uid 10001 --gid 10001 --no-create-home \
         --shell /usr/sbin/nologin kalpamani \
-    && mkdir --mode=0700 /work && chown 10001:10001 /work \
+    && mkdir --mode=1777 /work \
     && mkdir --mode=0555 /etc/kalpamani
 
 WORKDIR /opt/kalpamani
