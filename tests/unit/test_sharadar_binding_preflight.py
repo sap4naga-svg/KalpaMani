@@ -2339,12 +2339,15 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
     owner-side launch tool proposed with ADR-0045 is the sixth, constructing its
     four workstation clients only inside the authorized branch, after the flag,
     every record and the authorization are admitted; and the R-3 verification tool
-    proposed with ADR-0046 is the seventh, constructing one S3 client under the
+    accepted with ADR-0046 is the seventh, constructing one S3 client under the
     foundation control profile only inside its authorized branch, after the identity
-    gate and the environment binding. Every one is named here, so an **eighth**
-    arriving anywhere under ``src/``, ``scripts/`` or ``tests/`` still fails.
+    gate and the environment binding; and the R-4..R-9 permission-subcell tool proposed
+    with ADR-0047 is the eighth, constructing one principal's clients only inside its
+    authorized branch, after the flag, the pinned profile, the identity proof, the
+    bindings and the attempt record. Every one is named here, so a **ninth** arriving
+    anywhere under ``src/``, ``scripts/`` or ``tests/`` still fails.
 
-    **All seven are in ``scripts/``, and that is the property that matters.** No
+    **All eight are in ``scripts/``, and that is the property that matters.** No
     module under ``src/`` constructs a client, which is checked separately and is
     what keeps the data platform free of ambient credential discovery.
     """
@@ -2359,6 +2362,7 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         SCRIPTS / "production_task_entrypoint.py",
         SCRIPTS / "production_launch.py",
         SCRIPTS / "production_r3_verification.py",
+        SCRIPTS / "production_permission_cells.py",
         Path(__file__).resolve(),
         SCRIPTS / "phase3_docs_audit.py",
         # Asserts the absence of a client in those entry points, so it necessarily
@@ -2372,6 +2376,9 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         # retry budget and classification at the wire (PR #105); it refuses any
         # profile-based session and sends nothing.
         PROJECT_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
+        # The same, for the permission-subcell adapter (proposed ADR-0047): invented
+        # static credentials, the HTTP transport replaced, any profile session refused.
+        PROJECT_ROOT / "tests" / "unit" / "test_production_permission_cells.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):

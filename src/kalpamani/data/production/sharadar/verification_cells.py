@@ -72,6 +72,13 @@ from kalpamani.data.production.sharadar.launch_records import (
     compile_launch,
 )
 from kalpamani.data.production.sharadar.launch_store import RecordBinding, Reservation, bind_record
+from kalpamani.data.production.sharadar.permission_cells import (
+    PermissionEvidence,
+    SubcellState,
+    SubcellStatus,
+    derive_subcell,
+    subcells_of,
+)
 from kalpamani.data.production.sharadar.probe import (
     RESOLVABLE_INSUFFICIENCIES,
     IsolationVerdict,
@@ -174,10 +181,11 @@ _NEGATIVE: Final = (
     "record and terminal state, with zero data-plane operations"
 )
 _OWNER_RUN: Final = (
-    "not orchestrated by this runner: L2 SimulatePrincipalPolicy per identity-policy cell and "
-    "L3 one counted request per cell with synthetic objects, owner-run under the cell's "
-    "principal (readiness S8); a cell decided by simulation only is recorded simulated, "
-    "never verified"
+    "scripts/production_permission_cells.py --execute-subcell <id> per subcell (one operation, "
+    "one principal, one attempt; proposed ADR-0047) and --cleanup afterwards; the cell passes "
+    "only when every subcell is matched at runtime under the current binding and every "
+    "created object is confirmed removed; a blocked subcell (task role, deletion role) blocks "
+    "the cell, and simulation never passes one"
 )
 
 #: The required cells, enumerated from ADR-0036 §3 and readiness §4.3 (S5, S8, S9).
@@ -700,6 +708,8 @@ class RecordedEvidence:
     malformed_negative_evidence: frozenset[str] = frozenset()
     #: negative-evidence files that could not be decoded at all.
     unreadable_negative_evidence: int = 0
+    #: the R-4 .. R-9 permission records, attempts and cleanups, with the current binding.
+    permission: PermissionEvidence = field(default_factory=PermissionEvidence)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -711,6 +721,8 @@ class CellState:
     reason: str
     identity: str | None
     specification_digest: str | None
+    #: For a permission cell, every subcell's derived state, in catalogue order.
+    subcells: tuple[SubcellState, ...] = ()
 
     def document(self) -> dict[str, Any]:
         """The closed block."""
@@ -1240,18 +1252,84 @@ def derive_states(
                 )
             states[cell.cell_id] = state
             continue
-        states[cell.cell_id] = CellState(
+        assert cell.kind is CellKind.PERMISSION_MATRIX
+        if blocked:
+            states[cell.cell_id] = CellState(
+                cell_id=cell.cell_id,
+                status=CellStatus.BLOCKED,
+                reason=f"prerequisite {blocked[0]} is {states[blocked[0]].status.value}",
+                identity=None,
+                specification_digest=None,
+            )
+            continue
+        states[cell.cell_id] = _permission_state(cell, evidence, states)
+    return states
+
+
+#: The cell status each subcell status contributes, in precedence order: the first status
+#: any subcell holds decides the cell. A cell is PASSED only when every subcell is.
+_SUBCELL_PRECEDENCE: Final[tuple[tuple[SubcellStatus, CellStatus], ...]] = (
+    (SubcellStatus.FAILED, CellStatus.FAILED),
+    (SubcellStatus.UNBOUND, CellStatus.UNBOUND),
+    (SubcellStatus.BLOCKED, CellStatus.BLOCKED),
+    (SubcellStatus.INTERRUPTED, CellStatus.INTERRUPTED),
+    (SubcellStatus.HISTORICAL, CellStatus.HISTORICAL),
+    (SubcellStatus.CLEANUP_UNRESOLVED, CellStatus.INCONCLUSIVE),
+    (SubcellStatus.UNDECIDED, CellStatus.INCONCLUSIVE),
+    (SubcellStatus.AWAITING_R1, CellStatus.UNEXECUTED),
+    (SubcellStatus.UNEXECUTED, CellStatus.UNEXECUTED),
+)
+
+
+def _permission_state(
+    cell: CellDefinition, evidence: RecordedEvidence, states: dict[str, CellState]
+) -> CellState:
+    """A permission cell from its subcells: PASSED only when every subcell is.
+
+    Every other status is decided by precedence over the subcells' statuses -- a
+    failed subcell fails the cell whatever the others read; a blocked subcell (a task
+    role with no probe entry, the deletion role with no execution path) blocks it;
+    unresolved cleanup or an undecided answer leaves it INCONCLUSIVE. Empty, partial,
+    simulated or blocked coverage never passes.
+    """
+    r1_passed = {
+        ProductionActor.ACQUISITION: states["R1-ACQ-BOOTSTRAP"].status is CellStatus.PASSED,
+        ProductionActor.BUILD: states["R1-BLD-BOOTSTRAP"].status is CellStatus.PASSED,
+    }
+    subcells = tuple(
+        derive_subcell(s, evidence.permission, r1_passed=r1_passed)
+        for s in subcells_of(cell.cell_id)
+    )
+    counts = {status: sum(1 for s in subcells if s.status is status) for status in SubcellStatus}
+    summary = " ".join(f"{s.value.lower()}={n}" for s, n in counts.items() if n)
+    if subcells and all(s.status is SubcellStatus.PASSED for s in subcells):
+        return CellState(
             cell_id=cell.cell_id,
-            status=CellStatus.BLOCKED if blocked else CellStatus.UNEXECUTED,
-            reason=(
-                f"prerequisite {blocked[0]} is {states[blocked[0]].status.value}"
-                if blocked
-                else cell.execution
-            ),
+            status=CellStatus.PASSED,
+            reason=f"every subcell matched under the current binding ({summary})",
             identity=None,
             specification_digest=None,
+            subcells=subcells,
         )
-    return states
+    for subcell_status, cell_status in _SUBCELL_PRECEDENCE:
+        if counts.get(subcell_status):
+            first = next(s for s in subcells if s.status is subcell_status)
+            return CellState(
+                cell_id=cell.cell_id,
+                status=cell_status,
+                reason=f"{first.subcell_id} {first.status.value}: {first.reason} ({summary})",
+                identity=None,
+                specification_digest=None,
+                subcells=subcells,
+            )
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.UNEXECUTED,
+        reason=cell.execution,
+        identity=None,
+        specification_digest=None,
+        subcells=subcells,
+    )
 
 
 def aggregate(states: dict[str, CellState]) -> AggregateStatus:
@@ -1273,6 +1351,8 @@ def matrix_lines(states: dict[str, CellState]) -> list[str]:
             f"cell={cell.cell_id} ref={cell.cell_ref} kind={cell.kind.value} "
             f"status={state.status.value}"
         )
+        for sub in state.subcells:
+            lines.append(f"  subcell={sub.subcell_id} status={sub.status.value}")
     counts = {
         status: sum(1 for s in states.values() if s.status is status) for status in CellStatus
     }

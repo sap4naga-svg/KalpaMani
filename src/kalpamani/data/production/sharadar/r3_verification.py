@@ -134,6 +134,9 @@ class Observation:
     upload_id: str | None = None
     #: ``"timeout"`` / ``"network"`` when the request never produced a response.
     transport_failure: str | None = None
+    #: The task ARN a ``RunTask`` answered with, when one did (the permission cells'
+    #: unexpected-success reaction stops exactly that task). Never rendered.
+    task_arn: str | None = None
 
     def __repr__(self) -> str:
         """Status and code only -- never the message."""

@@ -424,7 +424,10 @@ def test_the_r3_cell_passes_only_with_attesting_verified_evidence_named_by_the_i
     states = vc.derive_states(_evidence(r3_record=record, inputs_digest=record.digest), {})
     assert states["R3"].status is vc.CellStatus.PASSED
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.UNEXECUTED
-    assert states["R4-ACQUISITION"].status is vc.CellStatus.UNEXECUTED
+    # R-4 carries task-role subcells no accepted mechanism can execute: BLOCKED, with the
+    # dependency named (proposed ADR-0047 s.5).
+    assert states["R4-ACQUISITION"].status is vc.CellStatus.BLOCKED
+    assert "task-side permission probe" in states["R4-ACQUISITION"].reason
     # The negative cells wait behind their bootstrap cell (proposed ADR-0047).
     for cell_id in ("R1-ACQ-NO-RELEASE", "R1-BLD-RELEASE-MISMATCH"):
         assert states[cell_id].status is vc.CellStatus.BLOCKED

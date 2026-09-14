@@ -63,7 +63,7 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
     if str(_entry) not in sys.path:  # pragma: no cover - import bootstrap
         sys.path.insert(0, str(_entry))
 
-from kalpamani.data.contracts.canonical import canonical_bytes  # noqa: E402
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex  # noqa: E402
 from kalpamani.data.production.sharadar import verification_cells as vc  # noqa: E402
 from kalpamani.data.production.sharadar.release import ReleaseMode  # noqa: E402
 
@@ -135,6 +135,20 @@ def _r3_tool() -> Any:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(
         name, REPO_ROOT / "scripts" / "production_r3_verification.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _permission_tool() -> Any:
+    name = "production_permission_cells"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name, REPO_ROOT / "scripts" / "production_permission_cells.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -274,6 +288,49 @@ def _negative_evidence(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozense
     return _closed_records(store, "negative-launch-evidence", vc.parse_negative_launch_evidence)
 
 
+def permission_evidence(store: Any, binding: Any) -> Any:
+    """Every permission record, attempt and cleanup in the records directory, parsed closed.
+
+    Grouped by subcell (records, attempts) or kept in order (cleanups); a file that does
+    not parse is counted as malformed, which makes every permission subcell UNBOUND until
+    it is removed or repaired -- malformed evidence is reported, never ignored.
+    """
+    from kalpamani.data.production.sharadar import permission_cells as pc
+    from kalpamani.data.production.sharadar.documents import decode_document
+    from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
+
+    records: dict[str, list[Any]] = {}
+    attempts: dict[str, list[Any]] = {}
+    cleanups: list[Any] = []
+    malformed = 0
+    records_dir: Path = store._records_dir
+    if not records_dir.is_dir():
+        return pc.PermissionEvidence(binding=binding)
+    parsers: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]] | None], ...] = (
+        ("permission-record", pc.parse_permission_record, records),
+        ("permission-attempt", pc.parse_permission_attempt, attempts),
+        ("permission-cleanup", pc.parse_permission_cleanup, None),
+    )
+    for prefix, parse, sink in parsers:
+        for path in sorted(records_dir.glob(f"{prefix}-*.json")):
+            try:
+                parsed = parse(decode_document(path.read_bytes(), max_bytes=MAX_RECORD_BYTES))
+            except Exception:
+                malformed += 1
+                continue
+            if sink is None:
+                cleanups.append(parsed)
+            else:
+                sink.setdefault(parsed.subcell_id, []).append(parsed)
+    return pc.PermissionEvidence(
+        records={k: tuple(sorted(v, key=lambda r: r.started_at)) for k, v in records.items()},
+        attempts={k: tuple(sorted(v, key=lambda a: a.started_at)) for k, v in attempts.items()},
+        cleanups=tuple(sorted(cleanups, key=lambda c: c.recorded_at)),
+        malformed=malformed,
+        binding=binding,
+    )
+
+
 def recorded_evidence(
     arguments: argparse.Namespace,
     store: Any,
@@ -334,6 +391,26 @@ def recorded_evidence(
                 r3_binding = r3_binding_source()
             except Exception:
                 r3_binding = None
+    # The permission binding: the same environment binding, the production declarations
+    # and the registration the targets were resolved from. Absent when the R-3 binding
+    # is (nothing to hold the evidence to).
+    permission_binding = None
+    if r3_binding is not None:
+        from kalpamani.data.production.sharadar import permission_cells as pc
+
+        try:
+            permission_binding = pc.PermissionBinding(
+                environment_binding_sha256=r3_binding.environment_binding_sha256,
+                policy_declaration_sha256=pc.declaration_digest(
+                    _permission_tool().declaration_paths()
+                ),
+                registration_sha256=sha256_hex(arguments.launch_inputs.read_bytes()),
+                partition=r3_binding.partition,
+                region=r3_binding.region,
+            )
+        except (OSError, ValueError):
+            permission_binding = None
+    permission = permission_evidence(store, permission_binding)
     return vc.RecordedEvidence(
         ledger=ledger,
         unreconciled=unreconciled,
@@ -349,6 +426,7 @@ def recorded_evidence(
         negative_evidence=negative,
         malformed_negative_evidence=malformed_negative,
         unreadable_negative_evidence=unreadable_negative,
+        permission=permission,
     )
 
 
@@ -714,6 +792,7 @@ __all__ = [
     "CellsRefusalError",
     "cells_path",
     "main",
+    "permission_evidence",
     "prepare_cell",
     "read_prepared",
     "recorded_evidence",

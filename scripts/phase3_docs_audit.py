@@ -5089,6 +5089,8 @@ def _sdk_client_construction_sites() -> list[Path]:
         # replaced by a counting fake, to observe the R-3 adapter's one-attempt budget
         # and its classification at the wire (PR #105); it sends nothing.
         REPO_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
+        # The same for the permission-subcell adapter (proposed ADR-0047).
+        REPO_ROOT / "tests" / "unit" / "test_production_permission_cells.py",
     }
     sites: list[Path] = []
     for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):
@@ -6500,13 +6502,17 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 #: whose credential resolver holds only the container provider (never ``boto3.client``
 #: and never the default session), and the owner-side launch tool proposed with
 #: ADR-0045, which builds its four workstation clients from ``boto3.Session`` under
-#: the actor's two pinned profiles only inside its authorized branch, and the R-3
-#: verification tool proposed with ADR-0046, which builds one S3 client under the
+#: the actor's two pinned profiles only inside its authorized branch, the R-3
+#: verification tool accepted with ADR-0046, which builds one S3 client under the
 #: foundation control profile only inside its authorized branch after the identity
-#: gate and the environment binding; no module under ``src/`` appears here, which is
-#: what keeps the data platform free of ambient credential discovery.
+#: gate and the environment binding, and the R-4..R-9 permission-subcell tool
+#: proposed with ADR-0047, which builds one principal's clients only inside its
+#: authorized branch after the pinned profile, the identity proof, the bindings and
+#: the attempt record; no module under ``src/`` appears here, which is what keeps the
+#: data platform free of ambient credential discovery.
 SDK_CONSTRUCTORS: Final[tuple[str, ...]] = (
     "production_launch.py",
+    "production_permission_cells.py",
     "production_r3_verification.py",
     "production_task_entrypoint.py",
     "sharadar_authenticated_qualification.py",
@@ -19984,11 +19990,12 @@ def main() -> int:
         "only the authorized operator entry points construct an SDK client",
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
         # candidate adds its two operator entry points; ADR-0043 the task image
-        # entrypoint; ADR-0045 the owner-side launch tool; ADR-0046 proposes the R-3
-        # verification tool. All seven are named, so an eighth arriving anywhere
-        # fails -- a count could drift, a list cannot.
+        # entrypoint; ADR-0045 the owner-side launch tool; ADR-0046 the R-3
+        # verification tool; ADR-0047 proposes the permission-subcell tool. All eight
+        # are named, so a ninth arriving anywhere fails -- a count could drift, a
+        # list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),
-        "seven named modules, not a count that could drift",
+        "eight named modules, not a count that could drift",
     )
     f.check(
         "no module under src/ imports the AWS SDK",
