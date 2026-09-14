@@ -689,13 +689,16 @@ def test_no_earlier_operator_surface_was_moved_onto_a_qualification_actor(path: 
         assert forbidden not in source, f"{path.name} names {forbidden}"
 
 
-def test_the_adr_0021_symbols_reach_exactly_three_production_modules() -> None:
+def test_the_adr_0021_symbols_reach_exactly_four_production_modules() -> None:
     """Containment, as a repository fact rather than a rule to remember.
 
-    The verifier declares the contract and the two qualification entry points prove
-    their own actor. A fourth module naming either symbol would be a surface nobody
-    reviewed -- the shared store, the Bronze key builders and the ADR-0017 path
-    included.
+    The verifier declares the contract, the two qualification entry points prove
+    their own actor, and the R-4..R-9 permission-subcell tool (proposed ADR-0047)
+    proves a qualification actor the same way -- through the accepted gate, never a
+    reimplementation -- only for an R-7 subcell under that actor's own profile and
+    only inside its authorized branch. A fifth module naming either symbol would be a
+    surface nobody reviewed -- the shared store, the Bronze key builders and the
+    ADR-0017 path included.
 
     The documentation audit is excluded, for the reason it is excluded everywhere
     else here: a governance guard has to name what it guards, and it constructs no
@@ -711,12 +714,13 @@ def test_the_adr_0021_symbols_reach_exactly_three_production_modules() -> None:
     )
     assert naming == [
         "aws_foundation_verify.py",
+        "production_permission_cells.py",
         "sharadar_empirical_qualification.py",
         "sharadar_qualification_assessment.py",
     ]
 
 
-def test_the_containment_rule_would_catch_a_fourth_module() -> None:
+def test_the_containment_rule_would_catch_a_fifth_module() -> None:
     """The exclusion above must not be the reason the rule passes.
 
     The audit really does name one of the symbols, so the rule is shown here to
@@ -734,7 +738,7 @@ def test_the_containment_rule_would_catch_a_fourth_module() -> None:
         )
     )
     assert audit.name in unfiltered
-    assert len(unfiltered) == 4
+    assert len(unfiltered) == 5
 
 
 # ---------------------------------------------------------------------------
