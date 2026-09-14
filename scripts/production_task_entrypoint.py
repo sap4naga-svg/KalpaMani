@@ -1,4 +1,4 @@
-"""The production task image entrypoint (ADR-0036 §2.9, §2.12). **Never run.**
+"""The production task image entrypoint (ADR-0036 §2.9, §2.12). **Never run as a task.**
 
 One process per task, selected by exactly one closed argument -- the task definition's
 ``command`` token -- and nothing else:
@@ -69,9 +69,18 @@ allowlisted lines) and exits with the closed code; the launch tool records what 
 observe. Completing the ledger row from a task's counts is a later, separately gated
 integration (ADR-0043 §5).
 
-**This entrypoint has never been run, and running it is a separate written authorization
-that has not been given.** Packaging, image publication and runtime verification are
-later gates.
+**Where it may write.** The working directory is created under ``/work`` -- the task
+definitions' tmpfs, the only writable path under their read-only root filesystem -- after
+the pre-construction checks and before any factory; a working root that cannot be used is
+``REFUSED_DEPENDENCY`` with zero operations. The directory is deleted before exit
+regardless of outcome (ADR-0036 §2.12 step 9), and a cleanup failure is reported beside
+the outcome, never in place of it.
+
+**This entrypoint has run only inside local, network-disabled verification containers**
+built from prepared contexts with synthetic configurations (docs/operations/
+production-image-build.md, "Local verification"); it has never run as a task, and
+running one is a separate written authorization that has not been given. Image
+publication and AWS runtime verification are later gates.
 """
 
 from __future__ import annotations
@@ -86,6 +95,15 @@ NO_ENTRY_EXIT_STATUS: Final = 2
 
 #: Where the image carries its compiled configuration. Absent on a workstation, by design.
 COMPILED_CONFIGURATION_PATH: Final = "/etc/kalpamani/compiled-configuration.json"
+
+#: The only writable space a task has: the task definitions' tmpfs (``containerPath =
+#: "/work"``, infra/aws/research-data-plane/production_compute.tf) under a read-only root
+#: filesystem. The working directory is created inside it and nowhere else -- the
+#: interpreter's default temporary location is ``/tmp``, which does not exist writable
+#: in the task, and the first local container run of the accepted entrypoint died there
+#: with a traceback and no receipt. A working root that cannot be used is a dependency
+#: that could not be built (``REFUSED_DEPENDENCY``), refused before any client exists.
+TASK_WORKING_ROOT: Final = "/work"
 
 
 def _environment_names() -> list[str]:
@@ -329,6 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from kalpamani.data.production.sharadar.entry import (
         TaskOutcome,
         no_entry_receipt,
+        pre_entry_refusal,
         refusal_receipt,
         run_task_entry,
         select_entry,
@@ -353,9 +372,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit(receipt.render())
         return receipt.exit_code
 
+    # The entry's own pre-construction checks, made here BEFORE the working directory
+    # exists: a process that is not a task's (no container credential environment)
+    # refuses with nothing created and nothing to clean up. The selected entry repeats
+    # exactly the same accepted check on its own path; it is one function, not two rules.
+    refused = pre_entry_refusal(
+        entry=entry,
+        configuration=configuration,
+        environment_names=_environment_names,
+        environment=_environment,
+    )
+    if refused is not None:
+        receipt = refusal_receipt(entry, refused, configuration=configuration)
+        _emit(receipt.render())
+        return receipt.exit_code
+
     import tempfile
 
-    working_directory = tempfile.mkdtemp(prefix="kalpamani-task-")
+    try:
+        working_directory = tempfile.mkdtemp(prefix="kalpamani-task-", dir=TASK_WORKING_ROOT)
+    except OSError:
+        # No usable working root: the task definition's tmpfs is absent or unwritable.
+        # Refused before any factory or client exists, with the zero counts that proves.
+        receipt = refusal_receipt(
+            entry, TaskOutcome.REFUSED_DEPENDENCY, configuration=configuration
+        )
+        _emit(receipt.render())
+        return receipt.exit_code
     receipt = run_task_entry(
         entry=entry,
         configuration=configuration,
@@ -365,7 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return receipt.exit_code
 
 
-__all__ = ["COMPILED_CONFIGURATION_PATH", "NO_ENTRY_EXIT_STATUS", "main"]
+__all__ = ["COMPILED_CONFIGURATION_PATH", "NO_ENTRY_EXIT_STATUS", "TASK_WORKING_ROOT", "main"]
 
 
 if __name__ == "__main__":  # pragma: no cover - the image's process entry

@@ -29,6 +29,15 @@ copies the configuration from ``configuration/`` and verifies, at build time, th
 file's digest equals the ``CONFIGURATION_DIGEST`` build argument and that its recorded
 commit equals ``KALPAMANI_COMMIT``.
 
+**The extracted bytes are the tree's bytes, proven per file.** ``git archive`` honours
+the checkout's end-of-line conversion (``core.autocrlf`` and a ``text=auto`` attribute), so
+on a Windows workstation it would otherwise emit CRLF into a POSIX shell entry executable
+whose shebang then no longer executes, and the source digest would depend on the
+workstation rather than the tree. The archive is therefore taken with conversion
+disabled, and every extracted regular file is then hashed as a Git blob and held equal
+to the object id the commit's own tree lists for that path; a disagreement, a symbolic
+link, a submodule or a mode outside a regular file's is a refusal.
+
 **Nothing here contacts AWS, a provider, a registry or a container engine**, and no
 value from the configuration is printed: the output is the entry, the commit, the
 configuration digest and a file count.
@@ -200,22 +209,81 @@ def verify_configuration_input(
     return raw, digest
 
 
-def _archive_sources(git: str, repository: Path, commit: str, output: Path) -> list[str] | None:
-    """Extract the allowlisted image source paths of ``commit`` into ``output``.
+#: The two tree entry modes of a regular file. A symbolic link (``120000``) and a
+#: submodule (``160000``) are refused: neither is source an image may carry.
+_REGULAR_FILE_MODES: Final[frozenset[str]] = frozenset({"100644", "100755"})
+_EXECUTABLE_MODE: Final = "100755"
 
-    Returns the extracted regular-file paths, or ``None`` when the archive could not
-    be produced, carried anything but directories and regular files, or disagrees with
-    the commit's own listing of those paths.
+#: The archive is taken with every end-of-line conversion disabled, so the bytes are
+#: the blobs' whatever ``core.autocrlf`` or a ``text`` attribute says on this workstation.
+_ARCHIVE_OPTIONS: Final[tuple[str, ...]] = (
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.eol=lf",
+    "-c",
+    "core.safecrlf=false",
+)
+
+
+def _blob_id(content: bytes, object_id: str) -> str:
+    """The Git object id of ``content`` as a blob, in the hash the repository uses."""
+    algorithm = hashlib.sha256() if len(object_id) == 64 else hashlib.sha1()  # noqa: S324
+    algorithm.update(b"blob %d\0" % len(content))
+    algorithm.update(content)
+    return algorithm.hexdigest()
+
+
+def _tree_listing(git: str, repository: Path, commit: str) -> dict[str, tuple[str, str]] | None:
+    """Every allowlisted path in the commit's tree, to ``(mode, object id)``.
+
+    ``None`` when the listing could not be produced, is empty, or carries anything but
+    a regular-file blob.
     """
-    listing = _run(
-        git, repository, "ls-tree", "-r", "--name-only", commit, "--", *IMAGE_SOURCE_PATHS
-    )
+    listing = _run(git, repository, "ls-tree", "-r", commit, "--", *IMAGE_SOURCE_PATHS)
     if listing is None:
         return None
-    expected = sorted(line for line in listing.decode("utf-8", "replace").splitlines() if line)
-    if not expected:
+    expected: dict[str, tuple[str, str]] = {}
+    for line in listing.decode("utf-8", "replace").splitlines():
+        if not line:
+            continue
+        meta, separator, path = line.partition("\t")
+        parts = meta.split()
+        if separator != "\t" or len(parts) != 3 or not path:
+            return None
+        mode, kind, object_id = parts
+        if kind != "blob" or mode not in _REGULAR_FILE_MODES:
+            return None
+        if _HEX40.fullmatch(object_id) is None and _HEX64.fullmatch(object_id) is None:
+            return None
+        expected[path] = (mode, object_id)
+    return expected or None
+
+
+def _archive_sources(
+    git: str, repository: Path, commit: str, output: Path
+) -> tuple[list[str], list[str]] | None:
+    """Extract the allowlisted image source paths of ``commit`` into ``output``.
+
+    Returns the extracted regular-file paths and the subset the tree marks executable,
+    or ``None`` when the archive could not be produced, carried anything but directories
+    and regular files, disagrees with the commit's own listing of those paths, or holds
+    any file whose bytes are not the tree's blob for that path.
+    """
+    listing = _tree_listing(git, repository, commit)
+    if listing is None:
         return None
-    archive = _run(git, repository, "archive", "--format=tar", commit, "--", *IMAGE_SOURCE_PATHS)
+    expected = sorted(listing)
+    archive = _run(
+        git,
+        repository,
+        *_ARCHIVE_OPTIONS,
+        "archive",
+        "--format=tar",
+        commit,
+        "--",
+        *IMAGE_SOURCE_PATHS,
+    )
     if archive is None:
         return None
     extracted: list[str] = []
@@ -240,7 +308,16 @@ def _archive_sources(git: str, repository: Path, commit: str, output: Path) -> l
         return None
     if sorted(extracted) != expected:
         return None
-    return sorted(extracted)
+    for name in extracted:
+        mode, object_id = listing[name]
+        try:
+            content = (output / name).read_bytes()
+        except OSError:
+            return None
+        if _blob_id(content, object_id) != object_id:
+            return None
+    executable = sorted(name for name in extracted if listing[name][0] == _EXECUTABLE_MODE)
+    return sorted(extracted), executable
 
 
 def _source_digest(output: Path, files: list[str]) -> str:
@@ -290,10 +367,11 @@ def prepare(
         output.mkdir(parents=True, exist_ok=False)
     except OSError:
         return _refuse("the output directory could not be created")
-    files = _archive_sources(git, repository, commit, output)
-    if files is None:
+    archived = _archive_sources(git, repository, commit, output)
+    if archived is None:
         _remove(output)
-        return _refuse("the source tree could not be archived from the commit")
+        return _refuse("the source tree could not be archived byte-exactly from the commit")
+    files, executable = archived
     target = output / CONTEXT_CONFIGURATION_PATH
     target.parent.mkdir(parents=True, exist_ok=False)
     target.write_bytes(raw)
@@ -304,6 +382,7 @@ def prepare(
         "source_paths": list(IMAGE_SOURCE_PATHS),
         "source_files": len(files),
         "source_digest": _source_digest(output, files),
+        "executable_sources": executable,
         "configuration_path": CONTEXT_CONFIGURATION_PATH,
         "configuration_digest": digest,
         "configuration_bytes": len(raw),

@@ -211,7 +211,26 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
         )
         assert f"production_task_entrypoint.py {entry.value}" in wrapper
     assert "compiled-configuration.json /etc/kalpamani/compiled-configuration.json" in dockerfile
-    assert "USER kalpamani" in dockerfile and "ENTRYPOINT" not in dockerfile
+    assert "ENTRYPOINT" not in dockerfile
+    # The runtime user is the task definitions' numeric identity, in the image as well:
+    # the container runs as that number whatever the image says, so the image says it.
+    compute = (REPO_ROOT / "infra/aws/research-data-plane/production_compute.tf").read_text(
+        encoding="utf-8"
+    )
+    assert compute.count('user      = "10001:10001"') == 2
+    assert dockerfile.count("USER 10001:10001") == 2 and "USER kalpamani" not in dockerfile
+    assert "groupadd --system --gid 10001 kalpamani" in dockerfile
+    assert "useradd --system --uid 10001 --gid 10001" in dockerfile
+    # The configuration directory is created traversable before the 0444 file is copied
+    # into it; the working root is the task definitions' tmpfs path; the build backend
+    # comes from the pinned base, never from an unpinned fetch during the wheel build.
+    assert "mkdir --mode=0555 /etc/kalpamani" in dockerfile
+    assert "mkdir --mode=0700 /work && chown 10001:10001 /work" in dockerfile
+    assert "pip install --no-deps --no-build-isolation ." in dockerfile
+    assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
+    assert "BUILD_BACKEND" in dockerfile
+    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 == 0o055') == 2
+    assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 2
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert ignore[0].startswith("#") and "*" in ignore
     admitted = [line[1:] for line in ignore if line.startswith("!")]
@@ -222,4 +241,19 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
     )
     assert "boto3==1.43.83" in constraints and "botocore==1.43.83" in constraints
     assert "docker/production/build/" in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert not (REPO_ROOT / "docker" / "production" / "build").exists()
+    # The staging directory may exist on a workstation that followed the procedure; it is
+    # git-ignored, so nothing under it is tracked.
+    import shutil
+    import subprocess
+
+    git = shutil.which("git")
+    if git is None:  # pragma: no cover - the repository's own tests need git
+        pytest.skip("git is not available")
+    tracked = subprocess.run(  # noqa: S603
+        [git, "ls-files", "--", "docker/production/build"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert tracked.strip() == ""

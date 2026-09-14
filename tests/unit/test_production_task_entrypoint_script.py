@@ -9,6 +9,7 @@ called: no SDK client, no socket and no metadata read exists in this file's exec
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import tempfile
@@ -345,9 +346,34 @@ def test_a_file_compiled_for_the_other_entry_refuses(
 
 
 def test_the_compiled_file_is_absent_from_this_repository_and_this_workstation() -> None:
+    """No TRACKED file is a compiled configuration, and the image path is absent here.
+
+    The generator's git-ignored staging directory (``docker/production/build/``) may hold
+    one on a workstation that followed the documented procedure; that is a generated,
+    untracked input and not the repository, so the check reads Git's index rather than
+    the checkout.
+    """
+    import shutil
+    import subprocess
+
     assert not Path(entrypoint.COMPILED_CONFIGURATION_PATH).exists()
     assert entrypoint.COMPILED_CONFIGURATION_PATH == COMPILED_CONFIGURATION_PATH
-    assert not list(REPO_ROOT.rglob("compiled-configuration.json"))
+    git = shutil.which("git")
+    if git is None:  # pragma: no cover - the repository's own tests need git
+        pytest.skip("git is not available")
+    tracked = subprocess.run(  # noqa: S603
+        [git, "ls-files", "--", "*compiled-configuration.json"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert tracked.strip() == ""
+    staging = REPO_ROOT / "docker" / "production" / "build"
+    ignored = subprocess.run(  # noqa: S603
+        [git, "check-ignore", "-q", str(staging / "x")], cwd=REPO_ROOT, check=False
+    )
+    assert ignored.returncode == 0  # the staging directory is git-ignored
 
 
 # ---------------------------------------------------------------------------
@@ -384,28 +410,128 @@ def test_on_a_workstation_the_credential_environment_refuses_before_any_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The real factories are built; none is called: the environment refuses first."""
+    """Nothing is built and nothing is created: the environment refuses first.
+
+    The refusal precedes the working directory (the accepted entrypoint created one and
+    cleaned it up; a process that is not a task's now creates nothing), so ``mkdtemp``
+    must never be reached, and the receipt carries the configuration's identity.
+    """
     file = tmp_path / "compiled-configuration.json"
     file.write_bytes(_compiled_bytes(entry))
     monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
+    monkeypatch.setattr(entrypoint, "_factories", _fail("factory construction"))
     monkeypatch.setattr(entrypoint, "_client", _fail("client construction"))
     monkeypatch.setattr(entrypoint, "_transport", _fail("transport construction"))
     monkeypatch.setattr(entrypoint, "_metadata_fetch", _fail("metadata fetch"))
     monkeypatch.setattr(entrypoint, "_resolve_origin", _fail("origin resolution"))
+    monkeypatch.setattr(tempfile, "mkdtemp", _fail("working directory"))
     # A workstation: a profile is set and no container credential provider exists.
     monkeypatch.setenv("AWS_PROFILE", "synthetic-profile")
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", raising=False)
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", raising=False)
-    monkeypatch.setattr(tempfile, "mkdtemp", lambda prefix: str(tmp_path / "work"))
-    (tmp_path / "work").mkdir()
     code = entrypoint.main([entry.value])
     assert code == EXIT_STATUS[TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT] == 4
     lines = capsys.readouterr().out.strip().splitlines()
     assert lines[0] == task_sentence(TaskOutcome.REFUSED_CREDENTIAL_ENVIRONMENT)
     assert "counts_observed=true" in lines and "s3_operations=0" in lines
     assert lines[-1].startswith("receipt: ") and '"binding_digest":null' in lines[-1]
+    document = pr.decode_receipt_line(lines[-1])
+    assert document["code_commit"] == COMMIT
+    assert document["configuration_digest"] == hashlib.sha256(file.read_bytes()).hexdigest()
     assert "synthetic-profile" not in "\n".join(lines)
-    assert not (tmp_path / "work").exists()  # the working directory was cleaned up
+
+
+def _task_shaped_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The credential environment of a task: the container relative URI and no profile."""
+    for name in ("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", raising=False)
+    monkeypatch.setenv(
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "/v2/credentials/0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
+    )
+
+
+@pytest.mark.parametrize("entry", list(TaskEntry))
+def test_an_unusable_working_root_is_refused_before_any_client(
+    entry: TaskEntry,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The working directory lives under the task definitions' tmpfs (``/work``) and
+    nowhere else. The accepted entrypoint asked the interpreter for its default temporary
+    location and, under the task's read-only root with no ``/tmp``, died in ``mkdtemp``
+    with a traceback and no receipt; an unusable root is now ``REFUSED_DEPENDENCY``."""
+    file = tmp_path / "compiled-configuration.json"
+    file.write_bytes(_compiled_bytes(entry))
+    monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
+    monkeypatch.setattr(entrypoint, "TASK_WORKING_ROOT", str(tmp_path / "absent-work"))
+    monkeypatch.setattr(entrypoint, "_factories", _fail("factory construction"))
+    monkeypatch.setattr(entrypoint, "_client", _fail("client construction"))
+    _task_shaped_environment(monkeypatch)
+    code = entrypoint.main([entry.value])
+    assert code == EXIT_STATUS[TaskOutcome.REFUSED_DEPENDENCY] == 6
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0] == task_sentence(TaskOutcome.REFUSED_DEPENDENCY)
+    assert "counts_observed=true" in lines and "s3_operations=0" in lines
+    document = pr.decode_receipt_line(lines[-1])
+    assert document["outcome"] == "REFUSED_DEPENDENCY" and document["code_commit"] == COMMIT
+    assert not (tmp_path / "absent-work").exists()  # nothing was created anywhere
+
+
+@pytest.mark.parametrize("entry", list(TaskEntry))
+def test_the_working_directory_is_created_under_the_working_root_and_deleted_before_exit(
+    entry: TaskEntry,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With a usable root the directory is created inside it; whatever the outcome, it is
+    gone before exit and the receipt's cleanup accounting is empty."""
+    file = tmp_path / "compiled-configuration.json"
+    file.write_bytes(_compiled_bytes(entry))
+    root = tmp_path / "work"
+    root.mkdir()
+    monkeypatch.setattr(entrypoint, "COMPILED_CONFIGURATION_PATH", str(file))
+    monkeypatch.setattr(entrypoint, "TASK_WORKING_ROOT", str(root))
+    created: list[Path] = []
+    real_factories = entrypoint._factories
+
+    def observing_factories(entry_: Any, working_directory: Any, **kwargs: Any) -> Any:
+        path = Path(working_directory)
+        assert path.parent == root and path.name.startswith("kalpamani-task-")
+        assert path.is_dir()
+        created.append(path)
+        return real_factories(entry_, working_directory, **kwargs)
+
+    monkeypatch.setattr(entrypoint, "_factories", observing_factories)
+    # Every construction refuses, so the entry stops at REFUSED_DEPENDENCY with the
+    # directory already created -- exactly the path on which cleanup must still run.
+    monkeypatch.setattr(entrypoint, "_client", _fail("client construction"))
+    monkeypatch.setattr(entrypoint, "_transport", _fail("transport construction"))
+    monkeypatch.setattr(entrypoint, "_metadata_fetch", _fail("metadata fetch"))
+    monkeypatch.setattr(entrypoint, "_resolve_origin", lambda host: sorted(ORIGIN_ADDRESSES))
+    _task_shaped_environment(monkeypatch)
+    code = entrypoint.main([entry.value])
+    assert code == EXIT_STATUS[TaskOutcome.REFUSED_DEPENDENCY] == 6
+    assert len(created) == 1 and not created[0].exists()
+    assert root.exists() and not any(root.iterdir())
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0] == task_sentence(TaskOutcome.REFUSED_DEPENDENCY)
+    assert not any(line.startswith("cleanup_failure=") for line in lines)
+    assert pr.decode_receipt_line(lines[-1])["cleanup_failures"] == []
+
+
+def test_the_working_root_is_the_task_definitions_tmpfs() -> None:
+    compute = (REPO_ROOT / "infra/aws/research-data-plane/production_compute.tf").read_text(
+        encoding="utf-8"
+    )
+    assert entrypoint.TASK_WORKING_ROOT == "/work"
+    assert compute.count('containerPath = "/work"') == 2
+    assert compute.count("readonlyRootFilesystem = true") == 2
+    assert "dir=TASK_WORKING_ROOT" in EXECUTABLE and "mkdtemp(" in EXECUTABLE
+    assert EXECUTABLE.count("mkdtemp(") == 1
 
 
 def test_the_task_side_spent_identity_source_is_not_configured() -> None:
