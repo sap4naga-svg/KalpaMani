@@ -41,7 +41,12 @@ from enum import StrEnum
 from typing import Final, Protocol
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
-from kalpamani.data.production.sharadar.documents import decode_document, exact_str, instant
+from kalpamani.data.production.sharadar.documents import (
+    decode_document,
+    exact_str,
+    hex_digest,
+    instant,
+)
 from kalpamani.data.production.sharadar.task_clients import PROVIDER_ORIGIN_HOST
 
 #: The destination port of the one attempt: the provider's HTTPS origin.
@@ -525,6 +530,189 @@ class IsolationVerdictRecord:
         }
 
 
+#: The verdict each reason implies, and whether the analysis was bound when it was given.
+#: Transcribed from :func:`isolation_verdict`: a record whose fields disagree with this table
+#: was not derived by it.
+REASON_VERDICT: Final[dict[VerdictReason, tuple[IsolationVerdict, bool]]] = {
+    VerdictReason.OBSERVED_CONNECTION: (IsolationVerdict.FAILED, False),
+    VerdictReason.NO_ATTEMPT: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.DESTINATION_UNBOUND: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.NO_CORROBORATION: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.ANALYSIS_NOT_SUCCEEDED: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.SOURCE_MISMATCH: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.DESTINATION_MISMATCH: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.ANALYSIS_OUTSIDE_TASK_WINDOW: (IsolationVerdict.INCONCLUSIVE, False),
+    VerdictReason.PATH_FOUND_CONTRADICTS_OBSERVATION: (IsolationVerdict.INCONCLUSIVE, True),
+    VerdictReason.UNSUPPORTED_EXPLANATION: (IsolationVerdict.INCONCLUSIVE, True),
+    VerdictReason.COMPONENT_OUTSIDE_PLACEMENT: (IsolationVerdict.INCONCLUSIVE, True),
+    VerdictReason.CORROBORATED: (IsolationVerdict.VERIFIED, True),
+}
+
+#: Reasons a later corroboration for the SAME launch can resolve: each says the evidence
+#: supplied was insufficient or unbound, not that the observation itself contradicts a
+#: block. ``NO_ATTEMPT`` and ``DESTINATION_UNBOUND`` are about the probe and cannot be
+#: resolved by evidence; ``PATH_FOUND_CONTRADICTS_OBSERVATION`` is a modelled path against
+#: a non-connection and is a contradiction a later analysis does not erase.
+RESOLVABLE_INSUFFICIENCIES: Final[frozenset[VerdictReason]] = frozenset(
+    {
+        VerdictReason.NO_CORROBORATION,
+        VerdictReason.ANALYSIS_NOT_SUCCEEDED,
+        VerdictReason.SOURCE_MISMATCH,
+        VerdictReason.DESTINATION_MISMATCH,
+        VerdictReason.ANALYSIS_OUTSIDE_TASK_WINDOW,
+        VerdictReason.UNSUPPORTED_EXPLANATION,
+        VerdictReason.COMPONENT_OUTSIDE_PLACEMENT,
+    }
+)
+
+
+def parse_isolation_verdict_record(raw: object) -> IsolationVerdictRecord:
+    """The closed verdict block back into a record, held to the derivation's own table.
+
+    Raises ``ValueError`` for any shape, token or combination :func:`isolation_verdict`
+    could not have produced: a verdict that is not its reason's, an analysis marked bound
+    where the reason says it was not, components on any reason but ``CORROBORATED``, or
+    ``CORROBORATED`` with none.
+    """
+    fields = {"verdict", "reason", "blocking_components", "analysis_bound"}
+    if type(raw) is not dict or set(raw) != fields:
+        raise ValueError("a verdict record carries exactly its four closed fields")
+    verdict, reason = raw["verdict"], raw["reason"]
+    components, bound = raw["blocking_components"], raw["analysis_bound"]
+    if (
+        type(verdict) is not str
+        or verdict not in {m.value for m in IsolationVerdict}
+        or type(reason) is not str
+        or reason not in {m.value for m in VerdictReason}
+        or type(bound) is not bool
+        or type(components) is not list
+        or any(
+            type(c) is not str or c not in {m.value for m in BlockingComponent} for c in components
+        )
+        or len(set(components)) != len(components)
+        or components != sorted(components)
+    ):
+        raise ValueError("a verdict record's fields are closed tokens and one boolean")
+    expected_verdict, expected_bound = REASON_VERDICT[VerdictReason(reason)]
+    if IsolationVerdict(verdict) is not expected_verdict or bound is not expected_bound:
+        raise ValueError("the verdict and binding are not the reason's")
+    if (VerdictReason(reason) is VerdictReason.CORROBORATED) != bool(components):
+        raise ValueError("components are named exactly by a corroborated verdict")
+    return IsolationVerdictRecord(
+        verdict=IsolationVerdict(verdict),
+        reason=VerdictReason(reason),
+        blocking_components=frozenset(BlockingComponent(c) for c in components),
+        analysis_bound=bound,
+    )
+
+
+ISOLATION_VERDICT_CONTRACT_ID: Final = "kalpamani-isolation-verdict/v1"
+MAX_ISOLATION_VERDICT_BYTES: Final = 64 * 1024
+_VERDICT_DOCUMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "actor",
+        "kind",
+        "specification_digest",
+        "probe",
+        "verdict",
+        "evidence_supplied",
+        "recorded_at",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IsolationVerdictDocument:
+    """The launch tool's verdict document, parsed closed and held consistent.
+
+    ``specification_digest`` names the launch (the specification the authorization
+    named and the reservation carries); ``probe`` is the receipt's observation; the
+    verdict block is the derivation's; ``evidence_supplied`` says whether a transcription
+    was handed in. A document whose blocks disagree -- a corroborated verdict over a
+    ``CONNECTED`` probe, a corroboration with no evidence supplied, a
+    ``NO_CORROBORATION`` reason beside supplied evidence, an attempt-dependent reason over
+    a probe that made none -- was not written by the tool and is refused.
+    """
+
+    actor: str
+    kind: str
+    specification_digest: str
+    probe: ProbeObservation
+    verdict: IsolationVerdictRecord
+    evidence_supplied: bool
+    recorded_at: datetime
+
+    def __repr__(self) -> str:
+        """Verdict and reason only."""
+        return (
+            f"IsolationVerdictDocument(verdict={self.verdict.verdict.value!r}, "
+            f"reason={self.verdict.reason.value!r})"
+        )
+
+
+def parse_isolation_verdict_document(raw: object) -> IsolationVerdictDocument:
+    """One verdict document (bytes or an already-decoded object), or ``ValueError``."""
+    try:
+        document = (
+            decode_document(raw, max_bytes=MAX_ISOLATION_VERDICT_BYTES)
+            if type(raw) is bytes
+            else raw
+        )
+    except Exception:
+        raise ValueError("a verdict document decodes closed") from None
+    if type(document) is not dict or set(document) != _VERDICT_DOCUMENT_FIELDS:
+        raise ValueError("a verdict document carries exactly its closed fields")
+    if document["schema_version"] != 1 or document["contract_id"] != ISOLATION_VERDICT_CONTRACT_ID:
+        raise ValueError("a verdict document names its contract")
+    actor = exact_str(document["actor"])
+    kind = exact_str(document["kind"])
+    digest = hex_digest(document["specification_digest"])
+    supplied = document["evidence_supplied"]
+    recorded_at = instant(document["recorded_at"])
+    if (
+        actor not in {"acquisition", "build"}
+        or kind not in {"production", "verification"}
+        or digest is None
+        or type(supplied) is not bool
+        or recorded_at is None
+    ):
+        raise ValueError("a verdict document's fields are closed tokens, a digest and an instant")
+    probe = parse_probe_observation(document["probe"])
+    verdict = parse_isolation_verdict_record(document["verdict"])
+    reason = verdict.reason
+    attempted = probe.attempts == PROBE_MAX_ATTEMPTS
+    if (reason is VerdictReason.OBSERVED_CONNECTION) != (probe.result is ProbeResult.CONNECTED):
+        raise ValueError("an observed connection is FAILED, and FAILED is an observed connection")
+    if (reason is VerdictReason.NO_ATTEMPT) != (
+        not attempted and probe.result is not ProbeResult.CONNECTED
+    ):
+        raise ValueError("NO_ATTEMPT is the reason exactly when the probe made no attempt")
+    if reason is VerdictReason.NO_CORROBORATION and supplied:
+        raise ValueError("NO_CORROBORATION contradicts supplied evidence")
+    if (
+        reason
+        not in {
+            VerdictReason.OBSERVED_CONNECTION,
+            VerdictReason.NO_ATTEMPT,
+            VerdictReason.DESTINATION_UNBOUND,
+            VerdictReason.NO_CORROBORATION,
+        }
+        and not supplied
+    ):
+        raise ValueError("a reason about the evidence needs supplied evidence")
+    return IsolationVerdictDocument(
+        actor=actor,
+        kind=kind,
+        specification_digest=digest,
+        probe=probe,
+        verdict=verdict,
+        evidence_supplied=supplied,
+        recorded_at=recorded_at,
+    )
+
+
 def _record(
     verdict: IsolationVerdict,
     reason: VerdictReason,
@@ -639,6 +827,7 @@ __all__ = [
     "ADMITTED_EXPLANATIONS",
     "ANALYSIS_STATUSES",
     "ANALYSIS_SUCCEEDED",
+    "ISOLATION_VERDICT_CONTRACT_ID",
     "MAX_EXPLANATIONS",
     "MAX_REACHABILITY_EVIDENCE_BYTES",
     "PROBE_MAX_ATTEMPTS",
@@ -647,9 +836,12 @@ __all__ = [
     "PROBE_TIMEOUT_SECONDS",
     "REACHABILITY_EVIDENCE_CONTRACT_ID",
     "REACHABILITY_EVIDENCE_SCHEMA_VERSION",
+    "REASON_VERDICT",
+    "RESOLVABLE_INSUFFICIENCIES",
     "BlockingComponent",
     "CorroborationKind",
     "IsolationVerdict",
+    "IsolationVerdictDocument",
     "IsolationVerdictRecord",
     "ProbeAdapter",
     "ProbeObservation",
@@ -662,6 +854,8 @@ __all__ = [
     "bound_destination",
     "destination_binding_digest",
     "isolation_verdict",
+    "parse_isolation_verdict_document",
+    "parse_isolation_verdict_record",
     "parse_probe_observation",
     "parse_reachability_evidence",
     "run_origin_probe",

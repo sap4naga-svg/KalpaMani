@@ -5085,6 +5085,10 @@ def _sdk_client_construction_sites() -> list[Path]:
         # Seeds a synthetic boto3 session as the default session precisely to prove
         # the task entrypoint never uses it (ADR-0043); every credential is invented.
         REPO_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
+        # Builds a synthetic static-credential session with the client's HTTP transport
+        # replaced by a counting fake, to observe the R-3 adapter's one-attempt budget
+        # and its classification at the wire (PR #105); it sends nothing.
+        REPO_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
     }
     sites: list[Path] = []
     for root in (REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tests"):

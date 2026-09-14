@@ -521,7 +521,9 @@ def run_r3(
     accepted table runs for everything the halted path may have created -- an object
     from a ``200`` (or an answer that may have been a ``200``: a timeout, a network
     failure, an ambiguous answer) on rows 2, 4 or 5, an upload from row 6, and the
-    positive control when row 8 never ran or did not remove it -- within the ten-operation
+    positive control whenever row 9 did not confirm its absence (row 8's ``204``
+    acknowledges the delete and establishes nothing about the object; a row 9 that finds
+    it, times out, is refused or fails cannot confirm it) -- within the ten-operation
     budget. The result is ``VERIFIED`` only when all nine rows matched; ``NOT_VERIFIED``
     when a row deviated and every cleanup resolved; ``NOT_VERIFIED_CLEANUP_UNRESOLVED``
     when any cleanup did not resolve, was refused, could not be issued or exhausted the
@@ -531,7 +533,9 @@ def run_r3(
     session = R3Session(stamp=new_stamp(started) if stamp is None else stamp)
     halted_at: int | None = None
     positive_written = False
-    positive_removed = False
+    # Row 8's 204 acknowledges the delete; only row 9's 404 confirms the absence. Cleanup
+    # of the positive control is owed until the absence is confirmed.
+    positive_confirmed_absent = False
     created: list[str] = []
     multipart_upload: str | None = None
     multipart_created = False
@@ -557,8 +561,8 @@ def run_r3(
         if row.number == 6 and observed in _MAY_HAVE_CREATED:
             multipart_created = True
             multipart_upload = observation.upload_id
-        if row.number == 8 and observed is ObservedClass.OK_204:
-            positive_removed = True
+        if row.number == 9 and observed is ObservedClass.NOT_FOUND_404:
+            positive_confirmed_absent = True
         if not matched:
             halted_at = row.number
             break
@@ -584,9 +588,9 @@ def run_r3(
             )
         if multipart_created:
             _cleanup_multipart(client, session, upload_id=multipart_upload)
-        if positive_written and not positive_removed:
+        if positive_written and not positive_confirmed_absent:
             _cleanup_object(
-                client, session, trigger="positive control not removed", suffix="positive"
+                client, session, trigger="positive control not confirmed absent", suffix="positive"
             )
     finished = now()
     if halted_at is None:
@@ -821,8 +825,8 @@ def parse_r3_record(raw: object) -> R3Record:
             if row.number == 6 and row.observed in _MAY_HAVE_CREATED:
                 owed.add("multipart")
         positive_written = rows[0].observed in _MAY_HAVE_CREATED
-        positive_removed = rows[7].observed is ObservedClass.OK_204
-        if positive_written and not positive_removed:
+        positive_confirmed = rows[8].observed is ObservedClass.NOT_FOUND_404
+        if positive_written and not positive_confirmed:
             owed.add("positive")
         for suffix in owed:
             if suffix not in by_key and verification_key(stamp, suffix) not in residue:

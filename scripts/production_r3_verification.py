@@ -332,19 +332,35 @@ class _Boto3R3Client:
     conditional ``CopyObject`` header is injected for that single call only.
     """
 
-    def __init__(self, bucket: str, region: str) -> None:
-        import boto3  # type: ignore[import-untyped]
+    def __init__(
+        self, bucket: str, region: str, *, session_factory: Callable[[str], Any] | None = None
+    ) -> None:
+        """Build the one client from the control profile's session (``session_factory`` is a
+        test seam: no test builds a session from the workstation's profiles or discovers a
+        credential). ``total_max_attempts`` counts the initial request -- botocore's
+        ``max_attempts`` counts retries after it and would have permitted a second attempt;
+        the accepted contract is one attempt per row.
+        """
         from botocore.config import Config  # type: ignore[import-untyped]
 
         self._bucket = bucket
-        self._client = boto3.Session(profile_name=r3.CONTROL_PROFILE, region_name=region).client(
+        session = (
+            self._control_session(region) if session_factory is None else session_factory(region)
+        )
+        self._client = session.client(
             "s3",
             config=Config(
-                retries={"max_attempts": 1, "mode": "standard"},
+                retries={"total_max_attempts": 1, "mode": "standard"},
                 connect_timeout=CONNECT_TIMEOUT_SECONDS,
                 read_timeout=READ_TIMEOUT_SECONDS,
             ),
         )
+
+    @staticmethod
+    def _control_session(region: str) -> Any:
+        import boto3  # type: ignore[import-untyped]
+
+        return boto3.Session(profile_name=r3.CONTROL_PROFILE, region_name=region)
 
     def _call(self, operation: str, **kwargs: Any) -> r3.Observation:
         from botocore.exceptions import (  # type: ignore[import-untyped]

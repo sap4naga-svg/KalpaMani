@@ -1112,7 +1112,7 @@ def record_isolation_verdict(
     result = pp.isolation_verdict(verified.probe, evidence, binding=binding)
     document = {
         "schema_version": lr.RECORD_SCHEMA_VERSION,
-        "contract_id": "kalpamani-isolation-verdict/v1",
+        "contract_id": pp.ISOLATION_VERDICT_CONTRACT_ID,
         "actor": record.actor.value,
         "kind": record.kind.value,
         "specification_digest": record.specification_digest,

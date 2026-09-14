@@ -13,13 +13,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 from test_production_launch_script import (
     TestIsolationVerdict,
+    _launch_record,
     _reachability_evidence,
     _Scenario,
     launch,
@@ -32,13 +33,17 @@ from fixtures.production_launch import (
     launch_inputs_document,
     ledger_document,
     ledger_row,
+    specification_for,
 )
 from fixtures.production_runtime import CANARIES, RUN_ID, encode
 from kalpamani.data.contracts.canonical import canonical_bytes
 from kalpamani.data.production.sharadar import launch_records as lr
+from kalpamani.data.production.sharadar import launch_store as ls
+from kalpamani.data.production.sharadar import probe as pp
 from kalpamani.data.production.sharadar import r3_verification as r3
 from kalpamani.data.production.sharadar import verification_cells as vc
-from kalpamani.data.production.sharadar.probe import IsolationVerdict
+from kalpamani.data.production.sharadar.entry import TaskEntry
+from kalpamani.data.production.sharadar.probe import IsolationVerdict, VerdictReason
 
 pytestmark = pytest.mark.unit
 
@@ -120,16 +125,26 @@ def _evidence(
     *,
     rows: list[dict[str, Any]] | None = None,
     unreconciled: set[str] | None = None,
-    verdicts: dict[str, IsolationVerdict] | None = None,
+    verdicts: dict[str, tuple[pp.IsolationVerdictDocument, ...]] | None = None,
+    malformed_verdicts: set[str] | None = None,
+    unreadable_verdicts: int = 0,
+    reservations: dict[str, ls.Reservation] | None = None,
+    launch_records: dict[str, lr.LaunchRecord] | None = None,
     r3_record: r3.R3Record | None = None,
     r3_binding: r3.R3Binding | None = BINDING,
     inputs_digest: str | None = None,
+    inputs: lr.LaunchInputs | None = None,
 ) -> vc.RecordedEvidence:
     return vc.RecordedEvidence(
         ledger=lr.parse_owner_ledger(encode(ledger_document(rows or []))),
         unreconciled=frozenset(unreconciled or set()),
         verdicts=verdicts or {},
-        inputs=_inputs(inputs_digest),
+        malformed_verdicts=frozenset(malformed_verdicts or set()),
+        unreadable_verdicts=unreadable_verdicts,
+        reservations=reservations or {},
+        launch_records=launch_records or {},
+        unreadable_launch_records=0,
+        inputs=_inputs(inputs_digest) if inputs is None else inputs,
         r3_record=r3_record,
         r3_binding=r3_binding,
     )
@@ -142,6 +157,114 @@ def _prepared(**cells: str) -> dict[str, vc.PreparedCell]:
         )
         for cell_id, identity in cells.items()
     }
+
+
+class _Chain:
+    """A complete, bound evidence chain for one runtime cell on the fixtures' records."""
+
+    def __init__(self, actor: Any = BLD, *, inputs: dict[str, Any] | None = None) -> None:
+        self.actor = actor
+        self.identity = "verify-" + RUN_ID
+        self.cell_id = "R1-BLD-BOOTSTRAP" if actor is BLD else "R1-ACQ-BOOTSTRAP"
+        self.entry = TaskEntry.BUILD_VERIFY if actor is BLD else TaskEntry.ACQUISITION_VERIFY
+        self.inputs_document = launch_inputs_document() if inputs is None else inputs
+        self.specification = specification_for(
+            actor=actor,
+            kind="verification",
+            identity=self.identity,
+            inputs=self.inputs_document,
+            ledger=ledger_document([ledger_row(RUN_ID)]),
+        )
+        self.reservation = ls.Reservation(
+            identity=self.identity,
+            actor=actor,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=self.specification,
+            reserved_at=NOW,
+        )
+        self.record = _launch_record(
+            entry=self.entry,
+            identity=self.identity,
+            harness=None,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=self.specification,
+        )
+        self.row = ledger_row(self.identity, actor=actor, kind="verification", outcome="VERIFIED")
+
+    def prepared(self, digest: str | None = None) -> dict[str, vc.PreparedCell]:
+        return {
+            self.cell_id: vc.PreparedCell(
+                cell_id=self.cell_id,
+                identity=self.identity,
+                specification_digest=self.specification.digest if digest is None else digest,
+                prepared_at=NOW,
+            )
+        }
+
+    def evidence(self, **overrides: Any) -> vc.RecordedEvidence:
+        record = _r3_record()
+        fields: dict[str, Any] = {
+            "rows": [ledger_row(RUN_ID), self.row],
+            "reservations": {self.identity: self.reservation},
+            "launch_records": {self.identity: self.record},
+            "r3_record": record,
+            "inputs": lr.parse_launch_inputs(
+                encode({**self.inputs_document, "r3_verification_digest": record.digest})
+            ),
+        }
+        fields.update(overrides)
+        return _evidence(**fields)
+
+
+def _verdict_document(
+    chain: _Chain,
+    reason: VerdictReason,
+    *,
+    result: pp.ProbeResult = pp.ProbeResult.TIMED_OUT,
+    supplied: bool | None = None,
+    components: tuple[pp.BlockingComponent, ...] = (),
+    recorded_at: datetime = NOW,
+) -> dict[str, Any]:
+    """A verdict document as the launch tool writes it, consistent by construction."""
+    verdict, bound = pp.REASON_VERDICT[reason]
+    attempted = reason is not VerdictReason.NO_ATTEMPT
+    probe = pp.ProbeObservation(
+        resolution=pp.ProbeResolution.RESOLVED_IN_SET
+        if attempted
+        else pp.ProbeResolution.RESOLVED_OUTSIDE_SET,
+        result=result if attempted else pp.ProbeResult.NOT_ATTEMPTED,
+        attempts=1 if attempted else 0,
+        destination_digest="ab" * 32 if attempted else None,
+    )
+    if supplied is None:
+        supplied = reason not in {
+            VerdictReason.NO_CORROBORATION,
+            VerdictReason.NO_ATTEMPT,
+            VerdictReason.DESTINATION_UNBOUND,
+            VerdictReason.OBSERVED_CONNECTION,
+        }
+    if reason is VerdictReason.CORROBORATED and not components:
+        components = (pp.BlockingComponent.ROUTE_TABLE,)
+    return {
+        "schema_version": 1,
+        "contract_id": pp.ISOLATION_VERDICT_CONTRACT_ID,
+        "actor": chain.actor.value,
+        "kind": "verification",
+        "specification_digest": chain.specification.digest,
+        "probe": probe.document(),
+        "verdict": pp.IsolationVerdictRecord(
+            verdict=verdict,
+            reason=reason,
+            blocking_components=frozenset(components),
+            analysis_bound=bound,
+        ).document(),
+        "evidence_supplied": supplied,
+        "recorded_at": recorded_at.isoformat(),
+    }
+
+
+def _parsed(*documents: dict[str, Any]) -> tuple[pp.IsolationVerdictDocument, ...]:
+    return tuple(pp.parse_isolation_verdict_document(canonical_bytes(d)) for d in documents)
 
 
 # ---------------------------------------------------------------------------
@@ -233,12 +356,13 @@ def test_runtime_cell_states_are_derived_from_the_ledger_and_the_reservations() 
     states = vc.derive_states(_evidence(**base, rows=[row]), prepared)
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.LAUNCHED
     assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
-    # Receipt-verified: passed.
+    # Receipt-verified but unbound (no reservation, no launch record): never passed.
     row = ledger_row(
         "verify-" + RUN_ID, kind="verification", outcome="VERIFIED", evidence="RECEIPT_VERIFIED"
     )
     states = vc.derive_states(_evidence(**base, rows=[row]), prepared)
-    assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.PASSED
+    assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.UNBOUND
+    assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
     # Refused and halted rows.
     for outcome, status in (("REFUSED", vc.CellStatus.REFUSED), ("HALTED", vc.CellStatus.FAILED)):
         row = ledger_row(
@@ -258,12 +382,204 @@ def test_runtime_cell_states_are_derived_from_the_ledger_and_the_reservations() 
     states = vc.derive_states(_evidence(**base, rows=[row]), prepared)
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.FAILED
     # A launched cell keeps its recorded state even when R-3 is later blocked.
-    row = ledger_row(
-        "verify-" + RUN_ID, kind="verification", outcome="VERIFIED", evidence="RECEIPT_VERIFIED"
+    chain = _Chain(ACQ)
+    states = vc.derive_states(
+        chain.evidence(
+            r3_record=None, inputs=lr.parse_launch_inputs(encode(chain.inputs_document))
+        ),
+        chain.prepared(),
     )
-    states = vc.derive_states(_evidence(rows=[row]), prepared)
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.PASSED
     assert states["R3"].status is vc.CellStatus.BLOCKED
+
+
+class TestEvidenceChain:
+    """PR #105 review finding 2: a receipt-verified row passes only through its bound chain."""
+
+    def test_a_correctly_bound_current_chain_passes(self) -> None:
+        for actor in (BLD, ACQ):
+            chain = _Chain(actor)
+            states = vc.derive_states(chain.evidence(), chain.prepared())
+            assert states[chain.cell_id].status is vc.CellStatus.PASSED, actor
+            assert "bound to its reservation" in states[chain.cell_id].reason
+
+    def test_a_reservation_for_another_specification_does_not_bind(self) -> None:
+        chain = _Chain()
+        states = vc.derive_states(chain.evidence(), chain.prepared(digest="ef" * 32))
+        assert states[chain.cell_id].status is vc.CellStatus.UNBOUND
+        assert "reservation" in states[chain.cell_id].reason
+        other = ls.Reservation(
+            identity=chain.identity,
+            actor=BLD,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=specification_for(
+                actor=BLD,
+                kind="verification",
+                identity=chain.identity,
+                inputs=launch_inputs_document(platform_version="1.3.0"),
+            ),
+            reserved_at=NOW,
+        )
+        states = vc.derive_states(
+            chain.evidence(reservations={chain.identity: other}), chain.prepared()
+        )
+        assert states[chain.cell_id].status is vc.CellStatus.UNBOUND
+
+    def test_a_missing_reservation_or_launch_record_does_not_bind(self) -> None:
+        chain = _Chain()
+        states = vc.derive_states(chain.evidence(reservations={}), chain.prepared())
+        assert states[chain.cell_id].status is vc.CellStatus.UNBOUND
+        states = vc.derive_states(chain.evidence(launch_records={}), chain.prepared())
+        assert states[chain.cell_id].status is vc.CellStatus.UNBOUND
+        assert "launch record" in states[chain.cell_id].reason
+
+    def test_a_substituted_launch_record_does_not_bind(self) -> None:
+        chain = _Chain()
+        for field, value in (
+            ("specification_digest", "cd" * 32),
+            ("image_digest", "sha256:" + "00" * 32),
+            ("code_commit", "f" * 40),
+            ("network_interface_id", None),
+        ):
+            document = chain.record.document()
+            document[field] = value
+            if field == "network_interface_id":
+                document["subnet_id"] = None
+                document["security_group_ids"] = None
+            substituted = lr.parse_launch_record(encode(document))
+            states = vc.derive_states(
+                chain.evidence(launch_records={chain.identity: substituted}), chain.prepared()
+            )
+            assert states[chain.cell_id].status is vc.CellStatus.UNBOUND, field
+
+    def test_a_changed_registered_target_or_placement_makes_the_success_historical(
+        self,
+    ) -> None:
+        chain = _Chain()
+
+        def new_image(d: dict[str, Any]) -> None:
+            target = d["actors"]["build"]["verification"]
+            target["image_digest"] = "sha256:" + "00" * 32
+            target["task_definition"]["image_digest"] = "sha256:" + "00" * 32
+
+        for change in (
+            new_image,
+            lambda d: d["actors"]["build"]["verification"].__setitem__("code_commit", "f" * 40),
+            lambda d: d["actors"]["build"].__setitem__("subnet_id", "subnet-0fedcba9876543210"),
+            lambda d: d.__setitem__("platform_version", "1.3.0"),
+        ):
+            inputs = launch_inputs_document()
+            change(inputs)
+            r3_record = _r3_record()
+            inputs["r3_verification_digest"] = r3_record.digest
+            states = vc.derive_states(
+                chain.evidence(inputs=lr.parse_launch_inputs(encode(inputs))), chain.prepared()
+            )
+            assert states[chain.cell_id].status is vc.CellStatus.HISTORICAL
+            assert "re-verification" in states[chain.cell_id].reason
+            assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
+            # The isolation cell is blocked behind a historical bootstrap.
+            assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
+
+    def test_the_verdict_cell_accepts_only_closed_consistent_documents(self) -> None:
+        chain = _Chain()
+        digest = chain.specification.digest
+        # The minimal forged shape the runner once accepted does not parse.
+        with pytest.raises(ValueError):
+            pp.parse_isolation_verdict_document(
+                canonical_bytes(
+                    {
+                        "contract_id": pp.ISOLATION_VERDICT_CONTRACT_ID,
+                        "specification_digest": digest,
+                        "verdict": {"verdict": "VERIFIED"},
+                    }
+                )
+            )
+        # Malformed evidence for this launch is reported, never ignored.
+        states = vc.derive_states(chain.evidence(malformed_verdicts={digest}), chain.prepared())
+        assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNBOUND
+        states = vc.derive_states(chain.evidence(unreadable_verdicts=1), chain.prepared())
+        assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNBOUND
+        # A document for another actor or kind does not bind.
+        foreign = _verdict_document(chain, VerdictReason.CORROBORATED)
+        foreign["actor"] = "acquisition"
+        states = vc.derive_states(
+            chain.evidence(verdicts={digest: _parsed(foreign)}), chain.prepared()
+        )
+        assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNBOUND
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda d: d["verdict"].__setitem__("verdict", "VERIFIED"),  # over NO_CORROBORATION
+            lambda d: d["verdict"].__setitem__("analysis_bound", True),
+            lambda d: d["verdict"].__setitem__("blocking_components", ["ROUTE_TABLE"]),
+            lambda d: d.__setitem__("evidence_supplied", True),  # NO_CORROBORATION + evidence
+            lambda d: d["probe"].__setitem__("result", "CONNECTED"),  # CONNECTED not FAILED
+            lambda d: d["probe"].__setitem__("attempts", 0),
+            lambda d: d.pop("probe"),
+            lambda d: d.pop("recorded_at"),
+            lambda d: d.__setitem__("extra", 1),
+            lambda d: d.__setitem__("contract_id", "kalpamani-isolation-verdict/v2"),
+        ],
+    )
+    def test_a_contradictory_or_incomplete_verdict_document_is_refused(self, mutate: Any) -> None:
+        document = _verdict_document(_Chain(), VerdictReason.NO_CORROBORATION)
+        assert pp.parse_isolation_verdict_document(canonical_bytes(document))
+        mutate(document)
+        with pytest.raises(ValueError):
+            pp.parse_isolation_verdict_document(canonical_bytes(document))
+
+    def test_a_corroborated_verdict_over_an_observed_connection_is_refused(self) -> None:
+        document = _verdict_document(
+            _Chain(), VerdictReason.CORROBORATED, result=pp.ProbeResult.CONNECTED
+        )
+        with pytest.raises(ValueError):
+            pp.parse_isolation_verdict_document(canonical_bytes(document))
+        failed = _verdict_document(
+            _Chain(), VerdictReason.OBSERVED_CONNECTION, result=pp.ProbeResult.CONNECTED
+        )
+        assert pp.parse_isolation_verdict_document(canonical_bytes(failed)).verdict.verdict is (
+            IsolationVerdict.FAILED
+        )
+
+    def test_verdict_records_resolve_deterministically(self) -> None:
+        chain = _Chain()
+        digest = chain.specification.digest
+        no_corroboration = _verdict_document(chain, VerdictReason.NO_CORROBORATION)
+        corroborated = _verdict_document(
+            chain, VerdictReason.CORROBORATED, recorded_at=NOW + timedelta(hours=1)
+        )
+        failed = _verdict_document(
+            chain, VerdictReason.OBSERVED_CONNECTION, result=pp.ProbeResult.CONNECTED
+        )
+        stale = _verdict_document(chain, VerdictReason.ANALYSIS_OUTSIDE_TASK_WINDOW)
+        path_found = _verdict_document(chain, VerdictReason.PATH_FOUND_CONTRADICTS_OBSERVATION)
+
+        def status(*documents: dict[str, Any]) -> vc.CellStatus:
+            states = vc.derive_states(
+                chain.evidence(verdicts={digest: _parsed(*documents)}), chain.prepared()
+            )
+            return states["R2-BLD-ISOLATION"].status
+
+        assert status() is vc.CellStatus.UNEXECUTED
+        assert status(no_corroboration) is vc.CellStatus.INCONCLUSIVE
+        # A later corroboration for the same launch resolves the insufficiency.
+        assert status(no_corroboration, corroborated) is vc.CellStatus.PASSED
+        assert status(no_corroboration, stale, corroborated) is vc.CellStatus.PASSED
+        # Wrong-source, wrong-destination or stale evidence alone never promotes.
+        assert status(no_corroboration, stale) is vc.CellStatus.INCONCLUSIVE
+        # An observed connection is never erased by a later success label, in any order.
+        assert status(failed, corroborated) is vc.CellStatus.FAILED
+        assert status(corroborated, failed) is vc.CellStatus.FAILED
+        # A modelled path against the observation is a contradiction a corroboration
+        # cannot resolve.
+        assert status(path_found, corroborated) is vc.CellStatus.UNBOUND
+        # Records carrying different probe blocks are not one launch's.
+        other_probe = _verdict_document(
+            chain, VerdictReason.CORROBORATED, result=pp.ProbeResult.CONNECTION_REFUSED
+        )
+        assert status(no_corroboration, other_probe) is vc.CellStatus.UNBOUND
 
 
 def test_the_isolation_cell_is_separate_from_bootstrap_and_stays_inconclusive_uncorroborated() -> (
@@ -272,7 +588,6 @@ def test_the_isolation_cell_is_separate_from_bootstrap_and_stays_inconclusive_un
     record = _r3_record()
     identity = "verify-" + RUN_ID
     prepared = _prepared(**{"R1-BLD-BOOTSTRAP": identity})
-    digest = prepared["R1-BLD-BOOTSTRAP"].specification_digest
     passed = ledger_row(
         identity,
         actor=BLD,
@@ -293,19 +608,27 @@ def test_the_isolation_cell_is_separate_from_bootstrap_and_stays_inconclusive_un
     # Bootstrap launched but not receipt-verified: the verdict is blocked.
     states = vc.derive_states(_evidence(**base, rows=[launched]), prepared)
     assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
-    # Bootstrap passed, no verdict yet.
+    # A receipt-verified row with no chain behind it is unbound; the verdict stays blocked.
     states = vc.derive_states(_evidence(**base, rows=[passed]), prepared)
+    assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.UNBOUND
+    assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
+    chain = _Chain()
+    states = vc.derive_states(chain.evidence(), chain.prepared())
     assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
     assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNEXECUTED
-    for verdict, status in (
-        (IsolationVerdict.INCONCLUSIVE, vc.CellStatus.INCONCLUSIVE),
-        (IsolationVerdict.FAILED, vc.CellStatus.FAILED),
-        (IsolationVerdict.VERIFIED, vc.CellStatus.PASSED),
+    # Bootstrap passed through its chain: the verdict cell follows the documents.
+    chain = _Chain()
+    for reason, result, status in (
+        (VerdictReason.NO_CORROBORATION, pp.ProbeResult.TIMED_OUT, vc.CellStatus.INCONCLUSIVE),
+        (VerdictReason.OBSERVED_CONNECTION, pp.ProbeResult.CONNECTED, vc.CellStatus.FAILED),
+        (VerdictReason.CORROBORATED, pp.ProbeResult.TIMED_OUT, vc.CellStatus.PASSED),
     ):
+        document = _verdict_document(chain, reason, result=result)
         states = vc.derive_states(
-            _evidence(**base, rows=[passed], verdicts={digest: verdict}), prepared
+            chain.evidence(verdicts={chain.specification.digest: _parsed(document)}),
+            chain.prepared(),
         )
-        assert states["R2-BLD-ISOLATION"].status is status, verdict
+        assert states["R2-BLD-ISOLATION"].status is status, reason
     # A verified verdict never makes the aggregate VERIFIED while other cells are blocked.
     assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
 
@@ -327,6 +650,8 @@ def test_the_aggregate_is_verified_only_when_every_cell_passed() -> None:
         vc.CellStatus.INCONCLUSIVE,
         vc.CellStatus.BLOCKED,
         vc.CellStatus.UNEXECUTED,
+        vc.CellStatus.HISTORICAL,
+        vc.CellStatus.UNBOUND,
     ):
         mixed = dict(all_passed)
         mixed["R2-BLD-ISOLATION"] = vc.CellState(
@@ -647,6 +972,11 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
     """The verdict path composed end to end: receipt completion, then the verdict."""
     case = TestIsolationVerdict()
     scenario, record_path, lines_path = case._verify_scenario(tmp_path)
+    # The launch record the launch tool would have written into the records directory.
+    scenario.records.mkdir(parents=True, exist_ok=True)
+    (scenario.records / "launch-record-20260905T020500Z-0001.json").write_bytes(
+        record_path.read_bytes()
+    )
     cells = _Cells.__new__(_Cells)
     cells.scenario = scenario
     cells.record = _r3_record()
@@ -705,32 +1035,72 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
     out = capsys.readouterr().out
     assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=INCONCLUSIVE" in out
     assert "aggregate=INCOMPLETE" in out
-    # A verdict cell is recorded once; a second verdict with evidence cannot promote it.
+    run_tasks = len(scenario.ecs.names("run_task"))
+    # Wrong-source, stale or contradictory evidence for the same launch does not promote.
     evidence = scenario.root / "reachability.json"
+    for label, override in (
+        ("other interface", {"source_interface_id": "eni-0fedcba9876543210"}),
+        ("stale", {"start_date": (NOW + timedelta(days=30)).isoformat()}),
+    ):
+        evidence.write_bytes(encode(_reachability_evidence(**override)))
+        assert (
+            cells.main(*verdict, "--reachability-evidence", str(evidence))
+            == launch.EXIT_VERDICT_RECORDED
+        ), label
+        out = capsys.readouterr().out
+        assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=INCONCLUSIVE" in out
+    # Then qualifying, bound corroboration for the SAME launch resolves the insufficiency:
+    # no relaunch, no new probe, every earlier record kept.
     evidence.write_bytes(encode(_reachability_evidence()))
+    assert (
+        cells.main(*verdict, "--reachability-evidence", str(evidence))
+        == launch.EXIT_VERDICT_RECORDED
+    )
+    out = capsys.readouterr().out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=PASSED" in out
+    assert len(scenario.files("isolation-verdict")) == 4
+    assert len(scenario.ecs.names("run_task")) == run_tasks
+    assert scenario.clients.constructions == []
+    # A passed verdict cell is not re-evaluated again.
     assert (
         cells.main(*verdict, "--reachability-evidence", str(evidence))
         == runner.EXIT_REFUSED_CELL_STATE
     )
-    assert scenario.clients.constructions == []
 
 
-def test_a_verified_verdict_never_overrides_a_recorded_failure(tmp_path: Path) -> None:
-    """Two verdict records for one launch: the lower one governs."""
-    from kalpamani.data.production.sharadar import launch_records as records
-
+def test_the_runner_parses_every_verdict_record_and_reports_malformed_ones(
+    tmp_path: Path,
+) -> None:
+    """Records are parsed closed; a forged shape is malformed evidence, never a verdict."""
     cells = _Cells(tmp_path)
     store = cells.scenario.store()
-    for verdict in ("VERIFIED", "FAILED"):
-        store.write_record(
-            "isolation-verdict",
-            {
-                "schema_version": records.RECORD_SCHEMA_VERSION,
-                "contract_id": "kalpamani-isolation-verdict/v1",
-                "specification_digest": "ef" * 32,
-                "verdict": {"verdict": verdict},
-            },
-            at=NOW,
-        )
-    found = runner._verdicts(store)
-    assert found == {"ef" * 32: IsolationVerdict.FAILED}
+    chain = _Chain()
+    digest = chain.specification.digest
+    store.write_record(
+        "isolation-verdict", _verdict_document(chain, VerdictReason.NO_CORROBORATION), at=NOW
+    )
+    store.write_record(
+        "isolation-verdict",
+        _verdict_document(chain, VerdictReason.CORROBORATED, recorded_at=NOW + timedelta(hours=1)),
+        at=NOW + timedelta(hours=1),
+    )
+    verdicts, malformed, unreadable = runner._verdicts(store)
+    assert [d.verdict.reason for d in verdicts[digest]] == [
+        VerdictReason.NO_CORROBORATION,
+        VerdictReason.CORROBORATED,
+    ]
+    assert malformed == frozenset() and unreadable == 0
+    # The minimal shape once accepted: reported against its digest, not ignored.
+    store.write_record(
+        "isolation-verdict",
+        {
+            "contract_id": pp.ISOLATION_VERDICT_CONTRACT_ID,
+            "specification_digest": "ef" * 32,
+            "verdict": {"verdict": "VERIFIED"},
+        },
+        at=NOW + timedelta(hours=2),
+    )
+    (store._records_dir / "isolation-verdict-20260914T200000Z-deadbeef.json").write_bytes(b"{")
+    verdicts, malformed, unreadable = runner._verdicts(store)
+    assert malformed == frozenset({"ef" * 32}) and unreadable == 1
+    assert set(verdicts) == {digest}

@@ -2367,6 +2367,11 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         # Seeds a synthetic ``boto3.Session`` as the default session precisely to prove
         # the task entrypoint never uses it; every credential it holds is invented.
         PROJECT_ROOT / "tests" / "unit" / "test_production_task_credentials.py",
+        # Builds a ``boto3.Session`` from invented static credentials, with the client's
+        # HTTP transport replaced by a counting fake, to observe the R-3 adapter's
+        # retry budget and classification at the wire (PR #105); it refuses any
+        # profile-based session and sends nothing.
+        PROJECT_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
     }
     offenders: list[str] = []
     for root in (SRC, SCRIPTS, PROJECT_ROOT / "tests"):

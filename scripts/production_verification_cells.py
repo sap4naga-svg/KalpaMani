@@ -23,7 +23,10 @@ execute       --execute-cell <id> + the flag + --authorization: the cell must be
 complete      --complete-cell <id> --launch-record --receipt-lines: the launch tool's
               --complete-row for the cell's record
 verdict       --verdict-cell R2-BLD-ISOLATION --launch-record --receipt-lines
-              [--reachability-evidence]: the launch tool's --isolation-verdict
+              [--reachability-evidence]: the launch tool's --isolation-verdict; allowed while
+              the cell is UNEXECUTED or INCONCLUSIVE, so a later transcription for the SAME
+              launch can resolve an earlier insufficiency (no relaunch, no new probe, every
+              record kept; a FAILED or contradictory record is never resolved away)
 reconcile     the matrix mode IS the reconciliation: an identity reserved but unrecorded is
               INTERRUPTED and the only route is the launch tool's --recover; a consumed
               identity is never relaunched
@@ -211,39 +214,50 @@ def write_prepared(store: Any, prepared: dict[str, vc.PreparedCell]) -> None:
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
 
-def _verdicts(store: Any) -> dict[str, Any]:
-    """Verdict records in the records directory, keyed by the specification digest they name."""
+def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every verdict record in the records directory, parsed closed.
+
+    Returns the parsed documents grouped by the specification digest they name, the
+    digests named by files that decode but do not parse closed (malformed evidence for a
+    launch is reported against that launch, never ignored), and the count of files that
+    could not be decoded at all. Nothing is ranked here: the cell matrix resolves the
+    documents deterministically (:func:`verification_cells.resolve_verdicts`).
+    """
     from kalpamani.data.production.sharadar.documents import decode_document
     from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
-    from kalpamani.data.production.sharadar.probe import IsolationVerdict
+    from kalpamani.data.production.sharadar.probe import parse_isolation_verdict_document
 
-    found: dict[str, Any] = {}
+    parsed: dict[str, list[Any]] = {}
+    malformed: set[str] = set()
+    unreadable = 0
     records_dir: Path = store._records_dir
     if not records_dir.is_dir():
-        return found
+        return {}, frozenset(), 0
     for path in sorted(records_dir.glob("isolation-verdict-*.json")):
         try:
-            document = decode_document(path.read_bytes(), max_bytes=MAX_RECORD_BYTES)
-        except Exception:  # noqa: S112 - a record that is not one is not a verdict
+            raw = path.read_bytes()
+            document = decode_document(raw, max_bytes=MAX_RECORD_BYTES)
+        except Exception:
+            unreadable += 1
             continue
-        if (
-            type(document) is not dict
-            or document.get("contract_id") != "kalpamani-isolation-verdict/v1"
-            or type(document.get("specification_digest")) is not str
-            or type(document.get("verdict")) is not dict
-        ):
+        try:
+            verdict = parse_isolation_verdict_document(document)
+        except ValueError:
+            digest = document.get("specification_digest") if type(document) is dict else None
+            if type(digest) is str and digest:
+                malformed.add(digest)
+            else:
+                unreadable += 1
             continue
-        verdict = document["verdict"].get("verdict")
-        if verdict not in {m.value for m in IsolationVerdict}:
-            continue
-        # A later record for the same launch supersedes an earlier one only downwards:
-        # a FAILED or INCONCLUSIVE verdict is never overwritten by a VERIFIED one.
-        rank = {"FAILED": 0, "INCONCLUSIVE": 1, "VERIFIED": 2}
-        digest = document["specification_digest"]
-        previous = found.get(digest)
-        if previous is None or rank[verdict] < rank[previous.value]:
-            found[digest] = IsolationVerdict(verdict)
-    return found
+        parsed.setdefault(verdict.specification_digest, []).append(verdict)
+    return (
+        {
+            digest: tuple(sorted(docs, key=lambda d: d.recorded_at))
+            for digest, docs in parsed.items()
+        },
+        frozenset(malformed),
+        unreadable,
+    )
 
 
 def recorded_evidence(
@@ -262,6 +276,32 @@ def recorded_evidence(
         unreconciled = frozenset(store.unreconciled(ledger))
     except StoreError:
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    prepared = read_prepared(store)
+    reservations: dict[str, Any] = {}
+    for cell in prepared.values():
+        try:
+            reservation = store.reservation(cell.identity)
+        except StoreError:
+            raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+        if reservation is not None:
+            reservations[cell.identity] = reservation
+    launch_records: dict[str, Any] = {}
+    duplicated: set[str] = set()
+    unreadable_launch_records = 0
+    for path in store.launch_records():
+        try:
+            record = lr.parse_launch_record(path.read_bytes())
+        except (OSError, lr.LaunchRecordError):
+            unreadable_launch_records += 1
+            continue
+        if record.identity in launch_records or record.identity in duplicated:
+            # Two records for one identity: neither can be the launch, so neither binds.
+            unreadable_launch_records += 1
+            duplicated.add(record.identity)
+            launch_records.pop(record.identity, None)
+            continue
+        launch_records[record.identity] = record
+    verdicts, malformed_verdicts, unreadable_verdicts = _verdicts(store)
     inputs = None
     try:
         inputs = lr.parse_launch_inputs(arguments.launch_inputs.read_bytes())
@@ -282,7 +322,12 @@ def recorded_evidence(
     return vc.RecordedEvidence(
         ledger=ledger,
         unreconciled=unreconciled,
-        verdicts=_verdicts(store),
+        verdicts=verdicts,
+        malformed_verdicts=malformed_verdicts,
+        unreadable_verdicts=unreadable_verdicts,
+        reservations=reservations,
+        launch_records=launch_records,
+        unreadable_launch_records=unreadable_launch_records,
         inputs=inputs,
         r3_record=r3_record,
         r3_binding=r3_binding,
@@ -537,7 +582,10 @@ def main(
             if completing:
                 _require_state(states, cell, {vc.CellStatus.LAUNCHED}, prerequisites=False)
             else:
-                _require_state(states, cell, {vc.CellStatus.UNEXECUTED})
+                # An INCONCLUSIVE cell may be re-evaluated when qualifying evidence for the
+                # SAME launch arrives: no new task, no new probe, every record kept; the
+                # matrix resolves the records deterministically afterwards.
+                _require_state(states, cell, {vc.CellStatus.UNEXECUTED, vc.CellStatus.INCONCLUSIVE})
             record = prepared[launch_cell.cell_id]
             mode_argv = _launch_argv(arguments, launch_cell, record.identity)
             mode_argv = [

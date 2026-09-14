@@ -694,9 +694,315 @@ def test_check_record_reports_whether_old_evidence_still_attests(
     assert scenario.constructions == [(BUCKET, "us-east-1")]  # only the one session built a client
 
 
+class TestRowNineConfirmation:
+    """PR #105 review finding 4: row 8's 204 acknowledges the delete; row 9 confirms absence."""
+
+    @staticmethod
+    def _bucket(
+        row_nine: r3.Observation, *, later_head: r3.Observation | None = None
+    ) -> FakeBucket:
+        """A bucket whose ninth expected-path call answers ``row_nine`` and whose later
+        cleanup confirmations answer ``later_head`` (default: the object is gone)."""
+
+        def head(bucket: FakeBucket) -> r3.Observation:
+            heads = [c for c in bucket.calls if c[0] == "head_object"]
+            if len(heads) == 3 and len(bucket.calls) == 9:
+                return row_nine
+            if len(bucket.calls) > 9 and later_head is not None:
+                return later_head
+            return r3.Observation(status=404, code="404")
+
+        return FakeBucket(head=head)
+
+    @pytest.mark.parametrize(
+        ("row_nine", "observed"),
+        [
+            (r3.Observation(status=200), r3.ObservedClass.OK_200),
+            (r3.Observation(status=None, transport_failure="timeout"), r3.ObservedClass.TIMEOUT),
+            (r3.Observation(status=403, code="AccessDenied"), r3.ObservedClass.DENIED_OTHER),
+            (
+                r3.Observation(status=None, transport_failure="network"),
+                r3.ObservedClass.NETWORK_FAILURE,
+            ),
+        ],
+    )
+    def test_an_unconfirmed_absence_is_cleaned_up_and_the_row_stays_failed(
+        self, row_nine: r3.Observation, observed: r3.ObservedClass
+    ) -> None:
+        bucket = self._bucket(row_nine)
+        record = _run(bucket)
+        assert record.rows[7].observed is r3.ObservedClass.OK_204
+        assert record.rows[8].observed is observed and not record.rows[8].matched
+        # Cleanup: one more delete and a confirmation, within the budget.
+        assert [c.key_suffix for c in record.cleanup] == ["positive"]
+        assert record.cleanup[0].resolved and record.failure_path_operations == 2
+        assert record.residue == ()
+        # The failed row stays failed: cleanup restores the bucket, not the result.
+        assert record.result is r3.R3Result.NOT_VERIFIED
+        assert r3.parse_r3_record(canonical_bytes(record.document())) == record
+        assert len(bucket.calls) == 9 + 2
+
+    def test_an_absence_that_stays_unconfirmed_is_residue(self) -> None:
+        bucket = self._bucket(r3.Observation(status=200), later_head=r3.Observation(status=200))
+        record = _run(bucket)
+        assert record.result is r3.R3Result.NOT_VERIFIED_CLEANUP_UNRESOLVED
+        assert record.residue == ("_verification/20260914T180000Z-abcd/positive",)
+        assert record.failure_path_operations == 2
+        assert r3.parse_r3_record(canonical_bytes(record.document())) == record
+        # A refused cleanup delete is unresolved too.
+        bucket = FakeBucket()
+        state = {"n": 0}
+
+        def head(b: FakeBucket) -> r3.Observation:
+            state["n"] += 1
+            return (
+                r3.Observation(status=200)
+                if state["n"] == 3
+                else r3.Observation(status=404, code="404")
+            )
+
+        bucket.switches["head"] = head
+        bucket.switches["delete"] = r3.Observation(status=403, code="AccessDenied")
+        record = _run(bucket)
+        assert record.rows[7].observed is r3.ObservedClass.DENIED_OTHER
+        assert record.result is r3.R3Result.NOT_VERIFIED_CLEANUP_UNRESOLVED
+        assert record.residue == ("_verification/20260914T180000Z-abcd/positive",)
+
+    def test_a_confirmed_absence_verifies_and_needs_no_cleanup(self) -> None:
+        record = _run(self._bucket(r3.Observation(status=404, code="404")))
+        assert record.result is r3.R3Result.VERIFIED
+        assert record.cleanup == () and record.failure_path_operations == 0
+
+    def test_a_record_claiming_removal_from_row_eight_alone_is_refused(self) -> None:
+        record = _run(self._bucket(r3.Observation(status=200)))
+        document = record.document()
+        document["cleanup"] = []
+        document["result"] = "NOT_VERIFIED"
+        with pytest.raises(r3.R3RecordError):
+            r3.parse_r3_record(canonical_bytes(document))
+
+
+class CountingTransport:
+    """Replaces the botocore HTTP session: every ``send`` is one transport attempt.
+
+    Answers with a scripted status and body, raises a scripted transport exception, and
+    records every request's headers -- so the retry budget, the classification and the
+    conditional-header injection are observed at the wire, not at a fake above it.
+    """
+
+    def __init__(self) -> None:
+        self.sends = 0
+        self.requests: list[Any] = []
+        self.script: list[Any] = []
+
+    def send(self, request: Any) -> Any:
+        import io
+
+        from botocore.awsrequest import AWSResponse  # type: ignore[import-untyped]
+
+        self.sends += 1
+        self.requests.append(request)
+        answer = self.script.pop(0) if self.script else (200, b"")
+        if isinstance(answer, BaseException):
+            raise answer
+        status, body = answer
+        raw = io.BytesIO(body)
+        raw.stream = lambda **_kw: iter([body])  # type: ignore[attr-defined]
+        return AWSResponse(request.url, status, {"content-type": "application/xml"}, raw)
+
+
+def _synthetic_session(region: str) -> Any:
+    import boto3  # type: ignore[import-untyped]
+
+    return boto3.Session(
+        aws_access_key_id="SYNTHETIC00000000000",
+        aws_secret_access_key="synthetic-secret-key-never-a-credential",  # noqa: S106
+        region_name=region,
+    )
+
+
+def _error(code: str, message: str = "") -> bytes:
+    return f"<Error><Code>{code}</Code><Message>{message}</Message></Error>".encode()
+
+
+class TestBoto3Adapter:
+    """PR #105 review finding 1: one total attempt, observed at the transport."""
+
+    def _adapter(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, CountingTransport]:
+        import boto3
+
+        # No credential discovery: a session built from the workstation's profiles is refused.
+        original = boto3.Session
+
+        def refuse_profiles(*args: Any, **kwargs: Any) -> Any:
+            if "profile_name" in kwargs:
+                raise AssertionError("a test must never build a session from a profile")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(boto3, "Session", refuse_profiles)
+        adapter = tool._Boto3R3Client(BUCKET, "us-east-1", session_factory=_synthetic_session)
+        transport = CountingTransport()
+        adapter._client._endpoint.http_session = transport
+        return adapter, transport
+
+    def test_the_effective_retry_configuration_is_one_total_attempt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, _transport = self._adapter(monkeypatch)
+        retries = adapter._client.meta.config.retries
+        assert retries["total_max_attempts"] == 1 and retries["mode"] == "standard"
+        assert adapter._client.meta.config.connect_timeout == tool.CONNECT_TIMEOUT_SECONDS
+        assert adapter._client.meta.config.read_timeout == tool.READ_TIMEOUT_SECONDS
+
+    @pytest.mark.parametrize(
+        ("script", "expected"),
+        [
+            ([(503, _error("SlowDown", "slow"))], r3.ObservedClass.THROTTLED),
+            ([(500, _error("InternalError", "x"))], r3.ObservedClass.AMBIGUOUS),
+            ([(403, _error("ExpiredToken", "expired"))], r3.ObservedClass.AUTHENTICATION_FAILURE),
+            ([(404, _error("NoSuchBucket", "none"))], r3.ObservedClass.NO_SUCH_BUCKET),
+            (
+                [
+                    (
+                        403,
+                        _error(
+                            "AccessDenied", "... with an explicit deny in a resource-based policy"
+                        ),
+                    )
+                ],
+                r3.ObservedClass.DENIED_RESOURCE_POLICY,
+            ),
+            ([(403, _error("AccessDenied", "denied"))], r3.ObservedClass.DENIED_OTHER),
+            ([(200, b"")], r3.ObservedClass.OK_200),
+        ],
+    )
+    def test_every_service_answer_is_one_transport_attempt_and_one_class(
+        self, monkeypatch: pytest.MonkeyPatch, script: list[Any], expected: r3.ObservedClass
+    ) -> None:
+        adapter, transport = self._adapter(monkeypatch)
+        transport.script = list(script)
+        observation = adapter.put_object("_verification/x/unconditional", b"x", if_none_match=False)
+        assert r3.classify(observation) is expected
+        assert transport.sends == 1  # a retryable answer is NOT retried
+        assert "assumed-role" not in repr(observation)
+
+    def test_transport_failures_are_one_attempt_and_classified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from botocore.exceptions import (  # type: ignore[import-untyped]
+            ConnectTimeoutError,
+            EndpointConnectionError,
+            ReadTimeoutError,
+        )
+
+        adapter, transport = self._adapter(monkeypatch)
+        for exception, expected in (
+            (ReadTimeoutError(endpoint_url="https://synthetic"), r3.ObservedClass.TIMEOUT),
+            (ConnectTimeoutError(endpoint_url="https://synthetic"), r3.ObservedClass.TIMEOUT),
+            (
+                EndpointConnectionError(endpoint_url="https://synthetic"),
+                r3.ObservedClass.NETWORK_FAILURE,
+            ),
+        ):
+            transport.sends = 0
+            transport.script = [exception]
+            observation = adapter.head_object("_verification/x/positive")
+            assert r3.classify(observation) is expected
+            assert transport.sends == 1
+
+    def test_head_and_delete_answers_classify_as_the_table_expects(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, transport = self._adapter(monkeypatch)
+        transport.script = [(404, b"")]
+        assert r3.classify(adapter.head_object("_verification/x/copied")) is (
+            r3.ObservedClass.NOT_FOUND_404
+        )
+        transport.script = [(204, b"")]
+        assert r3.classify(adapter.delete_object("_verification/x/positive")) is (
+            r3.ObservedClass.OK_204
+        )
+        transport.script = [(501, _error("NotImplemented", "x"))]
+        assert (
+            r3.classify(
+                adapter.copy_object(
+                    "_verification/x/positive", "_verification/x/copied", if_none_match=True
+                )
+            )
+            is r3.ObservedClass.NOT_IMPLEMENTED_501
+        )
+        transport.script = [
+            (
+                200,
+                b"<InitiateMultipartUploadResult><UploadId>synthetic-upload</UploadId></InitiateMultipartUploadResult>",
+            )
+        ]
+        multipart = adapter.create_multipart_upload("_verification/x/multipart")
+        assert r3.classify(multipart) is r3.ObservedClass.OK_200
+        assert multipart.upload_id == "synthetic-upload"
+        transport.script = [(404, _error("NoSuchUpload", "gone"))]
+        assert r3.classify(adapter.list_parts("_verification/x/multipart", "synthetic-upload")) is (
+            r3.ObservedClass.NO_SUCH_UPLOAD
+        )
+
+    def test_the_conditional_copy_header_is_injected_for_that_call_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, transport = self._adapter(monkeypatch)
+        transport.script = [(403, _error("AccessDenied", "x"))] * 3
+        adapter.copy_object(
+            "_verification/x/positive", "_verification/x/copied", if_none_match=False
+        )
+        adapter.copy_object(
+            "_verification/x/positive", "_verification/x/copied", if_none_match=True
+        )
+        adapter.copy_object(
+            "_verification/x/positive", "_verification/x/copied", if_none_match=False
+        )
+        headers = [
+            {k.lower(): v for k, v in request.headers.items()} for request in transport.requests
+        ]
+        assert "if-none-match" not in headers[0]
+        assert headers[1]["if-none-match"] in ("*", b"*")
+        assert "if-none-match" not in headers[2]
+        assert "x-amz-copy-source" in headers[1]
+        assert transport.sends == 3
+        # The conditional put carries the header through the SDK's own parameter.
+        transport.script = [(200, b"")]
+        adapter.put_object("_verification/x/positive", b"x", if_none_match=True)
+        assert {k.lower(): v for k, v in transport.requests[-1].headers.items()}[
+            "if-none-match"
+        ] in ("*", b"*")
+
+    def test_the_procedure_over_the_adapter_counts_nine_transport_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, transport = self._adapter(monkeypatch)
+        deny = (403, _error("AccessDenied", "explicit deny in a resource-based policy"))
+        transport.script = [
+            (200, b""),
+            deny,
+            (404, b""),
+            deny,
+            (501, _error("NotImplemented", "x")),
+            deny,
+            (404, b""),
+            (204, b""),
+            (404, b""),
+        ]
+        record = r3.run_r3(adapter, binding=BINDING, now=lambda: NOW, stamp="20260914T180000Z-abcd")
+        assert record.result is r3.R3Result.VERIFIED
+        assert transport.sends == 9 and record.expected_path_operations == 9
+        assert all(
+            request.url.startswith("https://")
+            and "_verification/20260914T180000Z-abcd/" in request.url
+            for request in transport.requests
+        )
+
+
 def test_the_sdk_is_named_only_inside_the_client_class() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert source.count("import boto3") == 1
     assert "profile_name=r3.CONTROL_PROFILE" in source
-    assert '"max_attempts": 1' in source
+    assert '"total_max_attempts": 1' in source and '"max_attempts": 1' not in source
     assert "--skip-cleanup" in tool.REFUSED_OPTIONS and "--retry" in tool.REFUSED_OPTIONS

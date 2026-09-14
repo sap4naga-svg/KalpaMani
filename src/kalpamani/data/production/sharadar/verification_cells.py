@@ -20,6 +20,27 @@ a build isolation cell without a qualifying corroboration stays ``INCONCLUSIVE``
 the accepted tools cannot execute yet is ``BLOCKED`` with its reason or ``UNEXECUTED`` when
 it is simply owner-run. The aggregate is ``VERIFIED`` only when every required cell is
 ``PASSED``; missing receipts, contradictory evidence and blocked cells cannot produce it.
+
+**A runtime cell passes only through its evidence chain.** The prepared cell names an
+identity and a specification digest; the reservation beside the ledger must carry that
+identity and that digest; the launch record must name the same digest, identity, actor, kind,
+entry and the reservation's registered target; the ledger row must be ``VERIFIED`` with
+receipt-verified evidence; and the reservation's target and compiled placement must be the
+ones the launch-inputs record registers **now** -- otherwise the success is ``HISTORICAL``
+(ADR-0045 §7: a new commit or a new verification image digest needs fresh R-1/R-2
+evidence). Anything missing, malformed, conflicting or substituted is ``UNBOUND``, never
+``PASSED``. **The trust boundary is the owner's private root**: these bindings refuse a
+mislaid or substituted artifact; they are no proof against an owner who rewrites every
+artifact consistently, and none is claimed.
+
+**The isolation cell reads every verdict record for its launch.** Each must parse closed
+and consistent (:func:`probe.parse_isolation_verdict_document`), name the cell's actor and
+kind, and carry the same probe block; then, deterministically: any ``FAILED`` (an observed
+connection) is ``FAILED``; differing probe blocks or an ``INCONCLUSIVE`` reason a later
+corroboration cannot resolve beside a ``VERIFIED`` is a conflict (``UNBOUND``); a
+``VERIFIED`` whose companions are all resolvable insufficiencies is ``PASSED``; otherwise
+``INCONCLUSIVE``. A later record resolves an earlier insufficiency for the **same launch**
+only; nothing is relaunched, no record is discarded, and no "latest wins" rule exists.
 """
 
 from __future__ import annotations
@@ -43,10 +64,18 @@ from kalpamani.data.production.sharadar.launch_records import (
     VERIFICATION_IDENTITY_PREFIX,
     LaunchInputs,
     LaunchKind,
+    LaunchRecord,
+    LaunchRecordError,
     LedgerEvidence,
     OwnerLedger,
+    compile_launch,
 )
-from kalpamani.data.production.sharadar.probe import IsolationVerdict
+from kalpamani.data.production.sharadar.launch_store import Reservation
+from kalpamani.data.production.sharadar.probe import (
+    RESOLVABLE_INSUFFICIENCIES,
+    IsolationVerdict,
+    IsolationVerdictDocument,
+)
 from kalpamani.data.production.sharadar.r3_verification import R3Binding, R3Record, record_attests
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
@@ -75,6 +104,11 @@ class CellStatus(StrEnum):
     REFUSED = "REFUSED"
     INCONCLUSIVE = "INCONCLUSIVE"
     FAILED = "FAILED"
+    #: Recorded evidence that binds to a target or configuration other than the one now
+    #: registered: a success that stays historical under ADR-0045 §7's re-verification rule.
+    HISTORICAL = "HISTORICAL"
+    #: Recorded evidence that does not bind: missing, malformed, conflicting or substituted.
+    UNBOUND = "UNBOUND"
 
 
 class AggregateStatus(StrEnum):
@@ -462,8 +496,18 @@ class RecordedEvidence:
 
     ledger: OwnerLedger
     unreconciled: frozenset[str]
-    #: verdict records seen, keyed by the specification digest they name.
-    verdicts: dict[str, IsolationVerdict]
+    #: every verdict document that parsed, grouped by the specification digest it names.
+    verdicts: dict[str, tuple[IsolationVerdictDocument, ...]]
+    #: specification digests named by verdict files that did NOT parse closed.
+    malformed_verdicts: frozenset[str]
+    #: verdict files that could not be decoded at all (no digest could be read).
+    unreadable_verdicts: int
+    #: the reservation beside the ledger, per prepared identity (absent when none).
+    reservations: dict[str, Reservation]
+    #: launch records in the records directory that parsed, per identity.
+    launch_records: dict[str, LaunchRecord]
+    #: launch record files that did not parse.
+    unreadable_launch_records: int
     inputs: LaunchInputs | None
     r3_record: R3Record | None
     r3_binding: R3Binding | None
@@ -574,13 +618,7 @@ def _launch_state(
             specification_digest=digest,
         )
     if row.outcome == "VERIFIED" and row.evidence is LedgerEvidence.RECEIPT_VERIFIED:
-        return CellState(
-            cell_id=cell.cell_id,
-            status=CellStatus.PASSED,
-            reason="ledger row VERIFIED with receipt-verified evidence",
-            identity=identity,
-            specification_digest=digest,
-        )
+        return _bound_success(cell, evidence, prepared)
     if row.outcome == "VERIFIED":
         return CellState(
             cell_id=cell.cell_id,
@@ -609,6 +647,120 @@ def _launch_state(
     )
 
 
+def _unbound(cell: CellDefinition, prepared: PreparedCell, reason: str) -> CellState:
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.UNBOUND,
+        reason=reason,
+        identity=prepared.identity,
+        specification_digest=prepared.specification_digest,
+    )
+
+
+def _bound_success(
+    cell: CellDefinition, evidence: RecordedEvidence, prepared: PreparedCell
+) -> CellState:
+    """A receipt-verified row passes only when its whole evidence chain binds and applies."""
+    assert cell.actor is not None and cell.entry is not None
+    identity, digest = prepared.identity, prepared.specification_digest
+    reservation = evidence.reservations.get(identity)
+    if reservation is None:
+        return _unbound(cell, prepared, "no reservation beside the ledger for this identity")
+    if (
+        reservation.specification_digest != digest
+        or reservation.identity != identity
+        or reservation.actor is not cell.actor
+        or reservation.kind is not LaunchKind.VERIFICATION
+        or reservation.specification.entry is not cell.entry
+    ):
+        return _unbound(cell, prepared, "the reservation is not for the prepared specification")
+    record = evidence.launch_records.get(identity)
+    if record is None:
+        return _unbound(
+            cell, prepared, "no launch record for this identity in the records directory"
+        )
+    target = reservation.specification.target
+    if (
+        record.specification_digest != digest
+        or record.identity != identity
+        or record.actor is not cell.actor
+        or record.kind is not LaunchKind.VERIFICATION
+        or record.entry is not cell.entry
+        or record.task_definition_arn != target.task_definition_arn
+        or record.image_digest != target.image_digest
+        or record.configuration_digest != target.configuration_digest
+        or record.code_commit != target.code_commit
+        or record.network_interface_id is None
+    ):
+        return _unbound(cell, prepared, "the launch record does not bind to the reservation")
+    if evidence.inputs is None:
+        return _unbound(cell, prepared, "no launch-inputs record to apply the evidence against")
+    try:
+        current_compiled, current_target = compile_launch(
+            evidence.inputs, actor=cell.actor, kind=LaunchKind.VERIFICATION
+        )
+        applicable = (
+            current_target == target and current_compiled == reservation.specification.compiled
+        )
+    except (LaunchRecordError, TypeError, ValueError):
+        applicable = False
+    if not applicable:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.HISTORICAL,
+            reason=(
+                "bound evidence for a target or placement other than the one now registered; "
+                "re-verification is required (ADR-0045 s.7)"
+            ),
+            identity=identity,
+            specification_digest=digest,
+        )
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.PASSED,
+        reason=(
+            "ledger row VERIFIED with receipt-verified evidence, bound to its reservation, "
+            "launch record and the registered target"
+        ),
+        identity=identity,
+        specification_digest=digest,
+    )
+
+
+def resolve_verdicts(
+    documents: tuple[IsolationVerdictDocument, ...],
+) -> tuple[CellStatus, str]:
+    """The deterministic status of one launch's verdict records, and why.
+
+    Rules, in order: no document is ``UNEXECUTED``; any ``FAILED`` is ``FAILED``, whatever
+    was recorded beside it; differing probe blocks conflict; a ``VERIFIED`` beside an
+    ``INCONCLUSIVE`` whose reason a later corroboration cannot resolve conflicts; a
+    ``VERIFIED`` otherwise is ``PASSED``; the rest is ``INCONCLUSIVE``. A conflict is
+    ``UNBOUND``, never a pass.
+    """
+    if not documents:
+        return CellStatus.UNEXECUTED, "no verdict recorded for this launch (--isolation-verdict)"
+    verdicts = [doc.verdict for doc in documents]
+    if any(v.verdict is IsolationVerdict.FAILED for v in verdicts):
+        return CellStatus.FAILED, "isolation verdict FAILED: an observed connection"
+    probes = {doc.probe for doc in documents}
+    if len(probes) != 1:
+        return CellStatus.UNBOUND, "verdict records for this launch carry different probe blocks"
+    corroborated = [v for v in verdicts if v.verdict is IsolationVerdict.VERIFIED]
+    inconclusive = [v for v in verdicts if v.verdict is IsolationVerdict.INCONCLUSIVE]
+    if corroborated:
+        unresolved = [v.reason for v in inconclusive if v.reason not in RESOLVABLE_INSUFFICIENCIES]
+        if unresolved:
+            return (
+                CellStatus.UNBOUND,
+                "a corroborated verdict contradicts an unresolvable earlier verdict: "
+                + ", ".join(sorted(r.value for r in unresolved)),
+            )
+        return CellStatus.PASSED, "isolation verdict VERIFIED (corroborated)"
+    reasons = sorted({v.reason.value for v in inconclusive})
+    return CellStatus.INCONCLUSIVE, "isolation verdict INCONCLUSIVE: " + ", ".join(reasons)
+
+
 def _verdict_state(
     cell: CellDefinition, evidence: RecordedEvidence, states: dict[str, CellState]
 ) -> CellState:
@@ -624,27 +776,28 @@ def _verdict_state(
             identity=launch.identity,
             specification_digest=launch.specification_digest,
         )
-    assert launch.specification_digest is not None
-    verdict = evidence.verdicts.get(launch.specification_digest)
-    if verdict is None:
-        return CellState(
-            cell_id=cell.cell_id,
-            status=CellStatus.UNEXECUTED,
-            reason="no verdict recorded for this launch (--isolation-verdict)",
-            identity=launch.identity,
-            specification_digest=launch.specification_digest,
+    assert launch.specification_digest is not None and cell.actor is not None
+    digest = launch.specification_digest
+    if evidence.unreadable_verdicts or digest in evidence.malformed_verdicts:
+        status, reason = (
+            CellStatus.UNBOUND,
+            "a verdict record that does not parse is present; nothing is read past it",
         )
-    status = {
-        IsolationVerdict.VERIFIED: CellStatus.PASSED,
-        IsolationVerdict.INCONCLUSIVE: CellStatus.INCONCLUSIVE,
-        IsolationVerdict.FAILED: CellStatus.FAILED,
-    }[verdict]
+    else:
+        documents = evidence.verdicts.get(digest, ())
+        if any(doc.actor != cell.actor.value or doc.kind != "verification" for doc in documents):
+            status, reason = (
+                CellStatus.UNBOUND,
+                "a verdict record for this launch names another actor or kind",
+            )
+        else:
+            status, reason = resolve_verdicts(documents)
     return CellState(
         cell_id=cell.cell_id,
         status=status,
-        reason=f"isolation verdict {verdict.value}",
+        reason=reason,
         identity=launch.identity,
-        specification_digest=launch.specification_digest,
+        specification_digest=digest,
     )
 
 
@@ -743,4 +896,5 @@ __all__ = [
     "derive_states",
     "matrix_lines",
     "parse_cells_document",
+    "resolve_verdicts",
 ]
