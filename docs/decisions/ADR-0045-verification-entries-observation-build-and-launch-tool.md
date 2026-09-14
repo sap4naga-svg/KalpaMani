@@ -269,13 +269,18 @@ statement of one launch that preparation writes and an authorization binds (belo
 one launch of one identity of one kind **of one specification digest**, valid for at most 24 hours;
 a flag is never a substitute. The **reservation** (`kalpamani-launch-reservation/v1`): the durable
 consumption of one identity for one specification, created before any external mutation and never
-deleted. The **launch record** (`kalpamani-launch-record/v1`): what the tool holds about one launch it
+deleted — it **carries the whole authorized specification** and its digest, so the placement and
+workload that were authorized are read back from the durable artifact and never from a later file.
+The **launch record** (`kalpamani-launch-record/v1`): what the tool holds about one launch it
 made — the task ARN, the revision, the image and configuration digests, the commit, the identity, the
-input digest, the instants the launch was made and recorded, and the network interface and subnet
-the release named — exactly a `ReceiptExpectation` plus the R-2 binding, owner-private, never
-exported. The **evidence document** (`kalpamani-launch-evidence/v1`): outcome, counts, incident,
-cleanup failures, exit codes — tokens and integers, no ARN, no identifier. The **isolation verdict**
-(`kalpamani-isolation-verdict/v1`): the probe block, the derived verdict, its reason and components.
+input digest, the instants the launch was made and recorded, the network interface, subnet and
+**security groups the launcher verified** (the groups `DescribeNetworkInterfaces` reported on the
+task's interface, equal as a set to the compiled groups or the task was misplaced), and the
+**specification digest** the authorization named — exactly a `ReceiptExpectation` plus the R-2
+binding and the binding to its reservation, owner-private, never exported. The **evidence document**
+(`kalpamani-launch-evidence/v1`): outcome, counts, incident, cleanup failures, exit codes — tokens
+and integers, no ARN, no identifier. The **isolation verdict** (`kalpamani-isolation-verdict/v1`): the
+probe block, the derived verdict, its reason and components, and the specification digest.
 
 **The authorization binds the whole launch, through the specification.** Preparation (no flag)
 builds the specification from the admitted records — actor, kind, identity, entry; the workload
@@ -296,27 +301,65 @@ placement changes the workload and refuses. A gate-evidence digest in the specif
 **reference to owner-held evidence**, never proof that the approval it refers to occurred.
 
 **The identity is consumed durably before any external mutation.** Under an exclusive ledger lock,
-the ledger is re-read, the identity re-checked against it and against the reservations directory,
-and a reservation naming the specification digest is created with `O_CREAT | O_EXCL` — before the
-bootstrap, before any client. A reservation that already exists refuses; one that cannot be
-persisted refuses; **a reservation is never deleted and never expires**, through cleanup, failures,
-ambiguous outcomes and interruptions. Every ledger write — the provisional row, its completion,
-recovery — happens under the same lock and replaces the ledger atomically (a fresh temporary file,
-synced, `os.replace`d) after re-checking that the ledger's bytes are the ones read, so a
-read-modify-write cannot lose an update; a lock another process left is refused and never removed by
-the tool. Evidence and launch records are created under exclusive names carrying the instant and
-eight random hex digits, so two records in one second cannot collide or overwrite. **An interrupted
-attempt** — a crash after the reservation, after `RunTask`, or a failed record or ledger write — leaves
-the reservation with no ledger row; every later launch of any identity refuses
-(`refused_recovery_pending`) until the owner runs `--recover`, which writes a `HALTED`,
-`EXIT_CODE_ONLY` row for the reserved identity, launches nothing, and keeps the reservation. What a
-task that started before the interruption did, the tool does not know and does not guess; the owner
-reviews ECS by hand. **This owner-side reservation is distinct from the acquisition task's accepted
-S3 run reservation** (ADR-0038): the store's reservation guards the identity against the provider; the
-workstation's guards it against the owner's own tool. A verification task still reserves nothing in
-the store. Durability is the platform's: NTFS honours exclusive creation and atomic replacement on
-one volume; a power loss before `fsync` returns can lose a write, and Windows syncs no directory
-entry separately — stated as limits, not designed away.
+the ledger is re-read, the identity re-checked against it and against the ledger's reservations,
+and a reservation carrying the specification and naming its digest is created with
+`O_CREAT | O_EXCL` — before the bootstrap, before any client. A reservation that already exists
+refuses; one that cannot be persisted refuses; **a reservation is never deleted and never expires**,
+through cleanup, failures, ambiguous outcomes and interruptions. Every ledger write — the
+provisional row, its completion, recovery — happens under the same lock and replaces the ledger
+atomically (a fresh temporary file, synced, `os.replace`d) after re-checking that the ledger's bytes
+are the ones read, so a read-modify-write cannot lose an update; a lock another process left is
+refused and never removed by the tool. Evidence and launch records are created under exclusive names
+carrying the instant and eight random hex digits, so two records in one second cannot collide or
+overwrite. **An interrupted attempt** — a crash after the reservation, after `RunTask`, or a failed
+record or ledger write — leaves the reservation with no ledger row; every later launch of any
+identity refuses (`refused_recovery_pending`) until the owner runs `--recover`, which writes a
+`HALTED`, `EXIT_CODE_ONLY` row for the reserved identity — its slice and plan digest from the
+reservation's own specification, its launch instant from the launch record when one is visible and
+names the same specification, otherwise the reservation's — launches nothing, and keeps the
+reservation. What a task that started before the interruption did, the tool does not know and does
+not guess; the owner reviews ECS by hand. **This owner-side reservation is distinct from the
+acquisition task's accepted S3 run reservation** (ADR-0038): the store's reservation guards the
+identity against the provider; the workstation's guards it against the owner's own tool. A
+verification task still reserves nothing in the store. Durability is the platform's: NTFS honours
+exclusive creation and atomic replacement on one volume; a power loss before `fsync` returns can lose
+a write, and Windows syncs no directory entry separately — stated as limits, not designed away.
+
+**The reservation's location depends on the ledger and on nothing else.** Reservations live at
+`<ledger>.reservations/<identity>.json` and the lock at `<ledger>.lock`, both beside the ledger's
+**canonical** path (`Path.resolve`: absolute, symlinks followed, the platform's own spelling), so a
+relative spelling, a `..` segment, another case on a case-insensitive volume or a symlink names the
+same reservations and the same lock. `--records-dir` is an **evidence destination and nothing more**:
+naming a different one — or the same one spelled differently — changes where evidence and launch
+records are written and nothing about which identities are consumed or await recovery; recovery finds
+the reservation from any records directory, and a launch record it cannot see there yields an honest
+`HALTED` row from the reservation alone, never a released identity. **Legacy state:** the first
+revision kept reservations under `<records-dir>/reservations`. No launch has ever run against AWS, so
+no real reservation exists there; still, such a directory with any entry under the supplied records
+directory refuses (`refused_legacy_reservations`) until the owner has moved its files beside the
+ledger by hand and unchanged — the tool reads, moves, migrates and deletes none of them, and scans no
+directory it was not handed. A first-revision reservation document carries no specification and is
+refused as malformed rather than read.
+
+**The verdict binds to the recorded placement, and every artifact of one launch binds to the
+others.** The launch record names the specification digest the authorization named and carries the
+placement the launcher verified — interface, subnet and the security groups the interface carried.
+Completion and the verdict both require the record's reservation beside the ledger, with the same
+specification digest, the same actor, kind and entry, the same registered target (revision, image,
+configuration, commit), the same acquisition workload, and a verified placement the specification
+named (its subnet; its security groups as a set); the verdict further requires the identity's ledger
+row and a build-verification receipt that verified against the record. **The verdict's security
+groups are the record's**, cross-checked against the reservation's specification — never a freshly
+supplied launch-inputs file's. That argument is retained for the invocation's shape and is **verified
+against the recorded specification**: a file compiling to another placement or another target refuses
+(observed before the correction: a launch-inputs file listing an extra group turned
+`COMPONENT_OUTSIDE_PLACEMENT` into `VERIFIED`; after it, exit 3 and no verdict written). A missing
+reservation, a missing row, a record without a verified placement or a record naming another
+specification refuses; nothing missing can establish `VERIFIED`. **The trust boundary is the
+owner's private root.** These digests make a substituted or mislaid owner artifact a refusal — a
+different records directory, a different launch-inputs file, a rewritten record; they are not
+protection against an owner who deliberately rewrites every owner-controlled artifact consistently,
+and this proposal does not claim that a stored digest protects against its own author.
 
 **Input materialization uses the accepted digest functions and the task's own contract.** Acquisition
 input v2: `plan_digest_for` over the slice, `spent_identities_block` over the ledger's **whole**
@@ -399,7 +442,7 @@ requires both families rebuilt and R-1/R-2 re-run before the production revision
 | ADR-0036 §2.9 (task definitions; the launcher's `RunTask` resource) | one verification family per actor; the launcher's resource set is `concat([production revision], verification revision list)` |
 | ADR-0036 §3 (R-1 / R-2) | run with the verification image; R-1's expected exit is 18; R-2 reads the probe under §3's verdict rule; corroboration is Reachability Analyzer only |
 | ADR-0036 §2.6 (the owner ledger) | rows carry `kind` and `evidence`; verification identities are consumed rows; the `verify-` prefix is reserved |
-| ADR-0036 §2.12 (the launch tool) | implemented as §6; the authorization binds a launch specification; the identity is reserved durably before any external mutation; ledger writes are locked and atomic; the ledger row is provisional until receipt-verified; interrupted work is recovered, never relaunched |
+| ADR-0036 §2.12 (the launch tool) | implemented as §6; the authorization binds a launch specification; the identity is reserved durably before any external mutation, beside the ledger and carrying the specification; ledger writes are locked and atomic; the ledger row is provisional until receipt-verified; interrupted work is recovered from any records directory, never relaunched; the launch record names the specification digest and the verified placement (interface, subnet, groups), and the R-2 verdict binds to that recorded placement |
 | ADR-0044 §2 (compiled configuration) | the verification field set (origin addresses only); `is_known_family` |
 | ADR-0044 §4 (the receipt) | `kalpamani-task-receipt/v2`: `probe` (build verify, `VERIFIED_BOOTSTRAP` only; resolution, result, attempts and the keyed `destination_digest`) and `schema_observation` (build, `REFUSED_NORMALIZATION` only); `VERIFIED` added to the ledger outcomes |
 | ADR-0036 §3 (R-2 evidence) | the corroboration is one transcribed Reachability Analyzer analysis, bound by derivation; the launch tool records the verdict; task-definition read-back (`ecs:DescribeTaskDefinition`) is a recorded dependency of the launcher sets, not granted |
@@ -449,3 +492,32 @@ written as though the first revision had said them.
 Each correction narrows a proposed contract; none weakens one. The receipt's probe block, the
 authorization record and the launch record changed shape as stated in §8; the examples, parsers and
 guards changed with them.
+
+Two further findings against the corrected revision (`555fdf76…`) were reproduced the same way and
+corrected in a second cycle:
+
+5. **The reservation's location depended on the records directory.** Reservations lived under
+   `<records-dir>/reservations`, so an interrupted attempt retried with the same ledger, identity and
+   authorization and a different `--records-dir` found no reservation and launched again (observed:
+   exit 0, `RunTask` 1 → 2, nineteen clients constructed), and `--recover` from another directory
+   found nothing to recover (observed: exit 3). Corrected by anchoring reservations and the lock to
+   the ledger's canonical path, by the reservation carrying the specification (so recovery's row
+   comes from it), by treating the records directory as an evidence destination only, and by
+   refusing first-revision reservations under a supplied records directory until the owner moves
+   them (observed after: exit 12 before any client from any directory, `RunTask` stays 1; recovery
+   from another directory writes the `HALTED` row; the identity stays consumed everywhere).
+6. **The verdict took its security groups from a freshly supplied launch-inputs file.** The record
+   carried the interface and subnet, but the groups came from `--launch-inputs`, unbound to the
+   launch; a file listing an extra group turned an outside-placement explanation into `VERIFIED`
+   (observed: `COMPONENT_OUTSIDE_PLACEMENT` → `CORROBORATED`). Corrected by recording the verified
+   groups and the specification digest on the launch record, binding the record to its reservation
+   and ledger row before completion or a verdict, deriving the verdict's placement from the record
+   cross-checked against the reservation's specification, and verifying a supplied launch-inputs
+   file against the recorded specification (observed after: exit 3, no verdict written; the
+   untampered evidence still verifies; a widened record, a widened reservation, a missing
+   reservation or a missing row each refuses). The trust boundary is stated as the owner's private
+   root, not as a stored digest.
+
+The reservation and launch-record contracts changed shape in this cycle as §6 states; the parsers,
+the store, the launcher's report and the guards changed with them, and the examples are unchanged
+(neither document is exemplified).

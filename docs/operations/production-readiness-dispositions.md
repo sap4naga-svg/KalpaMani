@@ -158,6 +158,51 @@ reservation, and a verification task still reserves nothing in the store.
 entry; a stale lock is the owner's to remove; what a task started before an interruption did is not
 known to the tool and is recorded as `HALTED` for owner review.
 
+## F-8 — the reservation's location must not depend on the records directory (PR #104 review, second cycle)
+
+**Reproduced** at `555fdf76…` through the public launch path on fakes: a launch with ledger L and
+records directory A, interrupted after `RunTask` and before the ledger row, left its reservation under
+`A/reservations`; the same identity retried with ledger L and records directory B found no reservation
+and launched again (exit 0, `RunTask` 1 → 2, nineteen clients constructed); `--recover` from another
+directory found nothing to recover (exit 3).
+
+**Corrected** by anchoring the reservations directory and the lock to the ledger's canonical path
+(`<ledger>.reservations/`, `<ledger>.lock`, via `Path.resolve`), so every mode — preparation,
+reservation, execution, completion, recovery, the verdict — resolves one store for one ledger whatever
+records directory is named and however the ledger is spelled; by the reservation carrying the whole
+authorized specification, so recovery's `HALTED` row takes its slice and plan digest from it and a
+launch record the named directory cannot show costs nothing but the launch instant; and by treating
+`--records-dir` as an evidence destination only. Exclusive creation, atomic replacement, the lock and
+permanent consumption are unchanged. **Legacy state**: a `reservations` directory with any entry
+under the supplied records directory refuses (`refused_legacy_reservations`, exit 15) until the owner
+has moved its files beside the ledger by hand — the tool reads, moves, migrates and deletes none of
+them, looks at no directory it was not handed, and no real reservation exists anywhere because no
+launch has ever run; a first-revision document carries no specification and is refused as malformed.
+Tested on synthetic directories only; no private production state was scanned or migrated.
+
+## F-9 — the isolation verdict uses the recorded launch placement (PR #104 review, second cycle)
+
+**Reproduced** through the public verdict path on fakes: a valid launch record and verified
+build-verification receipt; analysis evidence naming a security group outside the launched placement
+gave `INCONCLUSIVE / COMPONENT_OUTSIDE_PLACEMENT`; a substituted, otherwise valid `--launch-inputs`
+file whose build groups included that group gave `VERIFIED / CORROBORATED` with the record, receipt and
+ledger unchanged — the groups came from the fresh file, unbound to the launch.
+
+**Corrected** by persisting on the launch record the specification digest the authorization named and
+the placement the launcher verified (interface, subnet and the security groups
+`DescribeNetworkInterfaces` reported on the interface — equal as a set to the compiled groups or the
+task was misplaced), carried by `LaunchReport.security_group_ids`; by binding the record to its
+reservation before completion or a verdict (same specification digest, actor, kind, entry, registered
+target, acquisition workload, subnet and groups) and, for the verdict, to the identity's ledger row;
+by deriving the verdict's placement from the record cross-checked against the reservation's
+specification; and by verifying a supplied `--launch-inputs` file against the recorded specification
+(`compile_launch` must reproduce the specification's compiled launch and target) — a mismatch refuses
+and no verdict is written. Destination binding, the analysis checks and `CONNECTED → FAILED` are
+unchanged; a missing reservation, row, placement or binding refuses and can never establish
+`VERIFIED`. **Trust boundary stated**: the digests make a substituted or mislaid owner artifact a
+refusal; they are no protection against an owner who rewrites every owner-controlled artifact
+consistently, and none is claimed.
+
 ## F-5 — the authorization binds the workload and target (PR #104 review)
 
 **Reproduced**: a slice with a different `actions` window launched under an authorization written for

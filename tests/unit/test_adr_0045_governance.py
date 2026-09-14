@@ -223,6 +223,26 @@ def test_the_launch_records_and_identity_rule_match_the_document() -> None:
         assert name in launch_records.TaskDefinitionEvidence.__dataclass_fields__
     assert "differ by design" in ADR_PLAIN and "never runtime proof" in ADR_PLAIN
     assert "## 10. Corrections after the independent review of PR #104" in ADR_TEXT
+    # The second cycle: reservations anchored to the ledger, the verdict bound to the recorded
+    # placement, the trust boundary stated as the owner's private root.
+    assert (
+        launch_store.RESERVATIONS_SUFFIX == ".reservations" and launch_store.LOCK_SUFFIX == ".lock"
+    )
+    assert "`<ledger>.reservations/<identity>.json`" in ADR_TEXT and "`<ledger>.lock`" in ADR_TEXT
+    assert "Path.resolve" in ADR_TEXT and "evidence destination" in ADR_PLAIN
+    assert launch_store.LEGACY_RESERVATIONS_DIRECTORY == "reservations"
+    assert "refused_legacy_reservations" in ADR_TEXT
+    assert "reads, moves, migrates and deletes none of them" in ADR_PLAIN
+    assert (
+        launch_store.StoreDefect.LEGACY_RESERVATIONS_PRESENT.value == "LEGACY_RESERVATIONS_PRESENT"
+    )
+    assert "specification" in launch_store._RESERVATION_FIELDS
+    assert {"security_group_ids", "specification_digest"} <= launch_records._LAUNCH_RECORD_FIELDS
+    assert "The verdict's security\ngroups are the record's" in ADR_TEXT
+    assert "never a freshly\nsupplied launch-inputs file's" in ADR_TEXT
+    assert "The trust boundary is the\nowner's private root" in ADR_TEXT
+    assert "does not claim that a stored digest protects against its own author" in ADR_PLAIN
+    assert callable(launch_records.parse_specification)
     assert launch_records.MAX_AUTHORIZATION_VALIDITY.total_seconds() == 24 * 3600
     assert "at most 24 hours" in ADR_PLAIN
     assert {m.value for m in launch_records.LedgerEvidence} == {

@@ -26,9 +26,10 @@ these stand in for are listed in [`../../production-owner-inputs.md`](../../prod
 The runtime-binding parameters (`kalpamani-production-*-runtime-binding/v1`), the placement
 release (`kalpamani-placement-release/v2`), the launch-inputs record (`kalpamani-launch-inputs/v1`),
 the launch specification (`kalpamani-launch-specification/v1`), the launch record
-(`kalpamani-launch-record/v1`) and the reservation (`kalpamani-launch-reservation/v1`) are deliberately
-**not** exemplified here: each carries an account-bearing ARN or account id or is written only by the
-tool, and the bindings are materialized by Terraform, the release, specification, record and reservation
+(`kalpamani-launch-record/v1`, which also names its specification digest and the verified security
+groups) and the reservation (`kalpamani-launch-reservation/v1`, which embeds the whole specification)
+are deliberately **not** exemplified here: each carries an account-bearing ARN or account id or is
+written only by the tool, and the bindings are materialized by Terraform, the release, specification, record and reservation
 by the launch tool, the launch-inputs record transcribed from Terraform outputs, never typed by the
 owner. The Reachability Analyzer transcription (`kalpamani-reachability-evidence/v1`) is a closed
 document with no free-text field to carry a synthetic marker, so it is not exemplified either; its
