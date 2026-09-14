@@ -412,13 +412,17 @@ def test_a_symbolic_link_under_an_admitted_path_is_refused(
 ) -> None:
     """A link is written into the index directly (mode 120000), so the test needs no
     filesystem symlink support; the tree then carries something an image may not."""
-    object_id = subprocess.run(  # noqa: S603
-        [repository.git, "hash-object", "-w", "--stdin"],
-        cwd=repository.root,
-        check=True,
-        capture_output=True,
-        input=b"../../etc/passwd",
-    ).stdout.decode().strip()
+    object_id = (
+        subprocess.run(  # noqa: S603
+            [repository.git, "hash-object", "-w", "--stdin"],
+            cwd=repository.root,
+            check=True,
+            capture_output=True,
+            input=b"../../etc/passwd",
+        )
+        .stdout.decode()
+        .strip()
+    )
     repository("update-index", "--add", "--cacheinfo", f"120000,{object_id},src/kalpamani/link")
     repository("commit", "-q", "-m", "link")
     repository("reset", "-q", "--hard")  # materialize the checkout so the generator sees it clean

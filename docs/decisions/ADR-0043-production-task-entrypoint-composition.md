@@ -21,7 +21,9 @@ tree** (`56b0c7bcc45e4752bd70ccc9e957352a364a27cc`). ADR-0043's entrypoint-compo
 request was open it was proposed and carried no authority — true then, and not rewritten. **Its §3 and §4 were
 not decided by that merge**: they remained proposals, and are resolved — as a proposal of its own — by
 [ADR-0044](ADR-0044-production-delivery-contracts-and-packaging.md), which also retires the fourth-parameter
-spent-identity document §3 sketched. **Acceptance authorizes no execution.**
+spent-identity document §3 sketched. **ADR-0044 has since been accepted on the merge of PR #101
+(2026-09-14T01:09:53Z), so §3 and §4 are resolved; while that pull request was open the resolution was proposed
+and carried no authority — true then, and not rewritten.** **Acceptance authorizes no execution.**
 
 **Nothing was run to produce this decision.** No AWS call, no ECS metadata call, no Terraform plan or
 apply, no credential retrieval, no provider request, no image build. The evidence is the merged

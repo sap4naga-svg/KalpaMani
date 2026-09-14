@@ -13,9 +13,33 @@ requires and the packaging that implements it offline — and nothing else**, ef
 the offline contracts merged beside it. **Acceptance authorizes no execution** (§8): no image build,
 no publication, no Terraform plan or apply, no launch, no run.
 
+**The condition above has since been satisfied.** **PR #101 merged** — merged **2026-09-14T01:09:53Z**, merge
+commit **`98addd070857143b2bd79ef3e2bf6c06539555ba`**, ordered parents **`2b956c05d1aa171b571f6739d3d5756a00479847`** then
+**`0064aa0b66d03ec3b40742ac455aa78df9074536`**, with a **merge tree identical to the independently reviewed pull-request head
+tree** (`cb81cdd9a1e0761dfda1cc5d0aa3e9e27ebad809`). ADR-0044 is therefore **ACCEPTED / IN FORCE** as the resolution of
+ADR-0043 §3 and §4 and the narrow ADR-0036 amendments it states, effective together with the offline
+contracts merged beside it. While the pull request was open it was proposed and carried no authority —
+true then, and not rewritten. **The receipt collector and its `logs:GetLogEvents` IAM delta (§5) remain
+proposed and deferred, and deployment remains a later gate.** **Acceptance authorized no image build,
+no publication, no Terraform plan or apply, no launch and no run.**
+
 **Nothing was run to produce this decision.** No AWS call, no ECS metadata call, no STS call, no
 container image built or pulled, no registry contacted, no credential retrieved, no provider request.
 The evidence is the merged runtime composed on synthetic fixtures through the real modules.
+
+**A later, separately authorized local image-verification cycle then exercised §6's packaging.** Both
+actor targets were built once, on one workstation, from contexts prepared from the exact tree with
+**synthetic** configurations (a synthetic secret name, reserved documentation addresses, the synthetic
+calendar and evidence of the test fixtures), and their packaged entrypoints were verified in
+**network-disabled** containers shaped like the task definitions. The accepted image demonstrated four
+packaging defects, each corrected within §6's design rather than by amending it — the context preparer
+now takes the archive with end-of-line conversion disabled and holds every extracted file to the
+tree's blob; the Dockerfile runs as the task definitions' numeric user, creates the configuration
+directory traversable, takes the build backend from the pinned base, and refuses with a closed reason;
+the entrypoint creates its working directory under `/work` after the credential-environment check. See
+`docs/operations/production-image-build.md`, *Local verification*. **No image was published, no digest
+was registered, no AWS, STS, provider or registry request was made, and nothing ran as a task**: local
+success is packaging evidence, not runtime verification.
 
 ---
 

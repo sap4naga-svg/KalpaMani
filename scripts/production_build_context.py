@@ -309,7 +309,7 @@ def _archive_sources(
     if sorted(extracted) != expected:
         return None
     for name in extracted:
-        mode, object_id = listing[name]
+        object_id = listing[name][1]
         try:
             content = (output / name).read_bytes()
         except OSError:

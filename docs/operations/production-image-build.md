@@ -1,10 +1,12 @@
-# Production task images — build, digest registration and verification (PROPOSED)
+# Production task images — build, digest registration and verification
 
-**Status: a procedure for a gate that has not been opened.** No image has been built,
-published or run. This document describes what the owner would do at the image gate under
-[ADR-0044](../decisions/ADR-0044-production-delivery-contracts-and-packaging.md) once it is
-accepted and once the image gate is separately authorized (CLAUDE.md §4.21, §8). Reading it
-authorizes nothing; nothing here has been executed.
+**Status: an accepted procedure for a gate that has not been opened.** Its design is accepted
+under [ADR-0044](../decisions/ADR-0044-production-delivery-contracts-and-packaging.md) (PR #101,
+merged 2026-09-14). **No image has been published, registered or run.** Steps 1–6 have been
+exercised once, locally, under a separate written authorization for *local image verification*
+— on one workstation, with **synthetic** configurations, in **network-disabled** containers — and
+what that established and did not is recorded in *Local verification* below. Steps 7–10 remain
+separately authorized owner actions (CLAUDE.md §4.21, §8). Reading this authorizes nothing.
 
 ## What an image is, and what it cannot know
 
@@ -21,7 +23,8 @@ digest is registered only after the image exists. Neither is therefore compiled 
 ```text
 generation record        configuration_digest   = SHA-256 of the compiled configuration file
                          code_commit, code_tree = the commit and tree the file was generated for
-build context            source paths extracted from the TREE of that commit (git archive);
+build context            source paths extracted from the TREE of that commit (git archive, with
+                         end-of-line conversion disabled, every file held to its blob id);
                          the configuration beside them as a declared, digest-bound input;
                          context-manifest.json naming commit, tree, source digest and
                          configuration digest
@@ -51,7 +54,13 @@ No placeholder digest exists anywhere in the chain, and no value is compared to 
 image source paths (`IMAGE_SOURCE_PATHS`: `pyproject.toml`, `src`,
 `scripts/production_task_entrypoint.py`, `docker/production/Dockerfile`,
 `docker/production/constraints.txt`, `docker/production/entry`) and extracts the result into a
-fresh directory. A checkout is therefore never the build context: an untracked file, a
+fresh directory — **with end-of-line conversion disabled, and every extracted file then hashed as a
+Git blob and held equal to the object id the tree lists for that path**. `git archive` honours a
+checkout's `core.autocrlf` and `text=auto` attribute, so on a Windows workstation it would
+otherwise write CRLF into the POSIX entry executables (a `#!/bin/sh\r` shebang does not exec) and
+the source digest would depend on the workstation; the first local build demonstrated exactly that.
+A symbolic link, a submodule, an `export-subst` rewrite or any byte disagreement refuses the
+context. The manifest also names the sources the tree marks executable. A checkout is therefore never the build context: an untracked file, a
 git-ignored file or a local modification under `src/` — each of which `docker build .` would
 copy with no record of it, because Docker honours `.dockerignore` and nothing else — cannot
 reach the build, and the tests inspect the prepared directory's contents to show it
@@ -114,8 +123,15 @@ context preparer is.
    It prints the entry, the commit, the configuration digest and the source file count, and
    writes `context-manifest.json`. Its `build_arguments` are the values step 5 passes; **read
    them from the manifest, never retype them**.
-4. **Pin the base image by digest.** Resolve `python:3.11-slim` to a digest once, record it,
-   and pass it as `BASE_IMAGE_DIGEST`; the Dockerfile has no default and fails without it.
+4. **Pin the base image by digest.** Resolve `python:3.11-slim` once and record **the linux/amd64
+   image manifest digest** — the task definitions run `X86_64` — as `BASE_IMAGE_DIGEST`; the
+   Dockerfile has no default and fails without it. A tag resolves to a **multi-platform index**
+   whose digest differs from every platform image's; `docker buildx imagetools inspect
+   python:3.11-slim` lists both, and the recorded value must be the platform image's, so that the
+   same bytes are built wherever the build runs. The base carries the build backend the wheel
+   build needs (`setuptools`, `wheel`; pyproject.toml's `build-system.requires`), which the
+   Dockerfile checks and records at `/opt/kalpamani/BUILD_BACKEND` — pip's `--no-deps` does not
+   disable build isolation, so the install runs `--no-build-isolation` and fetches nothing to build.
 5. **Build each target** *(image gate authorization)* **from the prepared context**, using the
    Dockerfile the context carries:
 
@@ -134,12 +150,19 @@ context preparer is.
    admits only the source allowlist (`.dockerignore`) and still fails, because no
    `configuration/` input exists there. A target built from the other entry's context fails at
    the Dockerfile's entry check.
-6. **Verify before publishing.** Inside the built image (no network): the file at
+6. **Verify before publishing.** Inside the built image, in a container shaped like the task
+   definition — `--network none`, `--read-only`, `--tmpfs /work:rw,noexec,nosuid`, the image's own
+   user (`10001:10001`), no host mounts, no credentials — the file at
    `/etc/kalpamani/compiled-configuration.json` hashes to the recorded `configuration_digest`;
-   `/opt/kalpamani/CODE_COMMIT` equals the recorded commit; running the entry executable on the
-   workstation-shaped environment exits `4` (`REFUSED_CREDENTIAL_ENVIRONMENT`) with zero
-   operations and one closing `receipt:` line — `3` (`REFUSED_CONFIGURATION`) is *not*
-   expected, because the file is present.
+   `/opt/kalpamani/CODE_COMMIT` equals the recorded commit; `/etc/kalpamani` is mode `0555` and
+   the file `0444`; the package imports from `site-packages`; and running the entry executable with
+   no ECS credential variables exits `4` (`REFUSED_CREDENTIAL_ENVIRONMENT`) with zero operations,
+   nothing created under `/work`, and exactly one closing `receipt:` line carrying the commit and
+   the configuration digest. `3` (`REFUSED_CONFIGURATION`) is *not* expected, because the file is
+   present — the accepted image produced it anyway, because `COPY --chmod=0444` had created its
+   parent directory `0444`. With the container credential variable present and no `/work`
+   writable, `6` (`REFUSED_DEPENDENCY`) is expected before any client exists. The controlled
+   negative builds in *Local verification* are the checks' own negative controls.
 7. **Publish to the one research repository** *(image publication authorization)* and record
    the **registry-reported digest** (`RepoDigests`). This digest, not the local image id, is
    what everything downstream compares.
@@ -151,8 +174,79 @@ context preparer is.
 10. **Verification, end to end, is a later gate** (ADR-0036 R-1/R-2: a task that reaches the
     barrier and exits with the closed verification code). Nothing in this document is that.
 
+## Local verification — performed once, after PR #101; packaging evidence only
+
+Under a separate written authorization, both targets were built once on one workstation
+(Docker Desktop 4.48 / engine 28.5.1, `linux/amd64`, BuildKit) from contexts prepared with
+`scripts/production_build_context.py` from the exact tree of a committed head, with compiled
+configurations generated from **synthetic inputs** (a synthetic secret *name*, the reserved
+documentation addresses `192.0.2.10`/`192.0.2.11`, and the test fixtures' synthetic calendar and
+evidence), the base pinned by its linux/amd64 image manifest digest. **Nothing was published,
+registered, launched or run on AWS; the images carry synthetic configuration and are not
+production-ready; the local image ids are not registry digests.**
+
+The accepted packaging (the PR #101 head) built, and its image then demonstrated four defects in
+task-shaped containers — each reproduced before it was corrected, and each now held by a test:
+
+| defect the accepted image showed | correction |
+|---|---|
+| `git archive` on the Windows checkout emitted CRLF; `exec /usr/local/bin/kalpamani-production-acquire: no such file or directory` | the preparer archives with conversion disabled and holds every file to the tree's blob |
+| `/etc/kalpamani` was created `0444` by `COPY --chmod=0444`; every non-root user got `REFUSED_CONFIGURATION` (3) with the file present | the base stage creates the directory `0555`; the build-time check holds the modes |
+| the image user was uid 999 (`useradd --system`) while the task definitions run `10001:10001`, which had no passwd entry | `groupadd`/`useradd` at `10001`, `USER 10001:10001` |
+| `tempfile.mkdtemp()` used `/tmp`, absent under the read-only root: a traceback, exit 1, no receipt | the working directory is created under `/work` after the credential-environment check; an unusable root is `REFUSED_DEPENDENCY` (6) with a receipt |
+
+Two further facts came out of the same runs. pip's `--no-deps` leaves **build isolation** on, so the
+accepted Dockerfile fetched `setuptools`/`wheel` from PyPI unpinned to build the wheel; the install
+now runs `--no-build-isolation` against the pinned base's backend and records the versions used.
+And Docker mounts a tmpfs over an existing mount point with **the directory's mode copied but root
+ownership**, so a `0700` `/work` in the image made the tmpfs unwritable by uid 10001; the mount
+point is created `1777`, which works under both behaviours.
+
+What the network-disabled containers established, for both images (`--read-only`,
+`--tmpfs /work:rw,noexec,nosuid,size=64m`, `--cap-drop ALL`, `no-new-privileges`, memory, CPU and
+pid limits, a wall-clock timeout, no Docker socket, no credentials, no private file, no host
+directory; single synthetic files bind-mounted read-only only for the negative controls):
+
+```text
+image user 10001:10001 (kalpamani); /etc/kalpamani 0555; configuration 0444; entry 0555, LF shebang
+configuration bytes hash to the manifest's digest; CODE_COMMIT == the recorded commit ==
+    the configuration's code_commit; BUILD_BACKEND recorded; package imports from site-packages
+default CMD, no ECS credentials            exit 4  REFUSED_CREDENTIAL_ENVIRONMENT, zero counts, one receipt
+entry explicitly / ambient AWS_PROFILE     exit 4  the same
+the task definition's user given explicitly exit 4  the same
+command override appending an argument     exit 2  REFUSED_ENTRY, entry and actor null
+configuration absent / truncated / other actor's   exit 3  REFUSED_CONFIGURATION, no commit or digest claimed
+container credential variable, no network  acquire exit 5 REFUSED_ORIGIN (the origin cannot resolve);
+                                           build exit 6 REFUSED_DEPENDENCY (the container provider,
+                                           the session's only one, cannot reach 169.254.170.2);
+                                           /work empty after exit, no cleanup failure reported
+container credential variable, /work read-only     exit 6  REFUSED_DEPENDENCY before any client
+negative builds: a wrong CONFIGURATION_DIGEST, the other target on this context, a KALPAMANI_COMMIT
+    that is not the configuration's, a swapped digest record, no BASE_IMAGE_DIGEST, the repository
+    root as context -- each fails at its intended check, and the check names its closed reason
+```
+
+**What a local container is not.** It is not Fargate: no task metadata endpoint, no container
+credential agent, no awsvpc network, no task role, no SSM parameter, no release, no placement
+verification and no CloudWatch stream existed, so every path past the credential-environment check
+refused at its first dependency and **no bootstrap, identity proof, release barrier, reservation,
+provider request or S3 operation was exercised**. Docker Desktop's engine and Fargate's runtime
+differ in what they do with a tmpfs mount point's mode and ownership, in the metadata and
+credential endpoints they provide, and in how a read-only root is enforced. ADR-0036 R-1/R-2 (a
+task that reaches the barrier and exits with the closed verification code) remain a later gate.
+
+**Remaining prerequisites before an image can be used**, each a separate authorization: production
+owner inputs and a compiled configuration from them (never the synthetic ones); a build from a
+context prepared at the exact release commit; publication to the one research repository and the
+registry-reported digest; `production_image_digests` and a task-definition revision (Terraform
+plan/apply); the receipt collector and its `logs:GetLogEvents` delta (ADR-0044 §5, deferred); the
+R-3 server-side conditional-write verification; the ADR-0036 R-1/R-2 runtime verification. The
+task definition's tmpfs carries no `uid`/`gid`/`mode` mount option; whether Fargate copies the
+mount point's mode as Docker does is **not established here** and is a check for the runtime gate.
+
 ## What this document does not authorize
 
-Building, pulling or publishing any image; `terraform plan` or `apply`; a launch; a run; any
-AWS, metadata, STS, credential or provider request. The compiled configuration carries no
-credential and no account identifier; the owner inputs file stays outside the repository.
+Building, pulling or publishing any image beyond the one local verification recorded above;
+`terraform plan` or `apply`; a launch; a run; any AWS, metadata, STS, credential or provider
+request. The compiled configuration carries no credential and no account identifier; the owner
+inputs file stays outside the repository.
