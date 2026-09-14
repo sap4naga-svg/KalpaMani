@@ -2,10 +2,14 @@
 
 **Status: an accepted procedure for a gate that has not been opened.** Its design is accepted
 under [ADR-0044](../decisions/ADR-0044-production-delivery-contracts-and-packaging.md) (PR #101,
-merged 2026-09-14). **No image has been published, registered or run.** Steps 1–6 have been
+merged 2026-09-14). **No image has been published, registered or run on AWS.** Steps 1–6 have been
 exercised once, locally, under a separate written authorization for *local image verification*
 — on one workstation, with **synthetic** configurations, in **network-disabled** containers — and
-what that established and did not is recorded in *Local verification* below. Steps 7–10 remain
+what that established and did not is recorded in *Local verification* below; the packaging
+corrections it produced merged as **PR #102** (2026-09-14T10:25:40Z, merge commit
+`02998fa9bde853d4262269c3b9032bd7fc171461`). What remains before a production image can exist, and
+the cloud-verification sequence after it, is recorded in
+[`production-readiness.md`](production-readiness.md). Steps 7–10 remain
 separately authorized owner actions (CLAUDE.md §4.21, §8). Reading this authorizes nothing.
 
 ## What an image is, and what it cannot know
