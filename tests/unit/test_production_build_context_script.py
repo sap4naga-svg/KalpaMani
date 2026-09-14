@@ -630,15 +630,16 @@ def test_the_dockerfile_copies_only_the_allowlisted_sources_and_the_declared_con
             source == path or source.startswith(path + "/") for path in context.IMAGE_SOURCE_PATHS
         ), source
     assert "docker/production/build" not in dockerfile
-    assert dockerfile.count("COPY --chmod=0444 configuration/compiled-configuration.json") == 2
-    assert dockerfile.count("ARG CONFIGURATION_DIGEST") == 2
+    # One copy per target: two production targets and two verification targets.
+    assert dockerfile.count("COPY --chmod=0444 configuration/compiled-configuration.json") == 4
+    assert dockerfile.count("ARG CONFIGURATION_DIGEST") == 4
     assert (
         dockerfile.count('hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]')
-        == 2
+        == 4
     )
-    assert dockerfile.count('document.get("code_commit") != commit') == 2
+    assert dockerfile.count('document.get("code_commit") != commit') == 4
     # Every refusal is a closed sentence; no clause prints a digest, a commit or a field.
-    assert dockerfile.count("image check refused: ") == 2
+    assert dockerfile.count("image check refused: ") == 4
     for line in dockerfile.splitlines():
         if line.strip().startswith("refuse("):
             assert "{" not in line and "%" not in line and "+" not in line.split("refuse(")[1]

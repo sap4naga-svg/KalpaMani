@@ -216,7 +216,7 @@ class TestValidator:
         ("overrides", "defect"),
         [
             ({"extra": 1}, pr.ReceiptDefect.FIELD_UNKNOWN),
-            ({"schema_version": 2}, pr.ReceiptDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"schema_version": 1}, pr.ReceiptDefect.SCHEMA_VERSION_UNKNOWN),
             ({"contract_id": "other"}, pr.ReceiptDefect.CONTRACT_ID_UNKNOWN),
             ({"outcome": "SUCCESS"}, pr.ReceiptDefect.OUTCOME_UNKNOWN),
             ({"exit_code": 1}, pr.ReceiptDefect.EXIT_CODE_CONTRADICTS_OUTCOME),

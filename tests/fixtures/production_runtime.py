@@ -104,6 +104,12 @@ def revision_arn(actor: ProductionActor, revision: int = REVISION) -> str:
     return f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:{revision}"
 
 
+def verification_revision_arn(actor: ProductionActor, revision: int = REVISION) -> str:
+    """The synthetic task-definition ARN of ``actor``'s VERIFICATION family (proposed ADR-0045)."""
+    family = constants_for(actor).verification_task_family
+    return f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:{revision}"
+
+
 def task_role_arn(actor: ProductionActor) -> str:
     """The synthetic task-role ARN of ``actor``."""
     return f"arn:aws:iam::{ACCOUNT}:role/{constants_for(actor).task_role_name}"
@@ -331,6 +337,16 @@ def compiled_task(actor: ProductionActor) -> CompiledTask:
     return CompiledTask(
         actor=actor,
         family=constants_for(actor).task_family,
+        code_commit=COMMIT,
+        configuration_digest=CONFIGURATION_DIGEST,
+    )
+
+
+def compiled_verification_task(actor: ProductionActor) -> CompiledTask:
+    """The compiled task of ``actor``'s verification image (proposed ADR-0045)."""
+    return CompiledTask(
+        actor=actor,
+        family=constants_for(actor).verification_task_family,
         code_commit=COMMIT,
         configuration_digest=CONFIGURATION_DIGEST,
     )

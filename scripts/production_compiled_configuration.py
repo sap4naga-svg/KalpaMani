@@ -40,6 +40,15 @@ from typing import Any, Final
 #: The closed field sets of the owner inputs file, per entry. Nothing else is read.
 ACQUISITION_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"secret_name", "origin_addresses"})
 BUILD_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"build_configuration"})
+#: A verification entry (proposed ADR-0045) compiles the origin address set and nothing
+#: else: no secret name, no build configuration.
+VERIFICATION_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"origin_addresses"})
+INPUT_FIELDS_BY_ENTRY: Final[dict[str, frozenset[str]]] = {
+    "kalpamani-production-acquire": ACQUISITION_INPUT_FIELDS,
+    "kalpamani-research-build": BUILD_INPUT_FIELDS,
+    "kalpamani-production-acquire-verify": VERIFICATION_INPUT_FIELDS,
+    "kalpamani-research-build-verify": VERIFICATION_INPUT_FIELDS,
+}
 
 #: Field names whose presence in an inputs file means a secret value is being offered.
 #: Refused before anything is parsed, so a value never reaches a document.
@@ -139,22 +148,17 @@ def generate(
         return _refuse("the inputs file is not an object")
     if set(inputs) & FORBIDDEN_INPUT_FIELDS or any("secret_value" in k for k in inputs):
         return _refuse("the inputs file offers a secret value; only a secret name is accepted")
-    expected = (
-        ACQUISITION_INPUT_FIELDS
-        if entry.value == "kalpamani-production-acquire"
-        else BUILD_INPUT_FIELDS
-    )
+    expected = INPUT_FIELDS_BY_ENTRY[entry.value]
     if set(inputs) != expected:
         return _refuse("the inputs file does not carry exactly the entry's fields")
     try:
-        if entry.value == "kalpamani-production-acquire":
+        if entry.value == "kalpamani-research-build":
             raw = build_compiled_configuration(
                 entry=entry,
                 code_commit=commit,
                 code_tree=tree,
                 generated_at=instant,
-                secret_name=inputs["secret_name"],
-                origin_addresses=inputs["origin_addresses"],
+                build_configuration=parse_build_configuration(inputs["build_configuration"]),
             )
         else:
             raw = build_compiled_configuration(
@@ -162,7 +166,8 @@ def generate(
                 code_commit=commit,
                 code_tree=tree,
                 generated_at=instant,
-                build_configuration=parse_build_configuration(inputs["build_configuration"]),
+                secret_name=inputs.get("secret_name"),
+                origin_addresses=inputs["origin_addresses"],
             )
     except (CompiledConfigurationError, TypeError, ValueError):
         return _refuse("the inputs do not form a valid compiled configuration")
@@ -202,6 +207,8 @@ __all__ = [
     "ACQUISITION_INPUT_FIELDS",
     "BUILD_INPUT_FIELDS",
     "FORBIDDEN_INPUT_FIELDS",
+    "INPUT_FIELDS_BY_ENTRY",
+    "VERIFICATION_INPUT_FIELDS",
     "generate",
     "main",
 ]

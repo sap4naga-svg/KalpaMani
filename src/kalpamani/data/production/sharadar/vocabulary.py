@@ -48,7 +48,14 @@ class ActorConstants:
     launcher_permission_set: str
     task_role_name: str
     task_family: str
+    #: The verification task-definition family (proposed ADR-0045): the same actor,
+    #: the same task role and placement, the verification image, and a task that
+    #: stops at the release barrier. Never the production family.
+    verification_task_family: str
     profile: str
+    #: The owner-side launch tool's second profile (proposed ADR-0045): the actor's
+    #: launcher permission set. A profile name is routing input, never proof (ADR-0021).
+    launcher_profile: str
     profile_field: str
     binding_kind: str
     binding_contract_id: str
@@ -91,7 +98,9 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         launcher_permission_set="KalpaManiAcquireLauncher",
         task_role_name="kalpamani-production-acquire-task",
         task_family="kalpamani-production-acquire",
+        verification_task_family="kalpamani-production-acquire-verify",
         profile="kalpamani-production-acquisition",
+        launcher_profile="kalpamani-production-acquisition-launcher",
         profile_field="acquisition_profile",
         binding_kind="kalpamani-production-acquisition-runtime",
         binding_contract_id="kalpamani-production-acquisition-runtime-binding/v1",
@@ -109,7 +118,9 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         launcher_permission_set="KalpaManiBuildLauncher",
         task_role_name="kalpamani-research-build-task",
         task_family="kalpamani-research-build",
+        verification_task_family="kalpamani-research-build-verify",
         profile="kalpamani-research-build",
+        launcher_profile="kalpamani-research-build-launcher",
         profile_field="build_profile",
         binding_kind="kalpamani-research-build-runtime",
         binding_contract_id="kalpamani-research-build-runtime-binding/v1",
@@ -121,6 +132,12 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         identity_field="build_identity",
     ),
 }
+
+
+def is_known_family(actor: ProductionActor, family: object) -> bool:
+    """Whether ``family`` is ``actor``'s production or verification family."""
+    constants = constants_for(actor)
+    return family in (constants.task_family, constants.verification_task_family)
 
 
 def constants_for(actor: object) -> ActorConstants:
@@ -148,4 +165,5 @@ __all__ = [
     "IdentityPath",
     "ProductionActor",
     "constants_for",
+    "is_known_family",
 ]

@@ -40,7 +40,11 @@ from kalpamani.data.production.sharadar.metadata_grammar import (
     IMAGE_DIGEST_RE,
 )
 from kalpamani.data.production.sharadar.release import TASK_ARN_RE, TASK_DEFINITION_ARN_RE
-from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
+from kalpamani.data.production.sharadar.vocabulary import (
+    ProductionActor,
+    constants_for,
+    is_known_family,
+)
 
 #: The one environment variable a task runner may read, and the prefix it must
 #: refuse to find.
@@ -75,7 +79,7 @@ class CompiledTask:
         """Hold the constants to their grammars, and the family to the actor's."""
         if type(self.actor) is not ProductionActor:
             raise ValueError("actor must be an exact ProductionActor member")
-        if self.family != constants_for(self.actor).task_family:
+        if not is_known_family(self.actor, self.family):
             raise ValueError("the compiled family is not this actor's family")
         if type(self.code_commit) is not str or not CODE_COMMIT_RE.fullmatch(self.code_commit):
             raise ValueError("the compiled code commit must be 40 lowercase hex characters")
@@ -83,6 +87,11 @@ class CompiledTask:
             self.configuration_digest
         ):
             raise ValueError("the compiled configuration digest must be 64 lowercase hex")
+
+    @property
+    def verification(self) -> bool:
+        """Whether this is a verification image (proposed ADR-0045), by its family."""
+        return self.family == constants_for(self.actor).verification_task_family
 
     def __repr__(self) -> str:
         """The actor only. **Never a digest.**"""

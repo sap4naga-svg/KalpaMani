@@ -76,11 +76,14 @@ def test_the_adr_distinguishes_decided_from_proposed() -> None:
 
 
 def test_the_implementation_matches_the_document() -> None:
-    assert {e.value for e in entry.TaskEntry} == {
+    # ADR-0043 decided the two production entries. The two verification entries beside
+    # them are proposed ADR-0045's, not this document's, and are held by its own test.
+    production_entries = {e for e in entry.TaskEntry if e not in entry.VERIFICATION_ENTRIES}
+    assert {e.value for e in production_entries} == {
         "kalpamani-production-acquire",
         "kalpamani-research-build",
     }
-    for name in entry.TaskEntry:
+    for name in production_entries:
         assert name.value in ADR_TEXT
     for token in (
         "REFUSED_CONFIGURATION",

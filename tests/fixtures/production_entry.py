@@ -44,10 +44,12 @@ from fixtures.production_runtime import (
     binding_document,
     build_input_document,
     compiled_task,
+    compiled_verification_task,
     encode,
     metadata_document,
     revision_arn,
     task_identity_arn,
+    verification_revision_arn,
 )
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.acquisition_entry import AcquisitionFactories
@@ -68,7 +70,9 @@ from kalpamani.data.production.sharadar.inputs import (
 )
 from kalpamani.data.production.sharadar.metadata import METADATA_URI_ENV_VAR
 from kalpamani.data.production.sharadar.plan import plan_digest_for
+from kalpamani.data.production.sharadar.probe import ProbeResult
 from kalpamani.data.production.sharadar.release import build_release_document
+from kalpamani.data.production.sharadar.verification_entry import VerificationFactories
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
 ACQ: Final = ProductionActor.ACQUISITION
@@ -363,6 +367,143 @@ class BuildHarness:
         return (len(self.store.gets) - self._gets_before, len(self.store.puts) - self._puts_before)
 
 
+class FakeProbe:
+    """A probe adapter answering one canned result (or raising); records every attempt."""
+
+    def __init__(self, result: ProbeResult | Exception = ProbeResult.TIMED_OUT) -> None:
+        self.result = result
+        self.attempts: list[tuple[str, int, float]] = []
+
+    def connect(self, address: str, port: int, timeout_seconds: float) -> ProbeResult:
+        self.attempts.append((address, port, timeout_seconds))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class VerificationHarness:
+    """One verification task (proposed ADR-0045) through the real entry, every dependency injected.
+
+    The binding, input and release are the actor's real contracts; the metadata reports
+    the VERIFICATION family and the release names the verification revision. There is
+    no store, no secrets fake and no transport: the factories have no field for them.
+    """
+
+    def __init__(
+        self,
+        *,
+        entry: TaskEntry,
+        at: datetime = RUN_1_AT,
+        release: bool = True,
+        probe: FakeProbe | None = None,
+    ) -> None:
+        if entry not in (TaskEntry.ACQUISITION_VERIFY, TaskEntry.BUILD_VERIFY):
+            raise ValueError("a verification harness runs a verification entry")
+        self.entry = entry
+        actor = ACQ if entry is TaskEntry.ACQUISITION_VERIFY else BUILD
+        self.actor = actor
+        constants = constants_for(actor)
+        if actor is ACQ:
+            slice_doc = slice_for_run(1)
+            digest = plan_digest_for(
+                parse_slice(slice_doc), acquisition_mode=AcquisitionMode.BACKFILL
+            )
+            self.identity = "verify-" + RUN_1
+            self.input_bytes = encode(
+                {
+                    "schema_version": ACQUISITION_INPUT_SCHEMA_VERSION,
+                    "contract_id": constants.input_contract_id,
+                    "run_identity": self.identity,
+                    "slice": slice_doc,
+                    "plan_digest": digest,
+                    "spent_identities": spent_identities_block([]),
+                    "issued_at": (at - timedelta(hours=1)).isoformat(),
+                    "expires_at": (at + timedelta(hours=23)).isoformat(),
+                }
+            )
+        else:
+            rows = [ledger_row(RUN_1, 1, RUN_1_AT, None)]
+            self.identity = "verify-" + BUILD_ID
+            self.input_bytes = encode(
+                build_input_document(
+                    rows,
+                    build_identity=self.identity,
+                    ledger_digest=ledger_digest(rows),
+                    issued_at=(at - timedelta(hours=1)).isoformat(),
+                    expires_at=(at + timedelta(hours=23)).isoformat(),
+                )
+            )
+        self.ssm = FakeSsm()
+        self.ssm.values[constants.binding_parameter] = encode(binding_document(actor))
+        self.ssm.values[constants.input_parameter] = self.input_bytes
+        if release:
+            self.ssm.values[constants.release_parameter] = build_release_document(
+                actor=actor,
+                task_arn=TASK_ARN,
+                task_definition_arn=verification_revision_arn(actor),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
+                identity=self.identity,
+                input_digest=input_digest(self.input_bytes),
+                network_interface_id=INTERFACE_ID,
+                subnet_id=SUBNET_ID,
+                verified_at=at - timedelta(seconds=10),
+            )
+        self.clock = ShiftedClock(base=at)
+        self.sts = FakeSts(task_identity_arn(actor))
+        self.metadata = MetadataSource(
+            metadata_document(actor, Family=constants.verification_task_family)
+        )
+        self.probe = probe if probe is not None else FakeProbe()
+        self.constructions = Constructions()
+        self.cleanups = 0
+        self.environment_names: tuple[str, ...] = TASK_ENVIRONMENT_NAMES
+        self.environment: dict[str, str] = {
+            METADATA_URI_ENV_VAR: METADATA_URI,
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI,
+        }
+        self.resolve: Callable[[str], Iterable[object]] = resolve_inside
+
+    def cleanup(self) -> None:
+        self.cleanups += 1
+
+    def configuration(self, **overrides: Any) -> EntryConfiguration:
+        fields_: dict[str, Any] = {
+            "entry": self.entry,
+            "compiled": compiled_verification_task(self.actor),
+            "origin_addresses": ORIGIN_ADDRESSES,
+        }
+        fields_.update(overrides)
+        return EntryConfiguration(**fields_)
+
+    def factories(self, **overrides: Any) -> VerificationFactories:
+        build = self.constructions.factory
+        fields_: dict[str, Any] = {
+            "environment_names": lambda: list(self.environment_names),
+            "environment": self.environment.get,
+            "metadata_fetch": self.metadata.fetch,
+            "ssm": build("ssm", self.ssm),
+            "sts": build("sts", self.sts),
+            "resolve_origin": self.resolve,
+            "probe": self.probe if self.entry is TaskEntry.BUILD_VERIFY else None,
+            "now": self.clock.now,
+            "monotonic": self.clock.monotonic,
+            "sleep": self.clock.sleep,
+            "cleanup": self.cleanup,
+        }
+        fields_.update(overrides)
+        return VerificationFactories(**fields_)
+
+    def run(
+        self, configuration: EntryConfiguration | None = None, **factory_overrides: Any
+    ) -> TaskReceipt:
+        return run_task_entry(
+            entry=self.entry,
+            configuration=self.configuration() if configuration is None else configuration,
+            factories=self.factories(**factory_overrides),
+        )
+
+
 __all__ = [
     "ACQ",
     "BUILD",
@@ -373,8 +514,10 @@ __all__ = [
     "AcquisitionHarness",
     "BuildHarness",
     "Constructions",
+    "FakeProbe",
     "FakeSts",
     "MetadataSource",
+    "VerificationHarness",
     "resolve_inside",
     "resolve_outside",
 ]

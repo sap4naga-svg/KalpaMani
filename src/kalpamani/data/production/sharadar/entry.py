@@ -43,26 +43,51 @@ from kalpamani.data.production.sharadar.outcomes import (
     count_lines,
     runner_sentence,
 )
+from kalpamani.data.production.sharadar.probe import ProbeObservation
 from kalpamani.data.production.sharadar.runner import BootstrapEvidence
-from kalpamani.data.production.sharadar.vocabulary import ProductionActor
+from kalpamani.data.production.sharadar.schema_observation import SchemaObservation
+from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the modules are imported lazily
     from kalpamani.data.production.sharadar.acquisition_entry import AcquisitionFactories
     from kalpamani.data.production.sharadar.build_entry import BuildFactories
+    from kalpamani.data.production.sharadar.verification_entry import VerificationFactories
 
 
 class TaskEntry(StrEnum):
-    """The two entry names, exactly as the task definitions' ``command`` spells them."""
+    """The entry names, exactly as the task definitions' ``command`` spells them.
+
+    Two production entries (ADR-0043) and two verification entries (proposed ADR-0045,
+    not accepted): a verification entry composes the accepted bootstrap and stops at
+    the release barrier, never entering production processing.
+    """
 
     ACQUISITION = "kalpamani-production-acquire"
     BUILD = "kalpamani-research-build"
+    ACQUISITION_VERIFY = "kalpamani-production-acquire-verify"
+    BUILD_VERIFY = "kalpamani-research-build-verify"
 
 
-#: Which actor each entry runs as. Two entries, two actors, no third.
+#: Which actor each entry runs as. Four entries, two actors, no third actor.
 ENTRY_ACTOR: Final[dict[TaskEntry, ProductionActor]] = {
     TaskEntry.ACQUISITION: ProductionActor.ACQUISITION,
     TaskEntry.BUILD: ProductionActor.BUILD,
+    TaskEntry.ACQUISITION_VERIFY: ProductionActor.ACQUISITION,
+    TaskEntry.BUILD_VERIFY: ProductionActor.BUILD,
 }
+
+#: The verification entries: bootstrap only, no processing (proposed ADR-0045).
+VERIFICATION_ENTRIES: Final[frozenset[TaskEntry]] = frozenset(
+    {TaskEntry.ACQUISITION_VERIFY, TaskEntry.BUILD_VERIFY}
+)
+
+
+def entry_family(entry: TaskEntry) -> str:
+    """The task-definition family whose ``command`` token is ``entry``."""
+    constants = constants_for(ENTRY_ACTOR[entry])
+    if entry in VERIFICATION_ENTRIES:
+        return constants.verification_task_family
+    return constants.task_family
 
 
 def select_entry(arguments: Sequence[object]) -> TaskEntry | None:
@@ -86,6 +111,7 @@ class TaskOutcome(StrEnum):
     """The task's one public verdict. Closed; every member has an exit code and a sentence."""
 
     COMPLETED = "COMPLETED"
+    VERIFIED_BOOTSTRAP = "VERIFIED_BOOTSTRAP"
     REFUSED_ENTRY = "REFUSED_ENTRY"
     REFUSED_CONFIGURATION = "REFUSED_CONFIGURATION"
     REFUSED_CREDENTIAL_ENVIRONMENT = "REFUSED_CREDENTIAL_ENVIRONMENT"
@@ -133,6 +159,10 @@ EXIT_STATUS: Final[dict[TaskOutcome, int]] = {
     TaskOutcome.REFUSED_NO_RELEASE: 15,
     TaskOutcome.REFUSED_RELEASE_MISMATCH: 16,
     TaskOutcome.REFUSED_RELEASE_READ: 17,
+    # A verification entry's terminal outcome (proposed ADR-0045): the accepted
+    # bootstrap released and the task stopped there. Non-zero on purpose, so that
+    # exit 0 stays COMPLETED and a verification run can never be read as a run.
+    TaskOutcome.VERIFIED_BOOTSTRAP: 18,
     TaskOutcome.REFUSED_RESERVATION: 20,
     TaskOutcome.REFUSED_CREDENTIAL: 21,
     TaskOutcome.ACQUISITION_HALTED: 22,
@@ -154,6 +184,9 @@ EXIT_STATUS: Final[dict[TaskOutcome, int]] = {
 #: The one allowlisted sentence per outcome. No key, digest, identifier, ARN or row.
 TASK_SENTENCES: Final[dict[TaskOutcome, str]] = {
     TaskOutcome.COMPLETED: "production task completed: every operation confirmed",
+    TaskOutcome.VERIFIED_BOOTSTRAP: (
+        "verification task stopped at the release barrier: bootstrap verified, no processing"
+    ),
     TaskOutcome.REFUSED_ENTRY: "production task refused: no closed entry was selected",
     TaskOutcome.REFUSED_CONFIGURATION: (
         "production task refused: the compiled configuration is incomplete"
@@ -255,6 +288,8 @@ class EntryConfiguration:
             raise TypeError("entry and compiled must be exact values")
         if self.compiled.actor is not ENTRY_ACTOR[self.entry]:
             raise ValueError("the compiled task is not this entry's actor")
+        if self.compiled.family != entry_family(self.entry):
+            raise ValueError("the compiled family is not this entry's family")
         if type(self.origin_addresses) is not frozenset:
             raise TypeError("origin_addresses must be a frozenset")
         if self.secret_identifier is not None and type(self.secret_identifier) is not str:
@@ -263,12 +298,16 @@ class EntryConfiguration:
             type(self.build_configuration) is not BuildConfiguration
         ):
             raise TypeError("build_configuration must be a BuildConfiguration or None")
-        if self.entry is TaskEntry.BUILD and (
-            self.secret_identifier is not None or self.origin_addresses
-        ):
-            raise ValueError("a build entry holds no secret identifier and no provider origin")
-        if self.entry is TaskEntry.ACQUISITION and self.build_configuration is not None:
-            raise ValueError("an acquisition entry holds no build configuration")
+        # Capabilities per entry: the acquisition entry alone holds the secret
+        # identifier; the build entry alone holds the build configuration; the
+        # acquisition entry and both verification entries hold the origin address set
+        # (the origin check for acquisition, the probe destination set for build verify).
+        if self.entry is not TaskEntry.ACQUISITION and self.secret_identifier is not None:
+            raise ValueError("only the acquisition entry holds a secret identifier")
+        if self.entry is not TaskEntry.BUILD and self.build_configuration is not None:
+            raise ValueError("only the build entry holds a build configuration")
+        if self.entry is TaskEntry.BUILD and self.origin_addresses:
+            raise ValueError("a build entry holds no provider origin")
 
     def __repr__(self) -> str:
         """The entry only. **Never the secret identifier, never an address.**"""
@@ -299,6 +338,14 @@ class TaskReceipt:
     configuration_digest: str | None = None
     #: What a released bootstrap proved about which task ran; absent otherwise.
     evidence: BootstrapEvidence | None = None
+    #: The build verification entry's provider-origin probe observation (proposed
+    #: ADR-0045): present exactly on a VERIFIED_BOOTSTRAP build-verify receipt. An
+    #: observation, never an isolation verdict.
+    probe: ProbeObservation | None = None
+    #: The per-dataset schema digests a build observed before its accepted set refused
+    #: them (proposed ADR-0045, Route B): present only on a build REFUSED_NORMALIZATION
+    #: receipt, and evidence for owner review -- never an accepted set.
+    schema_observation: SchemaObservation | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers; uncertainty exactly where it is."""
@@ -320,6 +367,34 @@ class TaskReceipt:
             raise TypeError("cleanup failures must be exact CleanupFailure values")
         if self.outcome is TaskOutcome.COMPLETED and self.runner is not RunnerOutcome.RELEASED:
             raise ValueError("a completed task was released")
+        if self.outcome is TaskOutcome.VERIFIED_BOOTSTRAP:
+            if self.runner is not RunnerOutcome.RELEASED:
+                raise ValueError("a verified bootstrap was released")
+            if self.entry not in VERIFICATION_ENTRIES:
+                raise ValueError("only a verification entry verifies a bootstrap")
+            if self.counts.data_plane_operations != 0:
+                raise ValueError("a verification task performs no data-plane operation")
+        if self.entry in VERIFICATION_ENTRIES and self.outcome is TaskOutcome.COMPLETED:
+            raise ValueError("a verification entry never completes a run")
+        if self.probe is not None and type(self.probe) is not ProbeObservation:
+            raise TypeError("probe must be an exact ProbeObservation or None")
+        probed = (
+            self.entry is TaskEntry.BUILD_VERIFY and self.outcome is TaskOutcome.VERIFIED_BOOTSTRAP
+        )
+        if (self.probe is not None) != probed:
+            raise ValueError(
+                "a probe observation is carried exactly by a verified build-verify task"
+            )
+        if self.schema_observation is not None and (
+            type(self.schema_observation) is not SchemaObservation
+        ):
+            raise TypeError("schema_observation must be an exact SchemaObservation or None")
+        if self.schema_observation is not None and not (
+            self.entry is TaskEntry.BUILD and self.outcome is TaskOutcome.REFUSED_NORMALIZATION
+        ):
+            raise ValueError(
+                "a schema observation is carried only by a build normalization refusal"
+            )
         if (self.runner is RunnerOutcome.RELEASED) != (self.evidence is not None):
             raise ValueError("bootstrap evidence is carried exactly when released")
         if self.evidence is not None and type(self.evidence) is not BootstrapEvidence:
@@ -347,6 +422,18 @@ class TaskReceipt:
             reason = failure.failure
             category = reason if isinstance(reason, str) else reason.value
             lines.append(f"cleanup_failure={failure.stage.value}:{category}")
+        if self.probe is not None:
+            lines.append(
+                f"probe_resolution={self.probe.resolution.value} "
+                f"probe_result={self.probe.result.value} probe_attempts={self.probe.attempts}"
+            )
+            # The task observes; it never concludes (proposed ADR-0045 s.4).
+            lines.append("isolation_verdict=NOT_DECIDED_BY_THE_TASK")
+        if self.schema_observation is not None:
+            completeness = "COMPLETE" if self.schema_observation.complete else "PARTIAL"
+            lines.append(
+                f"schema_observation={completeness} digests={self.schema_observation.digest_count}"
+            )
         # The one machine-readable line, last (ADR-0044 §5). Imported here because the
         # receipt module names this class.
         from kalpamani.data.production.sharadar.receipts import receipt_line
@@ -449,7 +536,7 @@ def run_task_entry(
     *,
     entry: TaskEntry | None,
     configuration: EntryConfiguration | None,
-    factories: AcquisitionFactories | BuildFactories | None,
+    factories: AcquisitionFactories | BuildFactories | VerificationFactories | None,
 ) -> TaskReceipt:
     """Dispatch to the selected entry. ``None`` anywhere is a refusal, not a default.
 
@@ -460,6 +547,15 @@ def run_task_entry(
         return no_entry_receipt()
     if configuration is None or factories is None:
         return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
+    if entry in VERIFICATION_ENTRIES:
+        from kalpamani.data.production.sharadar.verification_entry import (
+            VerificationFactories,
+            run_verification_entry,
+        )
+
+        if type(factories) is not VerificationFactories:
+            return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
+        return run_verification_entry(entry=entry, configuration=configuration, factories=factories)
     if entry is TaskEntry.ACQUISITION:
         from kalpamani.data.production.sharadar.acquisition_entry import (
             AcquisitionFactories,
@@ -481,10 +577,12 @@ __all__ = [
     "ENTRY_ACTOR",
     "EXIT_STATUS",
     "TASK_SENTENCES",
+    "VERIFICATION_ENTRIES",
     "EntryConfiguration",
     "TaskEntry",
     "TaskOutcome",
     "TaskReceipt",
+    "entry_family",
     "no_entry_receipt",
     "pre_entry_refusal",
     "refusal_receipt",

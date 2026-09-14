@@ -39,6 +39,7 @@ from kalpamani.data.production.sharadar.vocabulary import (
     EXPECTED_REGION,
     ProductionActor,
     constants_for,
+    is_known_family,
 )
 
 
@@ -185,7 +186,7 @@ class CompiledLaunch:
         execution_role = ROLE_ARN_RE.fullmatch(self.execution_role_arn or "")
         if cluster is None or definition is None or task_role is None or execution_role is None:
             raise ValueError("a compiled ARN does not match its grammar")
-        if definition.group(2) != constants.task_family:
+        if not is_known_family(self.actor, definition.group(2)):
             raise ValueError("the compiled task definition is not this actor's family")
         if task_role.group(2) != constants.task_role_name:
             raise ValueError("the compiled task role is not this actor's task role")
@@ -218,6 +219,13 @@ class CompiledLaunch:
             raise ValueError("the registered image digest must be sha256:<64 hex>")
         if not CONFIGURATION_DIGEST_RE.fullmatch(self.configuration_digest or ""):
             raise ValueError("the registered configuration digest must be 64 lowercase hex")
+
+    @property
+    def verification(self) -> bool:
+        """Whether this launch targets the actor's verification family (proposed ADR-0045)."""
+        definition = TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn)
+        assert definition is not None  # held by __post_init__
+        return definition.group(2) == constants_for(self.actor).verification_task_family
 
     def __repr__(self) -> str:
         """The actor only. **Never an ARN or an identifier.**"""

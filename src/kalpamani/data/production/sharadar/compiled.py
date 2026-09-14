@@ -44,7 +44,12 @@ from kalpamani.data.production.sharadar.build_manifest import (
     BuildConfigurationError,
 )
 from kalpamani.data.production.sharadar.documents import contains_surrogate_text
-from kalpamani.data.production.sharadar.entry import ENTRY_ACTOR, EntryConfiguration, TaskEntry
+from kalpamani.data.production.sharadar.entry import (
+    ENTRY_ACTOR,
+    EntryConfiguration,
+    TaskEntry,
+    entry_family,
+)
 from kalpamani.data.production.sharadar.gold import (
     ADJUSTMENT_CONVENTION,
     ADJUSTMENT_DERIVATION_VERSION,
@@ -58,7 +63,6 @@ from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import SILVER_NORMALIZATION_VERSION, AcceptedSchemas
 from kalpamani.data.production.sharadar.task_clients import compiled_origin_addresses
 from kalpamani.data.production.sharadar.universe import UNIVERSE_RULE_VERSION, UniverseRule
-from kalpamani.data.production.sharadar.vocabulary import constants_for
 
 COMPILED_CONFIGURATION_CONTRACT_ID: Final = "kalpamani-compiled-configuration/v1"
 COMPILED_CONFIGURATION_SCHEMA_VERSION: Final = 1
@@ -81,6 +85,16 @@ _COMMON_FIELDS: Final[frozenset[str]] = frozenset(
 )
 _ACQUISITION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"secret_name", "origin_addresses"}
 _BUILD_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"build_configuration"}
+#: A verification entry's file (proposed ADR-0045): the origin address set and nothing
+#: actor-specific beyond it -- no secret name, no build configuration -- so a
+#: verification image carries no capability its entry must not hold.
+_VERIFICATION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"origin_addresses"}
+ENTRY_FIELDS: Final[dict[TaskEntry, frozenset[str]]] = {
+    TaskEntry.ACQUISITION: _ACQUISITION_FIELDS,
+    TaskEntry.BUILD: _BUILD_FIELDS,
+    TaskEntry.ACQUISITION_VERIFY: _VERIFICATION_FIELDS,
+    TaskEntry.BUILD_VERIFY: _VERIFICATION_FIELDS,
+}
 _BUILD_CONFIGURATION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "accepted_schemas",
@@ -408,7 +422,7 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
     if type(entry_value) is not str or entry_value not in {member.value for member in TaskEntry}:
         raise _refuse(CompiledConfigurationDefect.ENTRY_UNKNOWN)
     entry = TaskEntry(entry_value)
-    fields = _ACQUISITION_FIELDS if entry is TaskEntry.ACQUISITION else _BUILD_FIELDS
+    fields = ENTRY_FIELDS[entry]
     if names - fields:
         raise _refuse(CompiledConfigurationDefect.FIELD_UNKNOWN)
     if fields - names:
@@ -420,7 +434,7 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
     actor = ENTRY_ACTOR[entry]
     if document["actor"] != actor.value:
         raise _refuse(CompiledConfigurationDefect.ACTOR_MISMATCH)
-    if document["family"] != constants_for(actor).task_family:
+    if document["family"] != entry_family(entry):
         raise _refuse(CompiledConfigurationDefect.ACTOR_MISMATCH)
     for name in ("code_commit", "code_tree"):
         value = document[name]
@@ -439,16 +453,22 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
         code_commit=document["code_commit"],
         configuration_digest=digest,
     )
+    if entry is TaskEntry.BUILD:
+        build = parse_build_configuration(document["build_configuration"])
+        configuration = EntryConfiguration(
+            entry=entry, compiled=compiled, build_configuration=build
+        )
+        return configuration, digest
+    addresses = document["origin_addresses"]
+    if type(addresses) is not list or not addresses:
+        raise _refuse(CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED)
+    try:
+        origin = compiled_origin_addresses(addresses)
+    except ValueError:
+        raise _refuse(CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED) from None
     if entry is TaskEntry.ACQUISITION:
         if secret_name_refusal(document["secret_name"]) is not None:
             raise _refuse(CompiledConfigurationDefect.SECRET_NAME_MALFORMED)
-        addresses = document["origin_addresses"]
-        if type(addresses) is not list or not addresses:
-            raise _refuse(CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED)
-        try:
-            origin = compiled_origin_addresses(addresses)
-        except ValueError:
-            raise _refuse(CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED) from None
         configuration = EntryConfiguration(
             entry=entry,
             compiled=compiled,
@@ -456,10 +476,7 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
             origin_addresses=origin,
         )
     else:
-        build = parse_build_configuration(document["build_configuration"])
-        configuration = EntryConfiguration(
-            entry=entry, compiled=compiled, build_configuration=build
-        )
+        configuration = EntryConfiguration(entry=entry, compiled=compiled, origin_addresses=origin)
     return configuration, digest
 
 
@@ -485,20 +502,21 @@ def build_compiled_configuration(
         "contract_id": COMPILED_CONFIGURATION_CONTRACT_ID,
         "entry": entry.value,
         "actor": actor.value,
-        "family": constants_for(actor).task_family,
+        "family": entry_family(entry),
         "code_commit": code_commit,
         "code_tree": code_tree,
         "generated_at": generated_at.isoformat() if type(generated_at) is datetime else "",
     }
-    if entry is TaskEntry.ACQUISITION:
-        document["secret_name"] = secret_name
-        document["origin_addresses"] = (
-            sorted(compiled_origin_addresses(origin_addresses)) if origin_addresses else []
-        )
-    else:
+    if entry is TaskEntry.BUILD:
         document["build_configuration"] = (
             build_configuration.document() if build_configuration is not None else None
         )
+    else:
+        document["origin_addresses"] = (
+            sorted(compiled_origin_addresses(origin_addresses)) if origin_addresses else []
+        )
+        if entry is TaskEntry.ACQUISITION:
+            document["secret_name"] = secret_name
     raw = canonical_bytes(document)
     parse_compiled_configuration(raw)
     return raw
@@ -508,6 +526,7 @@ __all__ = [
     "COMPILED_CONFIGURATION_CONTRACT_ID",
     "COMPILED_CONFIGURATION_PATH",
     "COMPILED_CONFIGURATION_SCHEMA_VERSION",
+    "ENTRY_FIELDS",
     "MAX_COMPILED_CONFIGURATION_BYTES",
     "CompiledConfigurationDefect",
     "CompiledConfigurationError",

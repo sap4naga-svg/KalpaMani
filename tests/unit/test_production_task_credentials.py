@@ -25,6 +25,8 @@ import pytest
 from fixtures.production_entry import CONTAINER_URI, METADATA_URI, ORIGIN_ADDRESSES
 from fixtures.production_runtime import compiled_task
 from kalpamani.data.production.sharadar.entry import (
+    ENTRY_ACTOR,
+    VERIFICATION_ENTRIES,
     EntryConfiguration,
     TaskEntry,
     TaskOutcome,
@@ -303,6 +305,16 @@ def _configuration(entry: TaskEntry) -> EntryConfiguration:
             entry=entry,
             compiled=compiled_task(ProductionActor.ACQUISITION),
             secret_identifier="synthetic/production/sharadar",  # noqa: S106 - an identifier
+            origin_addresses=ORIGIN_ADDRESSES,
+        )
+    if entry in VERIFICATION_ENTRIES:
+        # A verification entry (proposed ADR-0045): the verification family, the origin
+        # set, and no secret and no build configuration.
+        from fixtures.production_runtime import compiled_verification_task
+
+        return EntryConfiguration(
+            entry=entry,
+            compiled=compiled_verification_task(ENTRY_ACTOR[entry]),
             origin_addresses=ORIGIN_ADDRESSES,
         )
     from fixtures.production_build import configuration
