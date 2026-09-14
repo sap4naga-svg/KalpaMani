@@ -175,8 +175,9 @@ digests computed; the authorization admitted for this subcell and valid now; the
 found under the current binding and **recomputed** from its own stamp against what is admitted now —
 a changed target, targets document, declaration, registration or prerequisite is not what the owner
 authorized and refuses; **the authorization consumed durably** (one exclusive file beside the
-canonical ledger, named by the authorization's digest — never under the records directory, never
-removed) **before anything is attempted**; the **attempt record written before the operation**,
+canonical ledger, named by the authorization's digest and carrying the consumption record —
+`kalpamani-permission-consumption/v1`: the subcell, the statement digest, the authorization digest,
+the instant — never under the records directory, never removed) **before anything is attempted**; the **attempt record written before the operation**,
 naming the authorization, the statement and the exact bucket and key it may create; the client built
 **only now** (one transport attempt, finite timeouts); the operation; the record, naming the attempt
 it answers. A second execution under the same authorization — repeated, after an interruption at any
@@ -230,16 +231,35 @@ never rendered.
 
 ### 3.4 Records, binding and derivation
 
-Five closed contracts (§6.2). Every record binds to the environment binding's digest, the digest
-over the tracked production declarations (`production_*.tf` and `storage.tf`, each by name and
-bytes), the digest of the launch-inputs record the targets were resolved from, the partition and the
-region. **Attempts, records and cleanup entries are joined by identity, never by their order in
-time**: a record names the digest of the attempt it answers, a cleanup entry names the attempt whose
-exact object (bucket and key) or launch (`startedBy` tag and tasks) it settled, and a later result
-never answers an earlier attempt. The cell runner derives each subcell from the records: a matched
-record under the current binding whose identity was verified, whose named prerequisite records are
-exactly the bound ones and whose every open object or launch is settled by a cleanup naming that
-attempt and recorded no earlier than the record is `PASSED`; **an inversion under the current
+Six closed contracts (§6.2). Every record, attempt, statement and cleanup binds to the environment
+binding's digest, the digest over the tracked production declarations (`production_*.tf` and
+`storage.tf`, each by name and bytes), the digest of the launch-inputs record the targets were
+resolved from, **the digest of the owner's private targets document**, the partition and the region
+— one `PermissionBinding`, computed only when every one of those inputs is present now, so a missing
+input holds every recorded result `UNBOUND` and a changed one makes it `HISTORICAL`; nothing
+preserves a `PASSED` silently. **Attempts, records and cleanup entries are joined by identity, never
+by their order in time**: a record names the digest of the attempt it answers, a cleanup entry names
+the attempt whose exact object (bucket and key) or launch (`startedBy` tag and tasks) it settled, and
+a later result never answers an earlier attempt.
+
+**One validator binds a result, and it is the same everywhere** (`permission_cells.bind_result`,
+used by the tool's prerequisite admission, by the matrix derivation and by the cleanup's
+already-settled rule): a result binds only through its whole chain — the current context (the
+binding and the inputs a target is resolved from: the environment binding, the registration, the
+targets document and, when named, the acquisition configuration); the record under the current
+binding; the attempt the record names by digest, for the same subcell, principal, stamp, start,
+authorization and binding; the statement the attempt names by digest, for the same subcell,
+principal, operation, target class, stamp, binding, targets document and prerequisites; every
+prerequisite the statement names as the exact bound record it was prepared against, itself bound
+through its own chain, established before this one, its object created; the exact target
+**recomputed now** from the context and equal to the statement's digest, with the attempt's and the
+record's object the target's; and the durable consumption of the authorization, naming this subcell
+and statement, consumed no later than the attempt started. **A digest-shaped field alone binds
+nothing**: a record whose attempt, statement or consumption is missing, substituted or contradicting
+is `UNBOUND` with the defect named, and a cleanup settles a bound result only by naming its attempt
+and its exact object or launch under the same binding, recorded no earlier than the record. The cell
+runner derives each subcell from the records: a bound `MATCHED` result under the current binding whose
+identity was verified and whose every open object or launch is settled is `PASSED`; **an inversion under the current
 binding never disappears** when a later matched record arrives (a corrected declaration changes the
 binding, and then the old records are `HISTORICAL`); an attempt no record names is `INTERRUPTED` —
 never re-executed automatically, its object settled by the cleanup and its authorization still
@@ -262,14 +282,24 @@ aggregate stays `INCOMPLETE` while R-4, R-5 and R-8 are blocked.
 whose identity policy already grants `s3:DeleteObject`) and settles, by exact identity, every object
 a record created or possibly created and every object an unanswered attempt named — confirming each
 absent with one `HeadObject` held to `404` — and every launch a record started or possibly started:
-one `ListTasks` by the attempt's `startedBy` tag, then per known or listed task one `DescribeTasks`
-held to `STOPPED` and, otherwise, one `StopTask` with the task recorded as residue. **An object the
-R-4 or R-5 positive writes left for a prepared, not yet recorded dependent subcell is deferred, not
-removed** — kept until that dependent check has run, then settled by the next pass. A key not
-confirmed absent, a task not confirmed stopped, a listing that did not answer, a refused delete or an
-exhausted budget (64 objects, 8 launches) is residue, recorded by its synthetic key or task id, and
-every subcell that created or started it stays `CLEANUP_UNRESOLVED`. **Cleanup restores the buckets
-and the cluster; it never changes what a subcell established, and it never launches.**
+**bounded discovery** by the attempt's `startedBy` tag — `ListTasks` under each desired status
+(`RUNNING`, then `STOPPED`, which ECS keeps listable for a bounded time), following `nextToken` for
+at most three pages per status — then per known or discovered task one `DescribeTasks` held to
+`STOPPED` and, otherwise, one `StopTask` with the task recorded as residue. **A launch is settled only
+by termination evidence for every task it is known to have started; discovery settles nothing by
+itself.** A discovery that found nothing (delayed visibility looks exactly like absence), a discovery
+that did not answer (`failed`) and a discovery that reached its page bound with a token remaining
+(`incomplete`) each leave the launch unresolved residue, named by its tag and the reason; every task
+known before the discovery is preserved and described; a task found on a later pass is settled then.
+**Discovery exhaustion is never proof of absence, and no `RunTask` is ever sent by the cleanup.** An
+ambiguous launch whose task is never discovered stays `CLEANUP_UNRESOLVED`; an owner mechanism to
+attest such a launch settled is not implemented and not decided here (§5). **An object the R-4 or
+R-5 positive writes left for a prepared, not yet recorded dependent subcell is deferred, not removed**
+— kept until that dependent check has run, then settled by the next pass. A key not confirmed absent,
+a task not confirmed stopped, an undiscovered, failed or incomplete discovery, a refused delete or an
+exhausted budget (64 objects, 8 launches) is residue, recorded by its synthetic key, task id or tag,
+and every subcell that created or started it stays `CLEANUP_UNRESOLVED`. **Cleanup restores the
+buckets and the cluster; it never changes what a subcell established, and it never launches.**
 
 ## 4. Traceability
 
@@ -285,6 +315,8 @@ prove them.
 |---|---|---|---|
 | a **task-side permission probe entry** | the 32 task-role subcells of R-4 and R-5 | one closed verification entry in the image (a third verification entry beside ADR-0045's two) that selects exactly one catalogued subcell from its compiled configuration, issues that one operation under the task role after the release barrier, and prints a receipt naming the subcell, the observed class and the outcome — the receipt then completes the subcell the way a refused receipt completes a negative cell | **not implemented; not authorized by this ADR** — a task-definition family, a compiled-configuration field and a launcher resource, each a later decision |
 | a **running task of the actor** | the 2 R-6 `ExecuteCommand` subcells | a task of ours runs only during an authorized R-1 launch; executing into it during that launch (and recording the refusal) is a later decision of the verification entries | **not implemented; not authorized by this ADR** |
+| the **control principal's task discovery and stop** (`ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask` on the governed cluster) | the cleanup's settlement of launches (§3.5) | the R-3 control principal's identity policy grants the S3 operations the cleanup uses; whether it holds these ECS actions is not established here and is not granted by this ADR — until it does, the cleanup records a `failed` discovery as residue | **recorded as deferred (owner inputs D.2); not granted** |
+| an **owner attestation for an undiscovered ambiguous launch** | an ambiguous launch whose task is never discovered (§3.5) | a mechanism that would let the owner record, on evidence outside the cleanup, that no task ran — none is designed; the subcell stays `CLEANUP_UNRESOLVED` | **not implemented; not decided here** |
 | an **execution path for the deletion role** | the 2 R-8 subcells | a deletion task definition, or a runbook step under a separately authorized principal (ADR-0007 holds that no human may assume the role and no deletion task definition exists) | **not implemented; the runbook step stays separately authorized** |
 | the **owner-held targets** | R-4's refused secret, R-4/R-5's refused bucket, R-9 | the private targets document (§3.3) | a value the owner supplies before cloud verification (owner inputs D.1) |
 
@@ -311,8 +343,8 @@ No permission is granted by this ADR: D-14 (analyzer), V-16 (`ecs:DescribeTaskDe
 |---|---|
 | `kalpamani-negative-launch-evidence/v1` | `verification_cells.py`: `NegativeLaunchEvidence`, `parse_negative_launch_evidence` |
 | `kalpamani-permission-targets/v1` | `permission_cells.py`: `PermissionTargets`, `parse_permission_targets` (private, never rendered) |
-| `kalpamani-permission-statement/v1`, `kalpamani-permission-authorization/v1` | `permission_cells.py`: `PermissionStatement`, `PermissionAuthorization` and their parsers; the consumption beside the ledger is `LaunchStore.consume` |
-| `kalpamani-permission-attempt/v1`, `kalpamani-permission-record/v1`, `kalpamani-permission-cleanup/v1` | `permission_cells.py`: `PermissionAttempt` (the authorization, the statement, the exact bucket and key), `PermissionRecord` (the attempt it answers, the bound prerequisites, the created bucket and key, `possibly_created`, every started task, the acknowledged stops, the `startedBy` tag, `possibly_started`), `PermissionCleanup` (objects and launches by attempt, `deferred`, residue) and their parsers |
+| `kalpamani-permission-statement/v1`, `kalpamani-permission-authorization/v1`, `kalpamani-permission-consumption/v1` | `permission_cells.py`: `PermissionStatement`, `PermissionAuthorization`, `PermissionConsumption` and their parsers; the consumption beside the ledger is `LaunchStore.consume`, read back by `LaunchStore.consumptions`; the one validator is `bind_result` over a `PermissionContext` |
+| `kalpamani-permission-attempt/v1`, `kalpamani-permission-record/v1`, `kalpamani-permission-cleanup/v1` | `permission_cells.py`: `PermissionAttempt` (the authorization, the statement, the exact bucket and key), `PermissionRecord` (the attempt it answers, the bound prerequisites, the created bucket and key, `possibly_created`, every started task, the acknowledged stops, the `startedBy` tag, `possibly_started`), `PermissionCleanup` (objects and launches by attempt — each launch with its listings, `discovery_failed`, `discovery_incomplete`, the tasks known, stopped and left — `deferred`, residue) and their parsers |
 
 ### 6.3 ADR-0036 §3, one wording
 
@@ -356,3 +388,22 @@ placement and the tag, and the two `ExecuteCommand` subcells are blocked (§3.1,
 the cell `UNBOUND` with no path back — now `--recover-negative-evidence` (§2.4). The counts of §3.1
 moved from 58 / 6 / 34 to **56 / 6 / 36**; the task-role and deletion-role cases are retained as
 blocked.
+
+## 9. Corrections on review (PR #106, correction 2)
+
+Two further findings were reproduced on synthetic files through the real parsers, the real runner
+and the real cleanup engine against the corrected head of correction 1, and corrected. (1) A result
+passed when no unmatched attempt existed: twelve records alone, with digest-shaped attempt and
+authorization fields naming nothing, passed R-7 through the public runner, and the binding carried no
+targets digest, so a changed or missing targets document preserved `PASSED`. Now the binding covers
+the targets document, the runner holds every result to a context built the tool's own way (a missing
+input is no context, `UNBOUND`), and one validator binds a result only through its attempt,
+statement, exact target, bound prerequisites and consumed authorization (§3.4) — the test that
+supplied only records and expected R-7 `PASSED` is replaced by one that builds every chain through
+the tool and then withholds, substitutes and contradicts each component through the public runner.
+(2) An ambiguous launch with no known task was settled by one `ListTasks` answering `200` with an
+empty list. Now discovery is bounded and explicit (two desired statuses, three pages each, residue for
+`undiscovered`, `failed` and `incomplete`), every known task is preserved and described, a launch is
+settled only by termination evidence, exhaustion is never proof of absence, and no `RunTask` is ever
+sent (§3.5); the control principal's ECS actions are recorded as deferred, not granted (§5). Counts
+unchanged at **56 / 6 / 36**; the task-role, deletion-role and `ExecuteCommand` cases stay blocked.

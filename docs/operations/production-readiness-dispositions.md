@@ -291,7 +291,12 @@ exist, the deletion role on its missing execution path, the two `ExecuteCommand`
 running task of the actor — and a human role never stands in for a task role**. Cleanup runs under
 the control principal by exact identity, defers an object a prepared dependent still needs, and is
 confirmed or reported as residue; a negative cell's missing evidence after an interrupted completion
-is recovered offline from the re-verified receipt, never relaunched (PR #106 correction 1). **Empty, partial, simulated or blocked
+is recovered offline from the re-verified receipt, never relaunched (PR #106 correction 1). A
+result binds only through its whole chain — attempt, statement, bound prerequisites, the exact target
+recomputed against the context in force (the targets document included), the consumed authorization
+— by one validator shared by execution, derivation and cleanup admission, and an ambiguous launch is
+settled only by termination evidence after bounded discovery, never by an empty listing (PR #106
+correction 2). **Empty, partial, simulated or blocked
 coverage never passes**, and the aggregate stays `INCOMPLETE` while any of it remains. Acceptance
 would authorize no execution and grant no permission.
 

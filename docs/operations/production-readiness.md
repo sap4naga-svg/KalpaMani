@@ -766,6 +766,25 @@ write, re-verifying the reservation, the launch record and the receipt, repeatab
 contradictions, never relaunching. Validated by the full suite, `ruff`, `mypy` and the docs audit on
 the corrected head; before/after results in the evidence export.
 
+### 11.1b Correction 2 on review (PR #106)
+
+Two findings reproduced on synthetic files through the real parsers, runner and cleanup engine
+against `984969f342ea8d8f912a2416b7a3e9372858ce12` and corrected: **complete evidence binding** — the
+permission binding now covers the owner's targets document; the cell runner holds every result to a
+`PermissionContext` built by the permission tool's own constructor (a missing environment binding,
+declaration, registration or targets document is no context: `UNBOUND`, never a preserved `PASSED`);
+one validator (`bind_result`) binds a result only through its attempt, its statement, its bound
+prerequisites, the exact target recomputed now and the consumed authorization
+(`kalpamani-permission-consumption/v1`), and admits a cleanup only against that exact attempt and
+object or launch — used by execution prerequisites, matrix derivation and cleanup admission alike; the
+test that supplied records alone and expected R-7 `PASSED` is replaced by one that builds every chain
+through the tool and withholds, substitutes and contradicts each component through the public runner.
+**Ambiguous ECS launch settlement** — an empty `ListTasks` no longer settles an ambiguous launch:
+discovery is bounded (`RUNNING` and `STOPPED`, three pages each) and explicit, `undiscovered`, `failed`
+and `incomplete` are residue, every known task is preserved and described, termination evidence alone
+settles, exhaustion is never proof of absence, no `RunTask` is ever sent; the control principal's
+`ecs:ListTasks` / `DescribeTasks` / `StopTask` are recorded as deferred, not granted.
+
 ### 11.2 Proposed — decided only by ADR-0047's acceptance
 
 The release-mode field on the specification and the record (ADR-0045's contracts, narrowly amended —
