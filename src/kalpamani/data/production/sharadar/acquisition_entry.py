@@ -12,10 +12,10 @@ locator last. Nothing about that path is reimplemented here; it is composed.
 
 **Capabilities are narrowed at the seam.** The S3 client is wrapped put-only before
 processing sees it; the provider is the accepted adapter over the injected transport,
-one attempt, counting actual transport invocations; the spent-identity registry is
-the injected one or, when none is configured, the accepted ``UnavailableSpentIdentities``
--- which refuses every input, honestly, until the owner decides the task-side source
-(ADR-0043 proposes one; it is not accepted).
+one attempt, counting actual transport invocations; the spent-identity source is the
+input's own block (acquisition input v2, ADR-0044 §3), and the injected registry -- if
+any -- is only a supplementary one. A task passes none; a missing supplementary source
+is not an unavailable one, and a missing block refuses the input as malformed.
 
 **Nothing here is a real client.** The factories are what the image entrypoint hands
 in; the tests hand in fakes, and **mocked results are not AWS or provider verification**.
@@ -40,10 +40,7 @@ from kalpamani.data.production.sharadar.entry import (
     refusal_receipt,
     run_cleanup,
 )
-from kalpamani.data.production.sharadar.identities import (
-    SpentIdentityRegistry,
-    UnavailableSpentIdentities,
-)
+from kalpamani.data.production.sharadar.identities import SpentIdentityRegistry
 from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
 from kalpamani.data.production.sharadar.parameters import SsmLikeClient, SsmParameterAdapter
 from kalpamani.data.production.sharadar.processing import (
@@ -81,6 +78,7 @@ class AcquisitionFactories:
 
     Each factory is called at most once, after every compiled check has passed, and
     what it returns is wrapped before any processing module sees it. ``spent_identities``
+    is a *supplementary* spent-identity source (the primary is the input's own block);
     is the task-side preliminary source, ``None`` meaning *none is configured*.
     """
 
@@ -153,28 +151,32 @@ def run_acquisition_entry(
         environment=factories.environment,
     )
     if refused is not None:
-        return refusal_receipt(entry, refused, cleanup=cleanup)
+        return refusal_receipt(entry, refused, cleanup=cleanup, configuration=configuration)
     if not is_usable_secret_identifier(configuration.secret_identifier):
-        return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup)
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup, configuration=configuration
+        )
     if not configuration.origin_addresses:
-        return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup)
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_CONFIGURATION, cleanup=cleanup, configuration=configuration
+        )
     if (
         origin_address_refusal(
             compiled=configuration.origin_addresses, resolve=factories.resolve_origin
         )
         is not None
     ):
-        return refusal_receipt(entry, TaskOutcome.REFUSED_ORIGIN, cleanup=cleanup)
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_ORIGIN, cleanup=cleanup, configuration=configuration
+        )
 
     try:
         composed = _compose(configuration, factories)
     except Exception:
-        return refusal_receipt(entry, TaskOutcome.REFUSED_DEPENDENCY, cleanup=cleanup)
-    registry: SpentIdentityRegistry = (
-        UnavailableSpentIdentities()
-        if factories.spent_identities is None
-        else factories.spent_identities
-    )
+        return refusal_receipt(
+            entry, TaskOutcome.REFUSED_DEPENDENCY, cleanup=cleanup, configuration=configuration
+        )
+    registry: SpentIdentityRegistry | None = factories.spent_identities
 
     try:
         report = run_production_acquisition(
@@ -191,6 +193,8 @@ def run_acquisition_entry(
             counts=OperationCounts(),
             counts_observed=False,
             cleanup_failures=run_cleanup(cleanup),
+            code_commit=configuration.compiled.code_commit,
+            configuration_digest=configuration.compiled.configuration_digest,
         )
 
     runner: RunnerOutcome = report.bootstrap.outcome
@@ -205,6 +209,9 @@ def run_acquisition_entry(
         counts=report.counts,
         counts_observed=True,
         cleanup_failures=run_cleanup(cleanup),
+        code_commit=configuration.compiled.code_commit,
+        configuration_digest=configuration.compiled.configuration_digest,
+        evidence=report.bootstrap.evidence,
     )
 
 

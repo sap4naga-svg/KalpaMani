@@ -34,6 +34,7 @@ from kalpamani.data.production.sharadar.documents import (
     instant,
 )
 from kalpamani.data.production.sharadar.keys import RUN_ID_RE
+from kalpamani.data.production.sharadar.metadata_grammar import IMAGE_DIGEST_RE
 from kalpamani.data.production.sharadar.vocabulary import (
     EXPECTED_PARTITION,
     EXPECTED_REGION,
@@ -43,8 +44,8 @@ from kalpamani.data.production.sharadar.vocabulary import (
     constants_for,
 )
 
-#: The one schema version.
-RELEASE_SCHEMA_VERSION: Final = 1
+#: The one schema version. Version 2 binds the image and configuration digests (ADR-0044).
+RELEASE_SCHEMA_VERSION: Final = 2
 
 #: A release is valid for at most ten minutes after its verification instant.
 MAX_RELEASE_VALIDITY: Final = timedelta(minutes=10)
@@ -67,6 +68,8 @@ _COMMON_FIELDS: Final[frozenset[str]] = frozenset(
         "actor",
         "task_arn",
         "task_definition_arn",
+        "image_digest",
+        "configuration_digest",
         "input_digest",
         "network_interface_id",
         "subnet_id",
@@ -99,6 +102,8 @@ class ReleaseDefect(StrEnum):
     ACTOR_MISMATCH = "ACTOR_MISMATCH"
     TASK_MISMATCH = "TASK_MISMATCH"
     REVISION_MISMATCH = "REVISION_MISMATCH"
+    IMAGE_MISMATCH = "IMAGE_MISMATCH"
+    CONFIGURATION_MISMATCH = "CONFIGURATION_MISMATCH"
     IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
     INPUT_DIGEST_MISMATCH = "INPUT_DIGEST_MISMATCH"
     VERIFIED_IN_FUTURE = "VERIFIED_IN_FUTURE"
@@ -138,6 +143,8 @@ MISMATCH_DEFECTS: Final[frozenset[ReleaseDefect]] = frozenset(
         ReleaseDefect.ACTOR_MISMATCH,
         ReleaseDefect.TASK_MISMATCH,
         ReleaseDefect.REVISION_MISMATCH,
+        ReleaseDefect.IMAGE_MISMATCH,
+        ReleaseDefect.CONFIGURATION_MISMATCH,
         ReleaseDefect.IDENTITY_MISMATCH,
         ReleaseDefect.INPUT_DIGEST_MISMATCH,
         ReleaseDefect.VERIFIED_IN_FUTURE,
@@ -155,14 +162,17 @@ def release_fields(actor: ProductionActor) -> frozenset[str]:
 class ReleaseExpectation:
     """What the task knows before it reads a release, from sources it already proved.
 
-    ``task_arn`` and ``task_definition_arn`` come from task metadata v4;
-    ``identity`` from the input it read; ``input_digest`` from the bytes of that
-    input. None of the four is read from the release.
+    ``task_arn``, ``task_definition_arn`` and ``image_digest`` come from task metadata
+    v4; ``configuration_digest`` from the compiled task; ``identity`` from the input it
+    read; ``input_digest`` from the bytes of that input. None of the six is read from
+    the release (ADR-0044 §2).
     """
 
     actor: ProductionActor
     task_arn: str
     task_definition_arn: str
+    image_digest: str
+    configuration_digest: str
     identity: str
     input_digest: str
 
@@ -177,6 +187,10 @@ class ReleaseExpectation:
         if not TASK_ARN_RE.fullmatch(self.task_arn or ""):
             raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
         if not TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn or ""):
+            raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
+        if not IMAGE_DIGEST_RE.fullmatch(self.image_digest or ""):
+            raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
+        if hex_digest(self.configuration_digest) is None:
             raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
         if type(self.identity) is not str or not RUN_ID_RE.match(self.identity):
             raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
@@ -228,8 +242,9 @@ def verify_release(
     """Validate an already-decoded release against what the task already holds.
 
     The order is fixed and every clause is a refusal: the closed shape, the schema
-    and contract, then each grammar, then the six binding clauses -- actor, task
-    ARN, task-definition ARN, identity, input digest -- then the two instants. A
+    and contract, then each grammar, then the seven binding clauses (the actor; the
+    task ARN; the task-definition ARN; the image digest; the configuration digest; the
+    identity; the input digest), then the two instants. A
     document that passes the shape and fails a binding clause is a **mismatched
     release**; one whose ``verified_at`` is in the future or whose ``expires_at``
     has passed is a **stale release**.
@@ -267,6 +282,10 @@ def verify_release(
         raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
     task_arn = _field(document, "task_arn", TASK_ARN_RE)
     task_definition_arn = _field(document, "task_definition_arn", TASK_DEFINITION_ARN_RE)
+    image_digest = _field(document, "image_digest", IMAGE_DIGEST_RE)
+    configuration_digest = hex_digest(document["configuration_digest"])
+    if configuration_digest is None:
+        raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
     identity = exact_str(document[constants.identity_field])
     if identity is None or not RUN_ID_RE.match(identity):
         raise _refuse(ReleaseDefect.FIELD_MALFORMED) from None
@@ -288,6 +307,10 @@ def verify_release(
         raise _refuse(ReleaseDefect.TASK_MISMATCH) from None
     if task_definition_arn != expectation.task_definition_arn:
         raise _refuse(ReleaseDefect.REVISION_MISMATCH) from None
+    if image_digest != expectation.image_digest:
+        raise _refuse(ReleaseDefect.IMAGE_MISMATCH) from None
+    if configuration_digest != expectation.configuration_digest:
+        raise _refuse(ReleaseDefect.CONFIGURATION_MISMATCH) from None
     if identity != expectation.identity:
         raise _refuse(ReleaseDefect.IDENTITY_MISMATCH) from None
     if input_digest != expectation.input_digest:
@@ -311,6 +334,8 @@ def build_release_document(
     actor: ProductionActor,
     task_arn: str,
     task_definition_arn: str,
+    image_digest: str,
+    configuration_digest: str,
     identity: str,
     input_digest: str,
     network_interface_id: str,
@@ -330,6 +355,8 @@ def build_release_document(
         actor=actor,
         task_arn=task_arn,
         task_definition_arn=task_definition_arn,
+        image_digest=image_digest,
+        configuration_digest=configuration_digest,
         identity=identity,
         input_digest=input_digest,
     )
@@ -341,6 +368,8 @@ def build_release_document(
         "actor": actor.value,
         "task_arn": task_arn,
         "task_definition_arn": task_definition_arn,
+        "image_digest": image_digest,
+        "configuration_digest": configuration_digest,
         constants_for(actor).identity_field: identity,
         "input_digest": input_digest,
         "network_interface_id": network_interface_id,

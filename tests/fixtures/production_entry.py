@@ -34,6 +34,8 @@ from fixtures.production_provider import CoordinateTransport
 from fixtures.production_runtime import (
     ACCOUNT,
     BUILD_ID,
+    CONFIGURATION_DIGEST,
+    IMAGE_DIGEST,
     INTERFACE_ID,
     SUBNET_ID,
     TASK_ARN,
@@ -58,10 +60,11 @@ from kalpamani.data.production.sharadar.entry import (
 )
 from kalpamani.data.production.sharadar.identities import SpentIdentityRegistry
 from kalpamani.data.production.sharadar.inputs import (
-    INPUT_SCHEMA_VERSION,
+    ACQUISITION_INPUT_SCHEMA_VERSION,
     input_digest,
     ledger_digest,
     parse_slice,
+    spent_identities_block,
 )
 from kalpamani.data.production.sharadar.metadata import METADATA_URI_ENV_VAR
 from kalpamani.data.production.sharadar.plan import plan_digest_for
@@ -159,6 +162,7 @@ class AcquisitionHarness:
         slice_doc: dict[str, Any] | None = None,
         release: bool = True,
         spent: SpentIdentityRegistry | None = None,
+        spent_before: tuple[str, ...] = (),
     ) -> None:
         constants = constants_for(ACQ)
         self.run_id = run_id
@@ -166,11 +170,12 @@ class AcquisitionHarness:
         digest = plan_digest_for(parse_slice(slice_doc), acquisition_mode=AcquisitionMode.BACKFILL)
         self.input_bytes = encode(
             {
-                "schema_version": INPUT_SCHEMA_VERSION,
+                "schema_version": ACQUISITION_INPUT_SCHEMA_VERSION,
                 "contract_id": constants.input_contract_id,
                 "run_identity": run_id,
                 "slice": slice_doc,
                 "plan_digest": digest,
+                "spent_identities": spent_identities_block(list(spent_before)),
                 "issued_at": (at - timedelta(hours=1)).isoformat(),
                 "expires_at": (at + timedelta(hours=23)).isoformat(),
             }
@@ -183,6 +188,8 @@ class AcquisitionHarness:
                 actor=ACQ,
                 task_arn=TASK_ARN,
                 task_definition_arn=revision_arn(ACQ),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
                 identity=run_id,
                 input_digest=input_digest(self.input_bytes),
                 network_interface_id=INTERFACE_ID,
@@ -291,6 +298,8 @@ class BuildHarness:
                 actor=BUILD,
                 task_arn=TASK_ARN,
                 task_definition_arn=revision_arn(BUILD),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
                 identity=BUILD_ID,
                 input_digest=input_digest(self.input_bytes),
                 network_interface_id=INTERFACE_ID,

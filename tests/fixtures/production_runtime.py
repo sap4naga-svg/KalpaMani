@@ -24,9 +24,11 @@ from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.bindings import BINDING_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.compute import CompiledLaunch
 from kalpamani.data.production.sharadar.inputs import (
+    ACQUISITION_INPUT_SCHEMA_VERSION,
     INPUT_SCHEMA_VERSION,
     ledger_digest,
     parse_slice,
+    spent_identities_block,
 )
 from kalpamani.data.production.sharadar.keys import (
     production_acquisition_key,
@@ -51,6 +53,10 @@ ENVELOPE: Final = "0123456789abcdef" * 4
 #: A digest that is a digest and nothing else -- for release/input-digest cases.
 OTHER_PLAN_DIGEST: Final = "cd" * 32
 IMAGE_DIGEST: Final = "sha256:" + "ef" * 32
+OTHER_IMAGE_DIGEST: Final = "sha256:" + "00" * 32
+#: The synthetic compiled-configuration digest an image would register (ADR-0044).
+CONFIGURATION_DIGEST: Final = "c0" * 32
+OTHER_CONFIGURATION_DIGEST: Final = "c1" * 32
 
 RUN_ID: Final = "synthetic-production-run-0001"
 OTHER_RUN_ID: Final = "synthetic-production-run-0002"
@@ -179,11 +185,12 @@ PLAN_DIGEST: Final = compiled_digest()
 def acquisition_input_document(**overrides: Any) -> dict[str, Any]:
     """A valid synthetic acquisition input, issued one hour before ``NOW``."""
     document: dict[str, Any] = {
-        "schema_version": INPUT_SCHEMA_VERSION,
+        "schema_version": ACQUISITION_INPUT_SCHEMA_VERSION,
         "contract_id": constants_for(ProductionActor.ACQUISITION).input_contract_id,
         "run_identity": RUN_ID,
         "slice": slice_document(),
         "plan_digest": PLAN_DIGEST,
+        "spent_identities": spent_identities_block([]),
         "issued_at": (NOW - timedelta(hours=1)).isoformat(),
         "expires_at": (NOW + timedelta(hours=23)).isoformat(),
     }
@@ -324,8 +331,8 @@ def compiled_task(actor: ProductionActor) -> CompiledTask:
     return CompiledTask(
         actor=actor,
         family=constants_for(actor).task_family,
-        revision=REVISION,
-        image_digest=IMAGE_DIGEST,
+        code_commit=COMMIT,
+        configuration_digest=CONFIGURATION_DIGEST,
     )
 
 
@@ -335,6 +342,8 @@ def compiled_launch(actor: ProductionActor, **overrides: Any) -> CompiledLaunch:
         "actor": actor,
         "cluster_arn": CLUSTER_ARN,
         "task_definition_arn": revision_arn(actor),
+        "image_digest": IMAGE_DIGEST,
+        "configuration_digest": CONFIGURATION_DIGEST,
         "task_role_arn": task_role_arn(actor),
         "execution_role_arn": EXECUTION_ROLE_ARN,
         "subnet_id": SUBNET_ID,
@@ -419,15 +428,23 @@ def task_entry(
     task_arn: str = TASK_ARN,
     revision: int = REVISION,
     exit_code: int | None = None,
+    image_digest: str | None = IMAGE_DIGEST,
 ) -> dict[str, Any]:
-    """One ``DescribeTasks`` task entry with the documented fields."""
+    """One ``DescribeTasks`` task entry with the documented fields.
+
+    ``image_digest`` is the container's documented ``imageDigest``; ``None`` models the
+    window before ECS has pulled the image, when the field is absent.
+    """
+    container: dict[str, Any] = {"name": "runner"}
+    if exit_code is not None:
+        container["exitCode"] = exit_code
+    if image_digest is not None:
+        container["imageDigest"] = image_digest
     entry: dict[str, Any] = {
         "taskArn": task_arn,
         "taskDefinitionArn": revision_arn(actor, revision),
         "lastStatus": status,
-        "containers": [{"name": "runner", "exitCode": exit_code}]
-        if exit_code is not None
-        else [{"name": "runner"}],
+        "containers": [container],
     }
     if attachment_status is not None:
         details: list[dict[str, str]] = []

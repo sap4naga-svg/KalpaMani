@@ -15,8 +15,12 @@ import pytest
 from fixtures.production_runtime import (
     BUILD_ID,
     CANARIES,
+    CONFIGURATION_DIGEST,
+    IMAGE_DIGEST,
     INTERFACE_ID,
     NOW,
+    OTHER_CONFIGURATION_DIGEST,
+    OTHER_IMAGE_DIGEST,
     OTHER_PLAN_DIGEST,
     OTHER_RUN_ID,
     OTHER_TASK_ARN,
@@ -106,7 +110,20 @@ class TestAcquisitionInput:
     @pytest.mark.parametrize(
         ("overrides", "defect"),
         [
-            ({"schema_version": 2}, pin.InputDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"schema_version": 1}, pin.InputDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"spent_identities": {"spent": []}}, pin.InputDefect.SPENT_IDENTITIES_MALFORMED),
+            (
+                {"spent_identities": {"spent": ["b", "a"], "spent_digest": "0" * 64}},
+                pin.InputDefect.SPENT_IDENTITIES_MALFORMED,
+            ),
+            (
+                {"spent_identities": {"spent": [RUN_ID], "spent_digest": "0" * 64}},
+                pin.InputDefect.SPENT_DIGEST_MISMATCH,
+            ),
+            (
+                {"spent_identities": pin.spent_identities_block([RUN_ID])},
+                pin.InputDefect.IDENTITY_SPENT,
+            ),
             (
                 {"contract_id": constants_for(BLD).input_contract_id},
                 pin.InputDefect.CONTRACT_ID_UNKNOWN,
@@ -331,6 +348,8 @@ def _expectation(actor: ProductionActor = ACQ, **overrides: Any) -> pr.ReleaseEx
         "actor": actor,
         "task_arn": TASK_ARN,
         "task_definition_arn": revision_arn(actor),
+        "image_digest": IMAGE_DIGEST,
+        "configuration_digest": CONFIGURATION_DIGEST,
         "identity": RUN_ID if actor is ACQ else BUILD_ID,
         "input_digest": PLAN_DIGEST,
     }
@@ -343,6 +362,8 @@ def _release_bytes(actor: ProductionActor = ACQ, **overrides: Any) -> bytes:
         "actor": actor,
         "task_arn": TASK_ARN,
         "task_definition_arn": revision_arn(actor),
+        "image_digest": IMAGE_DIGEST,
+        "configuration_digest": CONFIGURATION_DIGEST,
         "identity": RUN_ID if actor is ACQ else BUILD_ID,
         "input_digest": PLAN_DIGEST,
         "network_interface_id": INTERFACE_ID,
@@ -390,6 +411,19 @@ class TestRelease:
         assert (
             _mismatch(_release_document(task_arn=OTHER_TASK_ARN)) is pr.ReleaseDefect.TASK_MISMATCH
         )
+
+    def test_another_image_or_configuration_is_a_mismatch(self) -> None:
+        """The two digests the launch tool attests (ADR-0044) bind like the revision."""
+        assert (
+            _mismatch(_release_document(image_digest=OTHER_IMAGE_DIGEST))
+            is pr.ReleaseDefect.IMAGE_MISMATCH
+        )
+        assert (
+            _mismatch(_release_document(configuration_digest=OTHER_CONFIGURATION_DIGEST))
+            is pr.ReleaseDefect.CONFIGURATION_MISMATCH
+        )
+        assert pr.ReleaseDefect.IMAGE_MISMATCH in pr.MISMATCH_DEFECTS
+        assert pr.ReleaseDefect.CONFIGURATION_MISMATCH in pr.MISMATCH_DEFECTS
 
     def test_another_revision_is_a_mismatch(self) -> None:
         assert (
@@ -439,7 +473,9 @@ class TestRelease:
     @pytest.mark.parametrize(
         ("overrides", "defect"),
         [
-            ({"schema_version": 2}, pr.ReleaseDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"schema_version": 1}, pr.ReleaseDefect.SCHEMA_VERSION_UNKNOWN),
+            ({"image_digest": "sha256:short"}, pr.ReleaseDefect.FIELD_MALFORMED),
+            ({"configuration_digest": "short"}, pr.ReleaseDefect.FIELD_MALFORMED),
             ({"contract_id": "other/v1"}, pr.ReleaseDefect.CONTRACT_ID_UNKNOWN),
             ({"extra": 1}, pr.ReleaseDefect.FIELD_UNKNOWN),
             (
@@ -465,6 +501,8 @@ class TestRelease:
                 pr.ReleaseDefect.ACTOR_MISMATCH,
                 pr.ReleaseDefect.TASK_MISMATCH,
                 pr.ReleaseDefect.REVISION_MISMATCH,
+                pr.ReleaseDefect.IMAGE_MISMATCH,
+                pr.ReleaseDefect.CONFIGURATION_MISMATCH,
                 pr.ReleaseDefect.IDENTITY_MISMATCH,
                 pr.ReleaseDefect.INPUT_DIGEST_MISMATCH,
                 pr.ReleaseDefect.VERIFIED_IN_FUTURE,
@@ -822,8 +860,6 @@ class TestSelfCheck:
         "overrides",
         [
             {"Family": "kalpamani-research-build"},
-            {"Revision": "8"},
-            {"Containers": [{"ImageID": "sha256:" + "00" * 32}]},
             {
                 "Containers": [
                     {"ImageID": "sha256:" + "ef" * 32},
@@ -831,7 +867,7 @@ class TestSelfCheck:
                 ]
             },
         ],
-        ids=["family", "revision", "image", "sidecar"],
+        ids=["family", "sidecar"],
     )
     def test_each_mismatch_refuses_value_free(self, overrides: dict[str, Any]) -> None:
         metadata = pm.parse_task_metadata(metadata_document(ACQ, **overrides))
@@ -861,11 +897,30 @@ class TestSelfCheck:
         reason = pm.task_environment_refusal(["PATH", "KALPAMANI_SHARADAR_SECRET_ID"])
         assert reason is not None and "SECRET" not in reason
 
+    def test_a_revision_or_image_other_than_the_registered_one_is_bound_at_the_barrier(
+        self,
+    ) -> None:
+        """Neither can be compiled into an image (ADR-0044): the release attests them."""
+        for overrides in ({"Revision": "8"}, {"Containers": [{"ImageID": OTHER_IMAGE_DIGEST}]}):
+            metadata = pm.parse_task_metadata(metadata_document(ACQ, **overrides))
+            assert metadata is not None
+            assert pm.self_check_refusal(metadata, compiled_task(ACQ)) is None
+        assert not hasattr(compiled_task(ACQ), "revision")
+        assert not hasattr(compiled_task(ACQ), "image_digest")
+
     def test_a_compiled_task_cannot_name_the_other_actors_family(self) -> None:
         with pytest.raises(ValueError, match="family"):
             pm.CompiledTask(
                 actor=ACQ,
                 family=constants_for(BLD).task_family,
-                revision=1,
-                image_digest="sha256:" + "ef" * 32,
+                code_commit="ab" * 20,
+                configuration_digest="ab" * 32,
             )
+        with pytest.raises(ValueError, match="commit"):
+            pm.CompiledTask(
+                actor=ACQ,
+                family=constants_for(ACQ).task_family,
+                code_commit="not-a-commit",
+                configuration_digest="ab" * 32,
+            )
+        assert "ab" * 20 not in repr(compiled_task(ACQ))

@@ -43,6 +43,7 @@ from kalpamani.data.production.sharadar.outcomes import (
     count_lines,
     runner_sentence,
 )
+from kalpamani.data.production.sharadar.runner import BootstrapEvidence
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the modules are imported lazily
@@ -280,19 +281,33 @@ class TaskReceipt:
 
     ``counts_observed`` is ``False`` exactly when the outcome is ``UNCLASSIFIED``: the
     counts are then the zeros the entry can prove, not a measurement.
+
+    ``entry`` is ``None`` exactly when the outcome is ``REFUSED_ENTRY``: an invalid
+    invocation selected no entry, and the receipt names none and invents no actor for
+    it (ADR-0044 §4). Every other outcome names the entry that produced it.
     """
 
-    entry: TaskEntry
+    entry: TaskEntry | None
     outcome: TaskOutcome
     runner: RunnerOutcome | None
     counts: OperationCounts
     counts_observed: bool
     cleanup_failures: tuple[CleanupFailure, ...]
+    #: The registered code commit and compiled-configuration digest the task ran with,
+    #: absent only when no configuration existed to run with (ADR-0044).
+    code_commit: str | None = None
+    configuration_digest: str | None = None
+    #: What a released bootstrap proved about which task ran; absent otherwise.
+    evidence: BootstrapEvidence | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers; uncertainty exactly where it is."""
-        if type(self.entry) is not TaskEntry or type(self.outcome) is not TaskOutcome:
-            raise TypeError("entry and outcome must be exact members")
+        if type(self.outcome) is not TaskOutcome:
+            raise TypeError("outcome must be an exact member")
+        if self.entry is not None and type(self.entry) is not TaskEntry:
+            raise TypeError("entry must be an exact member or None")
+        if (self.entry is None) != (self.outcome is TaskOutcome.REFUSED_ENTRY):
+            raise ValueError("an entry is absent exactly when no entry was selected")
         if self.runner is not None and type(self.runner) is not RunnerOutcome:
             raise TypeError("runner must be an exact RunnerOutcome member or None")
         if type(self.counts) is not OperationCounts:
@@ -305,6 +320,16 @@ class TaskReceipt:
             raise TypeError("cleanup failures must be exact CleanupFailure values")
         if self.outcome is TaskOutcome.COMPLETED and self.runner is not RunnerOutcome.RELEASED:
             raise ValueError("a completed task was released")
+        if (self.runner is RunnerOutcome.RELEASED) != (self.evidence is not None):
+            raise ValueError("bootstrap evidence is carried exactly when released")
+        if self.evidence is not None and type(self.evidence) is not BootstrapEvidence:
+            raise TypeError("evidence must be an exact BootstrapEvidence")
+        unconfigured = self.outcome in (
+            TaskOutcome.REFUSED_ENTRY,
+            TaskOutcome.REFUSED_CONFIGURATION,
+        )
+        if not unconfigured and (self.code_commit is None or self.configuration_digest is None):
+            raise ValueError("a configured task carries its code commit and configuration digest")
 
     @property
     def exit_code(self) -> int:
@@ -322,11 +347,17 @@ class TaskReceipt:
             reason = failure.failure
             category = reason if isinstance(reason, str) else reason.value
             lines.append(f"cleanup_failure={failure.stage.value}:{category}")
+        # The one machine-readable line, last (ADR-0044 §5). Imported here because the
+        # receipt module names this class.
+        from kalpamani.data.production.sharadar.receipts import receipt_line
+
+        lines.append(receipt_line(self))
         return tuple(lines)
 
     def __repr__(self) -> str:
         """Entry and outcome only."""
-        return f"TaskReceipt(entry={self.entry.value!r}, outcome={self.outcome.value!r})"
+        entry = None if self.entry is None else self.entry.value
+        return f"TaskReceipt(entry={entry!r}, outcome={self.outcome.value!r})"
 
 
 def run_cleanup(cleanup: Callable[[], None] | None) -> tuple[CleanupFailure, ...]:
@@ -374,6 +405,23 @@ def pre_entry_refusal(
     return None
 
 
+def no_entry_receipt() -> TaskReceipt:
+    """The receipt of an invocation that selected no entry: no actor, nothing built.
+
+    The counts are the zeros the process can prove by construction -- no factory, no
+    client, no working directory existed -- and no configuration, bootstrap or binding
+    evidence is claimed, because none was read (ADR-0044 §4).
+    """
+    return TaskReceipt(
+        entry=None,
+        outcome=TaskOutcome.REFUSED_ENTRY,
+        runner=None,
+        counts=OperationCounts(),
+        counts_observed=True,
+        cleanup_failures=(),
+    )
+
+
 def refusal_receipt(
     entry: TaskEntry,
     outcome: TaskOutcome,
@@ -381,8 +429,10 @@ def refusal_receipt(
     cleanup: Callable[[], None] | None = None,
     runner: RunnerOutcome | None = None,
     counts: OperationCounts | None = None,
+    configuration: EntryConfiguration | None = None,
 ) -> TaskReceipt:
     """A receipt for a refusal made before or beside processing, cleanup included."""
+    compiled = None if type(configuration) is not EntryConfiguration else configuration.compiled
     return TaskReceipt(
         entry=entry,
         outcome=outcome,
@@ -390,6 +440,8 @@ def refusal_receipt(
         counts=OperationCounts() if counts is None else counts,
         counts_observed=outcome is not TaskOutcome.UNCLASSIFIED,
         cleanup_failures=run_cleanup(cleanup),
+        code_commit=None if compiled is None else compiled.code_commit,
+        configuration_digest=None if compiled is None else compiled.configuration_digest,
     )
 
 
@@ -405,14 +457,7 @@ def run_task_entry(
     imports neither actor's dependencies and each actor's image imports only its own.
     """
     if type(entry) is not TaskEntry:
-        return TaskReceipt(
-            entry=TaskEntry.BUILD,
-            outcome=TaskOutcome.REFUSED_ENTRY,
-            runner=None,
-            counts=OperationCounts(),
-            counts_observed=True,
-            cleanup_failures=(),
-        )
+        return no_entry_receipt()
     if configuration is None or factories is None:
         return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
     if entry is TaskEntry.ACQUISITION:
@@ -440,6 +485,7 @@ __all__ = [
     "TaskEntry",
     "TaskOutcome",
     "TaskReceipt",
+    "no_entry_receipt",
     "pre_entry_refusal",
     "refusal_receipt",
     "run_cleanup",

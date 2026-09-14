@@ -21,6 +21,8 @@ from typing import Any, Final
 from fixtures.production_runtime import (
     BUILD_ID,
     COMMIT,
+    CONFIGURATION_DIGEST,
+    IMAGE_DIGEST,
     INTERFACE_ID,
     SUBNET_ID,
     TASK_ARN,
@@ -44,10 +46,11 @@ from kalpamani.data.production.sharadar.availability import AvailabilityEvidence
 from kalpamani.data.production.sharadar.build_manifest import BuildConfiguration
 from kalpamani.data.production.sharadar.identities import LedgerSpentIdentities
 from kalpamani.data.production.sharadar.inputs import (
-    INPUT_SCHEMA_VERSION,
+    ACQUISITION_INPUT_SCHEMA_VERSION,
     input_digest,
     ledger_digest,
     parse_slice,
+    spent_identities_block,
 )
 from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
 from kalpamani.data.production.sharadar.plan import ProductionRequest, plan_digest_for
@@ -458,6 +461,7 @@ def acquire(
     slice_doc: dict[str, Any] | None = None,
     provider: Any | None = None,
     expect_completed: bool = True,
+    spent_before: tuple[str, ...] = (),
 ) -> pp.AcquisitionReport:
     """Run the real acquisition path for one synthetic run into ``store``.
 
@@ -470,11 +474,12 @@ def acquire(
     covered = parse_slice(slice_doc)
     digest = plan_digest_for(covered, acquisition_mode=AcquisitionMode.BACKFILL)
     input_document = {
-        "schema_version": INPUT_SCHEMA_VERSION,
+        "schema_version": ACQUISITION_INPUT_SCHEMA_VERSION,
         "contract_id": constants.input_contract_id,
         "run_identity": run_id,
         "slice": slice_doc,
         "plan_digest": digest,
+        "spent_identities": spent_identities_block(spent_before),
         "issued_at": (at - timedelta(hours=1)).isoformat(),
         "expires_at": (at + timedelta(hours=23)).isoformat(),
     }
@@ -486,6 +491,8 @@ def acquire(
         actor=ACQ,
         task_arn=TASK_ARN,
         task_definition_arn=revision_arn(ACQ),
+        image_digest=IMAGE_DIGEST,
+        configuration_digest=CONFIGURATION_DIGEST,
         identity=run_id,
         input_digest=input_digest(input_bytes),
         network_interface_id=INTERFACE_ID,
@@ -610,6 +617,8 @@ class BuildScenario:
                 actor=BUILD,
                 task_arn=TASK_ARN,
                 task_definition_arn=revision_arn(BUILD),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
                 identity=build_id,
                 input_digest=input_digest(self.input_bytes),
                 network_interface_id=INTERFACE_ID,

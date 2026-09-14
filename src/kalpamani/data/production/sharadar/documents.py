@@ -121,12 +121,62 @@ def instant(value: object) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
+def contains_surrogate_text(value: object) -> bool:
+    """Whether any string inside ``value`` carries a surrogate code point.
+
+    JSON admits ``\\uDC80``-style escapes that decode to lone surrogates, which no
+    UTF-8 encoder can emit: a document carrying one has no byte form, and a caller
+    refuses it as an encoding defect before any field is read. Walks lists and mapping
+    keys and values; scalars other than ``str`` never carry one.
+    """
+    # Iterative, so a document nested to the decoder's own limit cannot turn this
+    # check into the interpreter's recursion error.
+    pending: list[object] = [value]
+    while pending:
+        current = pending.pop()
+        if type(current) is str:
+            if any("\ud800" <= character <= "\udfff" for character in current):
+                return True
+        elif type(current) is dict:
+            pending.extend(current.keys())
+            pending.extend(current.values())
+        elif type(current) is list:
+            pending.extend(current)
+    return False
+
+
+def is_json_shaped(value: object) -> bool:
+    """Whether ``value`` is built only of ``None``, ``bool``, ``int``, ``str``, lists and objects.
+
+    A closed document is validated field by field, but a value with no place in that
+    validation -- a float, which the canonical serializer refuses, or any non-JSON
+    type -- must be refused **before** a digest is computed over the document, so
+    that the refusal is a closed defect and never the serializer's own exception.
+    """
+    pending: list[object] = [value]
+    while pending:
+        current = pending.pop()
+        if current is None or type(current) in (bool, int, str):
+            continue
+        if type(current) is list:
+            pending.extend(current)
+        elif type(current) is dict:
+            if any(type(key) is not str for key in current):
+                return False
+            pending.extend(current.values())
+        else:
+            return False
+    return True
+
+
 __all__ = [
     "DocumentDefect",
     "DocumentError",
+    "contains_surrogate_text",
     "decode_document",
     "exact_int",
     "exact_str",
     "hex_digest",
     "instant",
+    "is_json_shaped",
 ]

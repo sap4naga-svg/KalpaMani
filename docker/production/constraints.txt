@@ -1,0 +1,19 @@
+# The production task images' complete runtime dependency set (ADR-0044 s.6).
+#
+# These are the exact versions the repository's verified operational environment
+# carries (CLAUDE.md, "The operational environment"): the declared range in
+# pyproject.toml is boto3>=1.36.0,<2.0 and the environment resolved 1.43.83. A rebuild
+# on another date installs exactly these, not whatever the range would resolve to.
+# The repository has no Python dependency lock (deferred to a dependency-governance
+# slice); this file is the image's pin set, not a lock for the workstation.
+#
+# Hash pinning (--require-hashes) is a later image-gate hardening: it needs the hashes
+# of the exact wheels the owner's build host resolves, which this repository cannot
+# know in advance.
+boto3==1.43.83
+botocore==1.43.83
+jmespath==1.1.0
+python-dateutil==2.9.0.post0
+s3transfer==0.19.2
+six==1.17.0
+urllib3==2.7.0

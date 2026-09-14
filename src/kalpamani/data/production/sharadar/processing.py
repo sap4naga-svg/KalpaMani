@@ -467,7 +467,7 @@ def run_production_acquisition(
     *,
     compiled: CompiledTask,
     bootstrap: RunnerAdapters,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None,
     processing: ProcessingAdapters,
 ) -> AcquisitionReport:
     """Bootstrap, barrier, then one bounded acquisition and one locator last.

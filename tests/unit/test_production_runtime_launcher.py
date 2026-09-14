@@ -8,6 +8,7 @@ one ``RunTask`` request.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Final
 
 import pytest
@@ -15,8 +16,11 @@ import pytest
 from fixtures.production_runtime import (
     BUILD_ID,
     CANARIES,
+    CONFIGURATION_DIGEST,
+    IMAGE_DIGEST,
     INTERFACE_ID,
     KEY_ARN,
+    OTHER_IMAGE_DIGEST,
     OTHER_SECURITY_GROUP,
     OTHER_SUBNET_ID,
     OTHER_TASK_ARN,
@@ -217,6 +221,8 @@ class TestTheSuccessPath:
                 actor=ACQ,
                 task_arn=TASK_ARN,
                 task_definition_arn=revision_arn(ACQ),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
                 identity=RUN_ID,
                 input_digest=input_digest(scenario.authorization.input_bytes),
             ),
@@ -374,6 +380,50 @@ class TestPlacementFailure:
         assert scenario.human_ssm.names("delete_parameter") == [scenario.constants.input_parameter]
         assert scenario.launcher_ssm.names("delete_parameter") == []
         assert report.cleanup_failures == ()
+
+    def test_an_image_other_than_the_registered_one_is_misplaced(self) -> None:
+        """ADR-0044: the launcher attests the image digest it observed before releasing."""
+        scenario = _Scenario()
+        scenario.ecs.descriptions[0] = task_entry(
+            ACQ, status="PENDING", attachment_status="ATTACHED", image_digest=OTHER_IMAGE_DIGEST
+        )
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.MISPLACED
+        assert report.incident is PlacementIncident.IMAGE_MISMATCH
+        assert report.counts.stop_task == 1
+        assert scenario.launcher_ssm.names("put_parameter") == []
+
+    def test_the_release_waits_for_the_image_digest_and_binds_it(self) -> None:
+        """A container reports its digest only once pulled; the launcher waits, bounded."""
+        scenario = _Scenario()
+        scenario.ecs.descriptions = [
+            task_entry(ACQ, status="PENDING", attachment_status="ATTACHED", image_digest=None),
+            task_entry(ACQ, status="PENDING", attachment_status="ATTACHED", image_digest=None),
+            task_entry(ACQ, status="RUNNING", attachment_status="ATTACHED"),
+            task_entry(ACQ, status="STOPPED", attachment_status="ATTACHED", exit_code=0),
+        ]
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL and report.incident is None
+        assert report.counts.describe_tasks >= 3
+        (release,) = [
+            kwargs["Value"]
+            for name, kwargs in scenario.launcher_ssm.calls
+            if name == "put_parameter"
+        ]
+        document = json.loads(release)
+        assert document["image_digest"] == IMAGE_DIGEST
+        assert document["configuration_digest"] == CONFIGURATION_DIGEST
+        assert document["schema_version"] == 2
+
+    def test_an_image_digest_never_reported_is_stopped_at_the_ceiling(self) -> None:
+        scenario = _Scenario()
+        scenario.ecs.descriptions = [
+            task_entry(ACQ, status="PENDING", attachment_status="ATTACHED", image_digest=None)
+        ] * 40
+        report = scenario.run()
+        assert report.outcome is LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED
+        assert report.counts.stop_task == 1
+        assert scenario.launcher_ssm.names("put_parameter") == []
 
     def test_a_build_task_with_a_public_ip_is_misplaced(self) -> None:
         scenario = _Scenario(BLD)

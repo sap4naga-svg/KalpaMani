@@ -1,0 +1,19 @@
+# THE REPOSITORY ROOT IS NOT THE PRODUCTION IMAGE BUILD CONTEXT (ADR-0044 s.6). The
+# context is a directory prepared by scripts/production_build_context.py from the exact
+# Git tree of the recorded commit, with the compiled configuration beside it under
+# configuration/. This file exists only so that a mistaken `docker build .` from a
+# checkout admits nothing but the image source allowlist -- and such a build still fails,
+# because no configuration/ input exists here. No tests, docs, infra, LEAN, logs,
+# private runtime area, git metadata, generated staging directory or workstation files
+# can reach a build either way.
+*
+!pyproject.toml
+!src/
+!src/**
+!scripts/production_task_entrypoint.py
+!docker/production/Dockerfile
+!docker/production/constraints.txt
+!docker/production/entry/
+!docker/production/entry/**
+**/__pycache__/
+**/*.pyc

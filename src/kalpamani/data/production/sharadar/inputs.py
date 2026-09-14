@@ -61,8 +61,12 @@ from kalpamani.data.production.sharadar.vocabulary import (
     constants_for,
 )
 
-#: The one schema version either input admits.
+#: The schema versions: the build input is at 1; the acquisition input moved to 2 when
+#: it began carrying the owner ledger's spent identities (ADR-0044 §3).
 INPUT_SCHEMA_VERSION: Final = 1
+ACQUISITION_INPUT_SCHEMA_VERSION: Final = 2
+#: The most spent identities one acquisition input may carry, within the 8 KiB tier.
+MAX_SPENT_IDENTITIES: Final = 128
 
 #: The longest an input may be valid for, and the most runs one build may cover.
 MAX_INPUT_VALIDITY: Final = timedelta(hours=24)
@@ -88,10 +92,12 @@ _ACQUISITION_FIELDS: Final[frozenset[str]] = frozenset(
         "run_identity",
         "slice",
         "plan_digest",
+        "spent_identities",
         "issued_at",
         "expires_at",
     }
 )
+_SPENT_FIELDS: Final[frozenset[str]] = frozenset({"spent", "spent_digest"})
 _BUILD_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -139,6 +145,8 @@ class InputDefect(StrEnum):
     IDENTITY_SPENT = "IDENTITY_SPENT"
     IDENTITY_STATUS_UNAVAILABLE = "IDENTITY_STATUS_UNAVAILABLE"
     IDENTITY_DUPLICATED = "IDENTITY_DUPLICATED"
+    SPENT_IDENTITIES_MALFORMED = "SPENT_IDENTITIES_MALFORMED"
+    SPENT_DIGEST_MISMATCH = "SPENT_DIGEST_MISMATCH"
     SLICE_MALFORMED = "SLICE_MALFORMED"
     PLAN_DIGEST_MISMATCH = "PLAN_DIGEST_MISMATCH"
     PLAN_NOT_COMPILABLE = "PLAN_NOT_COMPILABLE"
@@ -283,7 +291,13 @@ def _validity(document: dict[str, Any], *, now: datetime) -> tuple[datetime, dat
     return issued_at, expires_at
 
 
-def _envelope(document: dict[str, Any], *, fields: frozenset[str], contract_id: str) -> None:
+def _envelope(
+    document: dict[str, Any],
+    *,
+    fields: frozenset[str],
+    contract_id: str,
+    schema_version: int = INPUT_SCHEMA_VERSION,
+) -> None:
     names = set(document)
     if names - fields:
         raise _refuse(InputDefect.FIELD_UNKNOWN) from None
@@ -292,7 +306,7 @@ def _envelope(document: dict[str, Any], *, fields: frozenset[str], contract_id: 
     version = document["schema_version"]
     if type(version) is not int:
         raise _refuse(InputDefect.FIELD_MALFORMED) from None
-    if version != INPUT_SCHEMA_VERSION:
+    if version != schema_version:
         raise _refuse(InputDefect.SCHEMA_VERSION_UNKNOWN) from None
     contract = exact_str(document["contract_id"])
     if contract is None:
@@ -301,13 +315,56 @@ def _envelope(document: dict[str, Any], *, fields: frozenset[str], contract_id: 
         raise _refuse(InputDefect.CONTRACT_ID_UNKNOWN) from None
 
 
+def spent_digest(spent: list[str]) -> str:
+    """The SHA-256 over the canonical serialization of the sorted identity list."""
+    return sha256_hex(canonical_bytes(sorted(spent)))
+
+
+def parse_spent_identities(raw: object) -> frozenset[str]:
+    """The closed spent-identity block of an acquisition input, or refuse.
+
+    ``spent`` is the owner ledger's run identities, sorted and distinct, at most
+    :data:`MAX_SPENT_IDENTITIES`; ``spent_digest`` is the SHA-256 over that list and
+    must match. A malformed block is a malformed input, never an empty registry.
+    """
+    if type(raw) is not dict or set(raw) != _SPENT_FIELDS:
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    spent = raw["spent"]
+    if type(spent) is not list or len(spent) > MAX_SPENT_IDENTITIES:
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    identities: list[str] = []
+    for identity in spent:
+        if type(identity) is not str or not RUN_ID_RE.match(identity):
+            raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+        identities.append(identity)
+    if identities != sorted(set(identities)):
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    digest = hex_digest(raw["spent_digest"])
+    if digest is None:
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    if digest != spent_digest(identities):
+        raise _refuse(InputDefect.SPENT_DIGEST_MISMATCH) from None
+    return frozenset(identities)
+
+
+def spent_identities_block(spent: object) -> dict[str, Any]:
+    """The block the acquisition human actor materializes from the owner ledger."""
+    identities = sorted(set(spent)) if isinstance(spent, list | tuple | set | frozenset) else None
+    if identities is None or any(type(i) is not str or not RUN_ID_RE.match(i) for i in identities):
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    if len(identities) > MAX_SPENT_IDENTITIES:
+        raise _refuse(InputDefect.SPENT_IDENTITIES_MALFORMED) from None
+    return {"spent": identities, "spent_digest": spent_digest(identities)}
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AcquisitionInput:
-    """One validated acquisition input: a single-use run identity and its slice."""
+    """One validated acquisition input: a single-use run identity, its slice, the ledger."""
 
     run_identity: str
     slice: Slice
     plan_digest: str
+    spent_identities: frozenset[str]
     issued_at: datetime
     expires_at: datetime
 
@@ -324,17 +381,24 @@ def parse_acquisition_input(
     document: object,
     *,
     now: datetime,
-    registry: SpentIdentityRegistry,
+    registry: SpentIdentityRegistry | None = None,
 ) -> AcquisitionInput:
     """Validate an already-decoded acquisition input. **Reads nothing.**
 
     The plan digest is admitted here for grammar only; whether it is the digest of
     the plan compiled from this slice is decided by
     :func:`kalpamani.data.production.sharadar.plan.bind_plan`, which every caller
-    that goes on to acquire must call. ``registry`` answers whether the run identity
-    has been used: ``SPENT`` refuses as ``IDENTITY_SPENT``, and ``UNAVAILABLE`` --
-    including a registry that raises or answers with a non-member -- refuses as
-    ``IDENTITY_STATUS_UNAVAILABLE``.
+    that goes on to acquire must call.
+
+    **Spent identities, two sources** (ADR-0044 §3). The input's own ``spent_identities``
+    block is the primary source -- the owner ledger as the human actor materialized it
+    beside the run identity -- and is required: a run identity listed there, or a
+    malformed block, refuses. ``registry`` is a **supplementary** source (a workstation
+    ledger on the human path; ``None`` on a task): ``SPENT`` refuses as
+    ``IDENTITY_SPENT``, and ``UNAVAILABLE`` -- including a registry that raises or
+    answers with a non-member -- refuses as ``IDENTITY_STATUS_UNAVAILABLE``. A missing
+    supplementary source is not an unavailable one; a missing primary block is a
+    malformed input, never an empty ledger.
 
     Raises:
         InputError: one closed :class:`InputDefect`; never a value.
@@ -342,22 +406,32 @@ def parse_acquisition_input(
     if type(document) is not dict:
         raise _refuse(InputDefect.DOCUMENT_MALFORMED) from None
     constants = constants_for(ProductionActor.ACQUISITION)
-    _envelope(document, fields=_ACQUISITION_FIELDS, contract_id=constants.input_contract_id)
+    _envelope(
+        document,
+        fields=_ACQUISITION_FIELDS,
+        contract_id=constants.input_contract_id,
+        schema_version=ACQUISITION_INPUT_SCHEMA_VERSION,
+    )
     run_identity = _identity(document["run_identity"])
     covered = parse_slice(document["slice"])
     plan_digest = hex_digest(document["plan_digest"])
     if plan_digest is None:
         raise _refuse(InputDefect.FIELD_MALFORMED) from None
     issued_at, expires_at = _validity(document, now=now)
-    status = spent_status_of(registry, run_identity)
-    if status is SpentStatus.SPENT:
+    spent = parse_spent_identities(document["spent_identities"])
+    if run_identity in spent:
         raise _refuse(InputDefect.IDENTITY_SPENT) from None
-    if status is not SpentStatus.UNSPENT:
-        raise _refuse(InputDefect.IDENTITY_STATUS_UNAVAILABLE) from None
+    if registry is not None:
+        status = spent_status_of(registry, run_identity)
+        if status is SpentStatus.SPENT:
+            raise _refuse(InputDefect.IDENTITY_SPENT) from None
+        if status is not SpentStatus.UNSPENT:
+            raise _refuse(InputDefect.IDENTITY_STATUS_UNAVAILABLE) from None
     return AcquisitionInput(
         run_identity=run_identity,
         slice=covered,
         plan_digest=plan_digest,
+        spent_identities=spent,
         issued_at=issued_at,
         expires_at=expires_at,
     )
@@ -490,6 +564,7 @@ def parse_build_input(document: object, *, now: datetime) -> BuildInput:
 
 
 __all__ = [
+    "ACQUISITION_INPUT_SCHEMA_VERSION",
     "INPUT_SCHEMA_VERSION",
     "LEDGER_OUTCOMES",
     "LEDGER_OUTCOME_COMPLETED",
@@ -497,6 +572,7 @@ __all__ = [
     "MAX_INPUT_VALIDITY",
     "MAX_RESPONSE_BYTES",
     "MAX_SLICE_REQUESTS",
+    "MAX_SPENT_IDENTITIES",
     "SLICE_MODES",
     "AcquisitionInput",
     "BuildInput",
@@ -510,4 +586,7 @@ __all__ = [
     "parse_acquisition_input",
     "parse_build_input",
     "parse_slice",
+    "parse_spent_identities",
+    "spent_digest",
+    "spent_identities_block",
 ]

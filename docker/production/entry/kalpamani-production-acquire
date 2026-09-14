@@ -1,0 +1,5 @@
+#!/bin/sh
+# The acquisition actor's entry executable: the task definition's `command` token.
+# Exactly one closed argument reaches the runner; anything appended by a command
+# override makes the runner refuse (REFUSED_ENTRY, exit 2) rather than run differently.
+exec /usr/local/bin/python3 /opt/kalpamani/scripts/production_task_entrypoint.py kalpamani-production-acquire "$@"
