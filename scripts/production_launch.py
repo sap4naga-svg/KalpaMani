@@ -878,15 +878,19 @@ def _bound_reservation(store: Any, record: Any) -> Any:
     """The reservation this launch record belongs to, or refuse.
 
     The record names the specification digest the authorization named; the reservation
-    beside the ledger carries that specification. They bind when the digests agree and
-    the record's target and verified placement are the specification's own -- the
-    revision, image, configuration and commit it registered, its subnet, and its
-    security groups as a set -- and, for an acquisition, the record's slice and plan
-    digest are the specification's workload. A missing reservation, a different
-    specification or a placement the specification did not name is not this launch,
-    and refuses.
+    beside the ledger carries that specification. They bind under the one shared rule
+    (:func:`launch_store.bind_record`): the digests agree, the record's slice and plan
+    digest are exactly the specification's workload, its target is the specification's
+    own -- the revision, image, configuration and commit it registered -- and its
+    verified placement is the specification's subnet and security groups as a set. A
+    missing reservation, a different specification, another workload or a placement the
+    specification did not name is not this launch, and refuses.
     """
-    from kalpamani.data.production.sharadar.launch_store import StoreError
+    from kalpamani.data.production.sharadar.launch_store import (
+        RecordBinding,
+        StoreError,
+        bind_record,
+    )
 
     try:
         reservation = store.reservation(record.identity)
@@ -894,37 +898,7 @@ def _bound_reservation(store: Any, record: Any) -> Any:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     if reservation is None:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
-    specification = reservation.specification
-    try:
-        compiled = specification.compiled
-    except (TypeError, ValueError):
-        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-    target = specification.target
-    workload = specification.workload
-    if (
-        reservation.specification_digest != record.specification_digest
-        or reservation.actor is not record.actor
-        or reservation.kind is not record.kind
-        or specification.entry is not record.entry
-        or (
-            record.slice is not None
-            and (
-                record.plan_digest != workload.get("plan_digest")
-                or record.slice.canonical() != workload.get("slice")
-            )
-        )
-        or target.task_definition_arn != record.task_definition_arn
-        or target.image_digest != record.image_digest
-        or target.configuration_digest != record.configuration_digest
-        or target.code_commit != record.code_commit
-        or (
-            record.subnet_id is not None
-            and (
-                compiled.subnet_id != record.subnet_id
-                or frozenset(compiled.security_group_ids) != frozenset(record.security_group_ids)
-            )
-        )
-    ):
+    if bind_record(reservation, record) is not RecordBinding.BOUND:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     return reservation
 
@@ -1112,7 +1086,7 @@ def record_isolation_verdict(
     result = pp.isolation_verdict(verified.probe, evidence, binding=binding)
     document = {
         "schema_version": lr.RECORD_SCHEMA_VERSION,
-        "contract_id": "kalpamani-isolation-verdict/v1",
+        "contract_id": pp.ISOLATION_VERDICT_CONTRACT_ID,
         "actor": record.actor.value,
         "kind": record.kind.value,
         "specification_digest": record.specification_digest,

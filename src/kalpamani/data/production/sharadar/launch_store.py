@@ -81,6 +81,7 @@ from kalpamani.data.production.sharadar.launch_records import (
     MAX_RECORD_BYTES,
     RECORD_SCHEMA_VERSION,
     LaunchKind,
+    LaunchRecord,
     LaunchRecordError,
     LaunchSpecification,
     OwnerLedger,
@@ -189,6 +190,71 @@ class Reservation:
     def __repr__(self) -> str:
         """Kind only."""
         return f"Reservation(kind={self.kind.value!r})"
+
+
+class RecordBinding(StrEnum):
+    """How a launch record relates to the reservation of its identity. Closed."""
+
+    #: The record is this reservation's launch: specification, workload, target and
+    #: any verified placement all agree.
+    BOUND = "BOUND"
+    #: Another specification: digest, actor, kind or entry differ.
+    SPECIFICATION_MISMATCH = "SPECIFICATION_MISMATCH"
+    #: The acquisition slice or plan digest is not the specification's workload.
+    WORKLOAD_MISMATCH = "WORKLOAD_MISMATCH"
+    #: The revision, image, configuration or commit is not the specification's target.
+    TARGET_MISMATCH = "TARGET_MISMATCH"
+    #: The verified subnet or security groups are not the specification's placement.
+    PLACEMENT_MISMATCH = "PLACEMENT_MISMATCH"
+    #: The specification cannot be compiled, so nothing can be held to it.
+    UNCOMPILABLE = "UNCOMPILABLE"
+
+
+def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding:
+    """The one binding rule between a reservation and a launch record.
+
+    The record names the specification digest the authorization named; the reservation
+    beside the ledger carries that specification. They bind when the digests, actor,
+    kind and entry agree; when the record's slice and plan digest are exactly the
+    specification's workload (``None`` for a build, whose workload names runs); when the
+    record's target is the specification's own -- revision, image, configuration and
+    commit; and when any verified placement the record carries is the specification's
+    subnet and its security groups as a set. A record with no verified placement (no
+    release was written) is not held to a placement here; a caller that needs one checks
+    for it. The launch tool refuses on anything but ``BOUND`` before completing a row or
+    deciding a verdict, and the cell runner reads anything else as unbound evidence.
+    """
+    specification = reservation.specification
+    if (
+        reservation.specification_digest != record.specification_digest
+        or reservation.identity != record.identity
+        or reservation.actor is not record.actor
+        or reservation.kind is not record.kind
+        or specification.entry is not record.entry
+    ):
+        return RecordBinding.SPECIFICATION_MISMATCH
+    try:
+        compiled = specification.compiled
+    except (KeyError, TypeError, ValueError):
+        return RecordBinding.UNCOMPILABLE
+    workload = specification.workload
+    recorded_slice = None if record.slice is None else record.slice.canonical()
+    if recorded_slice != workload.get("slice") or record.plan_digest != workload.get("plan_digest"):
+        return RecordBinding.WORKLOAD_MISMATCH
+    target = specification.target
+    if (
+        target.task_definition_arn != record.task_definition_arn
+        or target.image_digest != record.image_digest
+        or target.configuration_digest != record.configuration_digest
+        or target.code_commit != record.code_commit
+    ):
+        return RecordBinding.TARGET_MISMATCH
+    if record.subnet_id is not None and (
+        compiled.subnet_id != record.subnet_id
+        or frozenset(compiled.security_group_ids) != frozenset(record.security_group_ids or ())
+    ):
+        return RecordBinding.PLACEMENT_MISMATCH
+    return RecordBinding.BOUND
 
 
 def parse_reservation(raw: object) -> Reservation:
@@ -442,8 +508,10 @@ __all__ = [
     "RESERVATIONS_SUFFIX",
     "RESERVATION_CONTRACT_ID",
     "LaunchStore",
+    "RecordBinding",
     "Reservation",
     "StoreDefect",
     "StoreError",
+    "bind_record",
     "parse_reservation",
 ]

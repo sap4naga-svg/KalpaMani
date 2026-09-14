@@ -52,8 +52,15 @@ def test_the_adr_exists_and_is_the_only_0045() -> None:
 
 
 def test_the_adr_is_proposed_and_names_its_gates() -> None:
+    # The conditional status line is kept as the record of the days before the merge; the
+    # post-merge note beside it records that the condition has been satisfied.
     assert "Status: " + PROPOSED in ADR_TEXT
     assert "No authority until the pull request introducing this ADR is" in ADR_FLAT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #104 merged" in ADR_PLAIN and "af20f36acbe8a3006830762fbad5cb01d1e9b38b" in ADR_TEXT
+    assert "2966ed2f24f7841eea264657f75e9c081e35922a" in ADR_TEXT
+    assert "ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert "Acceptance authorized no image build" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     assert "## 9. Effectiveness and execution gates" in ADR_TEXT
     assert "Nothing was run to produce this decision" in ADR_FLAT

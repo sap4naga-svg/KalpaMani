@@ -247,6 +247,28 @@ evidence, the launch record and the compiled placement, with a closed reason per
 `--isolation-verdict` records the verdict beside the launch record. `VERIFIED` is unreachable without
 a transcribed analysis, and no analysis is made and no permission granted by this cycle.
 
+## F-10 — the verification tooling (G-4, G-5, G-6), proposed ADR-0046
+
+**Disposition: implemented offline, proposed.** The human-binding materializer, the R-3 tool and the
+cell runner compose accepted contracts and add two closed records — and close a third, the verdict
+document the launch tool already writes; none reaches AWS by default and each
+authorized branch is opened by its own flag under its own written authorization. **Materializing a
+binding is not verifying an identity**; **an R-3 record attests only to the declaration and binding it
+names**, its positive control **confirmed absent only by row 9's `404`** and its client held to **one
+transport attempt** (`total_max_attempts: 1`); **a cell matrix is derived from the ledger, the
+reservations, the launch records and the verdict records, never remembered** — a receipt-verified row
+passes only through its bound chain — the launch tool's own reservation-to-record rule, now the shared
+`launch_store.bind_record` (specification, workload, target, verified placement) — against the registration now in force (`HISTORICAL` when that
+changed, `UNBOUND` when the chain is missing, malformed or substituted), a verdict cell resolves its
+records deterministically (`FAILED` never erased; an `INCONCLUSIVE` re-evaluated for the same launch
+with no relaunch and no new probe); **the aggregate cannot read VERIFIED while the negative R-1 cells
+are undecided** (ADR-0046 §4). The four PR #105 review findings — the SDK retry budget, the unbound
+evidence chain, the permanent `INCONCLUSIVE`, the row-9 confirmation — were reproduced against
+`cf484410…` before the corrections and are held by the tests named in readiness §10; the second
+correction (a placement- or workload-only change to a valid launch record read `PASSED` at
+`f949dcb9…`) was reproduced with the real parsers and runner on synthetic files and is held the same way. ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
+request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
+
 ## Validation performed for this cycle
 
 Focused only, as the changes are documentation and one synthetic example: the docs audit

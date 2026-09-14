@@ -15,7 +15,7 @@ separately authorized owner actions (CLAUDE.md §4.21, §8). Reading this author
 ## What an image is, and what it cannot know
 
 One image per actor, built from `docker/production/Dockerfile` (targets `acquire` and
-`build`), and — under **proposed ADR-0045**, no authority while its pull request is open — one
+`build`), and — under **ADR-0045** (proposed while its pull request was open; **ACCEPTED / IN FORCE** since PR #104 merged 2026-09-14) — one
 **verification** image per actor (targets `acquire-verify` and `build-verify`, entry tokens
 `kalpamani-production-acquire-verify` / `kalpamani-research-build-verify`), built from the same
 Dockerfile by the same procedure from a context prepared for its own entry. A verification image
@@ -156,7 +156,7 @@ context preparer is.
        --target build ... --tag kalpamani-build:<commit> <outside>/kalpamani-context-build
    ```
 
-   The two verification targets (proposed ADR-0045) are built the same way from their own
+   The two verification targets (ADR-0045, accepted) are built the same way from their own
    contexts — `--target acquire-verify` from a context generated with
    `--entry kalpamani-production-acquire-verify`, `--target build-verify` from one generated with
    `--entry kalpamani-research-build-verify`; each is registered under its verification

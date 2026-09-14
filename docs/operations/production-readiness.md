@@ -16,6 +16,11 @@ live trading HARD-DISABLED.
 2026-09-14) and **§9 below records the verification-and-launch cycle its §8 proposed**, carried out
 offline in the pull request that adds §9 and **proposed ADR-0045**. Sections 1–8 are kept as the
 record of the days before that cycle and are not rewritten; where a §7 gap has moved, §9 says so.
+**That pull request, PR #104, has since merged** (2026-09-14T17:28:56Z, merge commit
+`af20f36acbe8a3006830762fbad5cb01d1e9b38b`, approved head `2966ed2f24f7841eea264657f75e9c081e35922a`; merge tree identical to
+the reviewed head tree), so **ADR-0045 is ACCEPTED / IN FORCE** within its own merge-effectiveness
+clause and §9's *proposed* dispositions are decided — as §9 recorded on the days it was written, and
+not rewritten. §10 records the tooling cycle that followed (proposed ADR-0046).
 
 **Baseline.** `main` at `02998fa9bde853d4262269c3b9032bd7fc171461` — the merge of **PR #102**
 (merged 2026-09-14T10:25:40Z, ordered parents `98addd070857143b2bd79ef3e2bf6c06539555ba` then
@@ -572,7 +577,9 @@ or provider call, no image built, pulled or published, no Terraform plan or appl
 no Reachability Analyzer analysis. **Mocked results are not AWS verification.** The decision itself is
 [ADR-0045](../decisions/ADR-0045-verification-entries-observation-build-and-launch-tool.md) —
 **PROPOSED, NOT IN FORCE** while its pull request is open — and every disposition below that says
-*proposed* carries no authority until that ADR is independently reviewed and merged.
+*proposed* carries no authority until that ADR is independently reviewed and merged. **(Since
+satisfied: PR #104 merged 2026-09-14; ADR-0045 ACCEPTED / IN FORCE; §9.2's answers are decided. The
+text of §9 stays as written on those days.)**
 
 ### 9.1 Implemented offline (code on `main` only after the pull request merges)
 
@@ -633,6 +640,7 @@ record, V-17's two launcher profiles, V-18's launch records — all in
 nothing in it depends on changing the deployed bucket policy. The receipt collector and its
 `logs:GetLogEvents` delta (ADR-0044 §5) stay deferred; the ledger row is completed from a hand-read
 line. The R-3 tool, the cell runner and the human-binding materializer stay separate cycles.
+**(That separate cycle has since run — §10.)**
 
 ### 9.7 The PR #104 correction cycle — four review findings, reproduced and corrected
 
@@ -661,3 +669,45 @@ directories, recovery from another directory, legacy reservations, each bound au
 each equivalence substitution, each verdict reason, substituted launch inputs and unbound records),
 `test_production_launch_records.py` (specification and its parser, task-definition evidence, bound
 equivalence, the launch record's placement and specification digest).
+
+## 10. The verification-tooling cycle — G-4, G-5, G-6 implemented offline; proposed ADR-0046; ADR-0045 synchronized
+
+**Status: offline owner-side tooling over accepted contracts, proposed in its own pull request; not an
+authorization and not runtime evidence.** Baseline `main` at `af20f36acbe8a3006830762fbad5cb01d1e9b38b` (the PR #104 merge). Everything
+here was produced on synthetic temporary files through the real modules with counting fakes for every
+client. **Nothing was run against AWS**: no STS, S3, ECS, EC2 or SSM call, no image, no Terraform plan
+or apply, no launch, no probe, no analysis, no private input read. **Mocked results are not AWS
+verification.** The decision is [ADR-0046](../decisions/ADR-0046-verification-tooling-materializer-r3-tool-and-cell-runner.md)
+— **PROPOSED, NOT IN FORCE** while its pull request is open.
+
+### 10.1 Implemented offline
+
+| Gap | Tool | Composes | Held by |
+|---|---|---|---|
+| **G-4** — the production human-binding materializer (S7) | `scripts/production_human_binding_materialize.py` | the ADR-0024 environment-binding loader against the governed local account; `parse_production_runtime_binding` before a byte is written; the one private-artifact writer (exclusive create, owner-only descriptor, read-back); `load_human_runtime_binding` with the actor's own variable, and removal on a refused reload | `test_production_human_binding_materialize.py` (19): both actors, the other actor's loader refuses the document, a real synthetic private root round trip, occupied destination refused, every refusal writes nothing, the two authorizations distinct and unforgeable, no private value in any output; no SDK import |
+| **G-5** — the R-3 tool (S5) | `scripts/production_r3_verification.py` + `r3_verification.py` | the foundation identity gate (`kalpamani-foundation`, PASS/FAIL); the environment binding; the nine accepted rows and the ten-operation failure-path cleanup on an injected client; row 9's `404` the only confirmation of the positive control's absence (row 8's `204` acknowledges the delete); `kalpamani-r3-verification-record/v1` written by the private-artifact writer; `--check-record` for old evidence; the S3 client at `total_max_attempts: 1` | `test_production_r3_verification.py` (97): every response class; the accepted table; a bucket under the policy verifies with nine operations and no residue; each deviation class halts and does not verify; `200`s on rows 2/4/5/6 cleaned and confirmed; row 9 answering `200`, a timeout, an access denial or a network failure after row 8's `204` cleaned up within the budget with the failed row preserved — `NOT_VERIFIED` on a later confirmation, `NOT_VERIFIED_CLEANUP_UNRESOLVED` with residue otherwise, never `VERIFIED`; an abort repeated at most once; unresolved cleanup names residue; the budget never exceeded; a record contradicting its rows refused; old evidence attests to nothing changed; the tool's default performs nothing; every refusal stops before any S3 operation; the SDK named once; the real adapter under invented static credentials with its HTTP session replaced by a counting fake: one transport attempt on `SlowDown`, `500`, timeouts and connection failures, every class in the table, the conditional-copy header present only on the conditional call, no profile-based session |
+| **G-6** — the verification cell runner (S9; S8 enumerated) | `scripts/production_verification_cells.py` + `verification_cells.py` | the launch tool (prepare / execute / complete / verdict), its ledger-anchored store, the receipt validator, the verdict path, the R-3 record and the launch inputs; the prepared-cells document (`kalpamani-verification-cells/v1`) beside the ledger under the ledger lock; a matrix **derived** from records, a receipt-verified row passing only through its reservation, its launch record — bound under the launch tool's own shared rule `launch_store.bind_record` (specification, workload, target, verified placement) — and the registration now in force (`HISTORICAL` otherwise, `UNBOUND` when the chain is missing, malformed or substituted, a placement or workload contradiction included); verdict records parsed through the closed `kalpamani-isolation-verdict/v1` contract and resolved deterministically | `test_production_verification_cells.py` (65): the enumeration; R-3 gates every dependant; the R-3 cell passes only with attesting `VERIFIED` evidence the inputs name; runtime states from the ledger and reservations (prepared, interrupted, launched-without-receipt, refused, failed); a bound current chain passes for both actors; a reservation for another specification, a missing reservation or launch record, a substituted record (digest, image, commit, interface) is `UNBOUND`; a record whose only change is its subnet, its security groups, its slice or its plan digest is `UNBOUND` (`PLACEMENT_MISMATCH` / `WORKLOAD_MISMATCH`) with the verdict cell `BLOCKED`, a reordered group set still binds, and the same change through the runner on real files reads `UNBOUND`; `test_production_launch_script.py` holds `bind_record` per class and `--complete-row` refusing a placement-only change; a changed registered image, commit, subnet or platform version is `HISTORICAL` and blocks the verdict cell; the minimal forged verdict shape, ten contradictory or incomplete documents and a corroboration over `CONNECTED` refused; malformed or unreadable verdict evidence reported as `UNBOUND`; `FAILED` dominates in either order; `NO_CORROBORATION` then bound corroboration is `PASSED`, stale or wrong-source evidence alone stays `INCONCLUSIVE`, a modelled path or a differing probe block conflicts to `UNBOUND`; the aggregate `VERIFIED` only when every cell passed; the runner's default constructs nothing; refused flags; prepare records the cell; execute needs the flag, the cell `PREPARED`, every prerequisite `PASSED` and an authorization naming the prepared digest — then the launch tool once, never twice; an interrupted cell reconciled and never relaunched; a held lock refuses; completion then verdict on a verified build launch, wrong-interface and stale transcriptions leaving it `INCONCLUSIVE` and a bound corroboration for the same launch resolving it to `PASSED` with no further `RunTask` and no client constructed; a passed verdict cell not re-evaluated |
+
+### 10.2 Proposed — decided only by ADR-0046's acceptance
+
+The three contracts (§3 — the verdict document the launch tool already writes, now read closed), the cleanup and row-9 confirmation readings (§2.2), the matrix, its statuses and its evidence chain (§2.3), and the
+deferral of the negative R-1 cells (§4): **no accepted launch mode withholds or mis-names a release**,
+so `R1-*-NO-RELEASE` and `R1-*-RELEASE-MISMATCH` stay `BLOCKED`, and the aggregate cannot read
+`VERIFIED` until the owner decides that mode in a later ADR. R-4 … R-9 are enumerated with their
+must-succeed / must-be-refused text and stay owner-run (S8); a cell decided by simulation only is
+recorded simulated, never verified.
+
+### 10.3 ADR-0045 synchronized
+
+PR #104 merged; ADR-0045 carries its post-merge note; the status rows in `CLAUDE.md` / `README.md`,
+this record, the dispositions, the owner-input checklist, the image-build procedure and the examples
+README say *accepted* where they said *proposed* — with the days it was proposed preserved as written.
+Acceptance of ADR-0045 implied no analyzer permission, no runtime verification, no image and no
+execution.
+
+### 10.4 What remains — the consolidated owner checklist
+
+[`production-owner-inputs.md`](production-owner-inputs.md) §D separates values the owner must supply,
+evidence that can only exist after an earlier runtime step, permissions still needing a decision, and
+the code gaps left after this cycle (the withheld-release launch mode for the negative R-1 cells; the
+R-4 … R-9 orchestration; the receipt collector; G-14).
