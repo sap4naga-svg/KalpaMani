@@ -247,9 +247,11 @@ evidence, the launch record and the compiled placement, with a closed reason per
 `--isolation-verdict` records the verdict beside the launch record. `VERIFIED` is unreachable without
 a transcribed analysis, and no analysis is made and no permission granted by this cycle.
 
-## F-10 — the verification tooling (G-4, G-5, G-6), proposed ADR-0046
+## F-10 — the verification tooling (G-4, G-5, G-6), ADR-0046 (accepted on the merge of PR #105)
 
-**Disposition: implemented offline, proposed.** The human-binding materializer, the R-3 tool and the
+**Disposition: implemented offline; ADR-0046 ACCEPTED / IN FORCE since PR #105 merged
+(2026-09-14T20:37:38Z, merge commit `5174dcf290b4837d38af8ce4a4b975c6557e482e`); proposed while
+that pull request was open — true then, and not rewritten.** The human-binding materializer, the R-3 tool and the
 cell runner compose accepted contracts and add two closed records — and close a third, the verdict
 document the launch tool already writes; none reaches AWS by default and each
 authorized branch is opened by its own flag under its own written authorization. **Materializing a
@@ -268,6 +270,28 @@ evidence chain, the permanent `INCONCLUSIVE`, the row-9 confirmation — were re
 correction (a placement- or workload-only change to a valid launch record read `PASSED` at
 `f949dcb9…`) was reproduced with the real parsers and runner on synthetic files and is held the same way. ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
 request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
+
+## F-11 — the negative R-1 launches and the R-4 … R-9 subcells, proposed ADR-0047
+
+**Disposition: implemented offline, proposed.** The two negative modes are bound into the
+authorized specification (and so into the authorization's digest), applied by the launcher in one
+changed step with no retry in any mode, recorded with the launcher's own terminal observation, and
+passed by the matrix only on the expected, receipt-verified, bound refusal — **an unexpected success
+is FAILED, and a refused verification row is never a successful bootstrap and never buildable**.
+ADR-0036 §3's R-4 … R-9 are expanded into 98 traced subcells: 58 executable at runtime under a human
+or launcher profile by one tool that records the attempt before the operation, stops an unexpected
+launch at once and binds every record to the environment binding, the production declarations and
+the registration; 6 evidenced by the R-1 bootstrap launch; **34 BLOCKED with their exact dependency
+— the task roles on a task-side permission probe entry that does not exist, the deletion role on its
+missing execution path — and a human role never stands in for a task role**. Cleanup runs under the
+control principal and is confirmed or reported as residue. **Empty, partial, simulated or blocked
+coverage never passes**, and the aggregate stays `INCOMPLETE` while any of it remains. Acceptance
+would authorize no execution and grant no permission.
+
+**Validation performed for the coverage cycle.** The full suite, `ruff check`, `ruff format --check`,
+`mypy` and the docs audit on the final head, every one on synthetic temporary files and counting fakes;
+the results and their limitations are in readiness §11.1 and in the pull request. No image, no
+Terraform command, no AWS call, no private input.
 
 ## Validation performed for this cycle
 
