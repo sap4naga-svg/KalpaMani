@@ -163,9 +163,16 @@ required cell is `PASSED`, `FAILED` on any `FAILED`, otherwise `INCOMPLETE`; `HI
 ledger row is a claim the runner binds before it is a pass: the **reservation** beside the ledger
 for the prepared identity must carry the prepared specification digest, this cell's actor, the
 verification kind and this cell's entry; the **launch record** in the records directory for that
-identity must name the same digest, identity, actor, kind and entry, carry the reservation's
-target (task-definition revision, image digest, configuration digest, code commit) and a verified
-network interface; two launch records for one identity bind neither. The bound evidence is then
+identity must bind to that reservation under the accepted launch tool's **one shared rule**
+(`launch_store.bind_record`, the rule `--complete-row` and `--isolation-verdict` refuse on): the same
+digest, identity, actor, kind and entry; the record's slice and plan digest exactly the
+specification's workload; the reservation's target (task-definition revision, image digest,
+configuration digest, code commit); and the record's verified subnet and security groups (as a set)
+the specification's placement — with the runner additionally requiring that a verified placement
+is present. A record whose **only** change is its subnet, its security groups, its slice or its
+plan digest, under an unchanged digest, reservation, registration and ledger row, is
+`PLACEMENT_MISMATCH` or `WORKLOAD_MISMATCH` and the row is `UNBOUND`; two launch records for one
+identity bind neither. The bound evidence is then
 held **against the launch-inputs record now registered**: the specification compiled from the
 current inputs for this actor must equal the reservation's, target and placement alike — otherwise
 the row is `HISTORICAL`. A row with no reservation, no launch record, a reservation for another
@@ -219,6 +226,7 @@ production processing path changed.
 | `kalpamani-r3-verification-record/v1` | `r3_verification.py`: `R3Record`, `parse_r3_record`, `record_attests` |
 | `kalpamani-verification-cells/v1` | `verification_cells.py`: `PreparedCell`, `parse_cells_document` |
 | `kalpamani-isolation-verdict/v1` | `probe.py`: `IsolationVerdictDocument`, `parse_isolation_verdict_document` — the document the ADR-0045 launch tool already writes, now a closed, bounded (64 KiB) contract with the consistency rules of §2.3 |
+| reservation-to-record binding | `launch_store.py`: `bind_record`, `RecordBinding` (`BOUND`, `SPECIFICATION_MISMATCH`, `WORKLOAD_MISMATCH`, `TARGET_MISMATCH`, `PLACEMENT_MISMATCH`, `UNCOMPILABLE`) — the launch tool's existing rule moved into one shared validator, used by `--complete-row`, `--isolation-verdict` and the cell runner; no record or reservation field changed |
 
 **One contract change, stated.** The launch tool's verdict record was written under ADR-0045 with
 the contract identifier and the nine fields above but was read open — the first cell runner accepted

@@ -46,6 +46,7 @@ from fixtures.production_runtime import (
     NOW,
     OTHER_RUN_ID,
     OTHER_SECURITY_GROUP,
+    OTHER_SUBNET_ID,
     RUN_ID,
     SECURITY_GROUPS,
     SUBNET_ID,
@@ -1228,6 +1229,107 @@ class TestCompleteRow:
         record.write_bytes(encode(document))
         scenario.store().reservation_path(RUN_1).unlink()
         assert scenario.mode(*self._argv(record, lines)) == launch.EXIT_REFUSED_RECORDS
+        row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
+        assert row is not None and row.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY
+
+
+class TestRecordBinding:
+    """The one reservation-to-record rule (``launch_store.bind_record``), shared by the
+    launch tool's row completion and verdict and by the cell runner (PR #105 correction 2)."""
+
+    @staticmethod
+    def _pair(actor: ProductionActor) -> tuple[ls.Reservation, lr.LaunchRecord]:
+        kind = "verification"
+        identity = "verify-" + RUN_ID
+        specification = specification_for(actor=actor, kind=kind, identity=identity)
+        reservation = ls.Reservation(
+            identity=identity,
+            actor=actor,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=specification,
+            reserved_at=NOW,
+        )
+        record = _launch_record(
+            entry=TaskEntry.ACQUISITION_VERIFY if actor is ACQ else TaskEntry.BUILD_VERIFY,
+            identity=identity,
+            harness=None,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=specification,
+        )
+        return reservation, record
+
+    @staticmethod
+    def _rewrite(record: lr.LaunchRecord, **fields: Any) -> lr.LaunchRecord:
+        document = record.document()
+        document.update(fields)
+        return lr.parse_launch_record(encode(document))
+
+    def test_the_launch_tool_s_own_record_is_bound_for_both_actors(self) -> None:
+        for actor in (ACQ, BLD):
+            reservation, record = self._pair(actor)
+            assert ls.bind_record(reservation, record) is ls.RecordBinding.BOUND, actor
+            # Security groups bind as a set: the order the launcher observed is immaterial.
+            reordered = self._rewrite(record, security_group_ids=list(reversed(SECURITY_GROUPS)))
+            assert ls.bind_record(reservation, reordered) is ls.RecordBinding.BOUND
+            # A record with no verified placement (no release written) is not held to one.
+            unplaced = self._rewrite(
+                record, network_interface_id=None, subnet_id=None, security_group_ids=None
+            )
+            assert ls.bind_record(reservation, unplaced) is ls.RecordBinding.BOUND
+
+    def test_a_changed_placement_under_the_same_digest_is_a_placement_mismatch(self) -> None:
+        reservation, record = self._pair(BLD)
+        for fields in (
+            {"subnet_id": OTHER_SUBNET_ID},
+            {"security_group_ids": [OTHER_SECURITY_GROUP]},
+            {"security_group_ids": [*SECURITY_GROUPS, OTHER_SECURITY_GROUP]},
+            {"security_group_ids": [SECURITY_GROUPS[0]]},
+        ):
+            changed = self._rewrite(record, **fields)
+            assert changed.specification_digest == reservation.specification_digest
+            assert ls.bind_record(reservation, changed) is ls.RecordBinding.PLACEMENT_MISMATCH
+
+    def test_a_contradicted_slice_or_plan_digest_is_a_workload_mismatch(self) -> None:
+        reservation, record = self._pair(ACQ)
+        assert record.slice is not None
+        narrowed = record.slice.canonical()
+        narrowed["windows"] = {**narrowed["windows"], "actions": "2025-01-01/2025-06-30"}
+        for fields in ({"plan_digest": "cd" * 32}, {"slice": narrowed}):
+            changed = self._rewrite(record, **fields)
+            assert changed.specification_digest == reservation.specification_digest
+            assert ls.bind_record(reservation, changed) is ls.RecordBinding.WORKLOAD_MISMATCH
+
+    def test_another_target_or_specification_is_named_as_such(self) -> None:
+        reservation, record = self._pair(BLD)
+        for fields in (
+            {"image_digest": "sha256:" + "00" * 32},
+            {"code_commit": "f" * 40},
+            {"configuration_digest": "cd" * 32},
+            {"task_definition_arn": verification_revision_arn(BLD).replace(":7", ":8")},
+        ):
+            changed = self._rewrite(record, **fields)
+            assert ls.bind_record(reservation, changed) is ls.RecordBinding.TARGET_MISMATCH
+        other_digest = self._rewrite(record, specification_digest="cd" * 32)
+        assert ls.bind_record(reservation, other_digest) is ls.RecordBinding.SPECIFICATION_MISMATCH
+        # (a production kind under a ``verify-`` identity does not parse: IDENTITY_KIND_MISMATCH)
+        acquisition_reservation, _ = self._pair(ACQ)
+        assert (
+            ls.bind_record(acquisition_reservation, record)
+            is ls.RecordBinding.SPECIFICATION_MISMATCH
+        )
+
+    def test_row_completion_refuses_a_record_whose_only_change_is_its_placement(
+        self, tmp_path: Path
+    ) -> None:
+        scenario, record, lines = TestCompleteRow()._completed_scenario(tmp_path)
+        document = json.loads(record.read_bytes())
+        reservation = scenario.reservation()
+        assert reservation is not None
+        assert document["specification_digest"] == reservation["specification_digest"]
+        document["subnet_id"] = OTHER_SUBNET_ID
+        record.write_bytes(encode(document))
+        argv = ["--complete-row", "--launch-record", str(record), "--receipt-lines", str(lines)]
+        assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
         row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
         assert row is not None and row.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY
 

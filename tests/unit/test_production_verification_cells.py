@@ -452,6 +452,60 @@ class TestEvidenceChain:
             )
             assert states[chain.cell_id].status is vc.CellStatus.UNBOUND, field
 
+    def test_a_record_whose_only_change_is_its_placement_or_workload_does_not_bind(
+        self,
+    ) -> None:
+        """PR #105 correction 2: the launch tool's placement and workload bindings, enforced.
+
+        The specification digest, the reservation, the registration and the receipt-verified
+        ledger row are all unchanged; only the launch record's verified subnet or security
+        groups (build) or its slice / plan digest (acquisition) are re-written. The row is
+        UNBOUND, its verdict cell BLOCKED, the aggregate INCOMPLETE -- and the unchanged
+        record still passes.
+        """
+        acquisition = _Chain(ACQ)
+        assert acquisition.record.slice is not None
+        narrowed = acquisition.record.slice.canonical()
+        narrowed["windows"] = {**narrowed["windows"], "actions": "2025-01-01/2025-06-30"}
+        table: list[tuple[Any, tuple[dict[str, Any], ...]]] = [
+            (
+                BLD,
+                (
+                    {"subnet_id": "subnet-0fedcba9876543210"},
+                    {"security_group_ids": ["sg-0fedcba9876543210"]},
+                    {"security_group_ids": ["sg-0123456789abcdef0"]},
+                ),
+            ),
+            (ACQ, ({"plan_digest": "cd" * 32}, {"slice": narrowed})),
+        ]
+        for actor, changes in table:
+            chain = _Chain(actor)
+            control = vc.derive_states(chain.evidence(), chain.prepared())
+            assert control[chain.cell_id].status is vc.CellStatus.PASSED
+            for fields in changes:
+                document = chain.record.document()
+                document.update(fields)
+                record = lr.parse_launch_record(encode(document))
+                assert record.specification_digest == chain.specification.digest
+                states = vc.derive_states(
+                    chain.evidence(launch_records={chain.identity: record}), chain.prepared()
+                )
+                state = states[chain.cell_id]
+                assert state.status is vc.CellStatus.UNBOUND, (actor, fields)
+                expected = "WORKLOAD_MISMATCH" if actor is ACQ else "PLACEMENT_MISMATCH"
+                assert expected in state.reason
+                assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
+                assert vc.aggregate(states) is vc.AggregateStatus.INCOMPLETE
+            # The reorder the launcher's observation may produce still binds.
+            if actor is BLD:
+                document = chain.record.document()
+                document["security_group_ids"] = list(reversed(document["security_group_ids"]))
+                record = lr.parse_launch_record(encode(document))
+                states = vc.derive_states(
+                    chain.evidence(launch_records={chain.identity: record}), chain.prepared()
+                )
+                assert states[chain.cell_id].status is vc.CellStatus.PASSED
+
     def test_a_changed_registered_target_or_placement_makes_the_success_historical(
         self,
     ) -> None:
@@ -1066,6 +1120,39 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
         cells.main(*verdict, "--reachability-evidence", str(evidence))
         == runner.EXIT_REFUSED_CELL_STATE
     )
+
+
+def test_the_runner_reads_a_placement_changed_record_as_unbound_on_real_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #105 correction 2, end to end: real parsers, the real runner, synthetic files."""
+    chain = _Chain()
+    cells = _Cells(tmp_path)
+    scenario = cells.scenario
+    scenario.store().reserve(chain.reservation)
+    scenario.ledger.write_bytes(encode(ledger_document([ledger_row(RUN_ID), chain.row])))
+    inputs = dict(chain.inputs_document)
+    inputs["r3_verification_digest"] = cells.record.digest
+    scenario.inputs.write_bytes(encode(inputs))
+    scenario.ledger.with_name("ledger.json" + runner.CELLS_SUFFIX).write_bytes(
+        canonical_bytes(vc.cells_document(list(chain.prepared().values())))
+    )
+    scenario.records.mkdir(parents=True, exist_ok=True)
+    record_path = scenario.records / "launch-record-20260905T020500Z-0001.json"
+    record_path.write_bytes(encode(chain.record.document()))
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
+    document = chain.record.document()
+    document["subnet_id"] = "subnet-0fedcba9876543210"
+    record_path.write_bytes(encode(lr.parse_launch_record(encode(document)).document()))
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=UNBOUND" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=BLOCKED" in out
+    assert "aggregate=INCOMPLETE" in out and "unbound=1" in out
+    assert scenario.clients.constructions == []
 
 
 def test_the_runner_parses_every_verdict_record_and_reports_malformed_ones(

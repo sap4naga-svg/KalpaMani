@@ -70,7 +70,7 @@ from kalpamani.data.production.sharadar.launch_records import (
     OwnerLedger,
     compile_launch,
 )
-from kalpamani.data.production.sharadar.launch_store import Reservation
+from kalpamani.data.production.sharadar.launch_store import RecordBinding, Reservation, bind_record
 from kalpamani.data.production.sharadar.probe import (
     RESOLVABLE_INSUFFICIENCIES,
     IsolationVerdict,
@@ -679,20 +679,17 @@ def _bound_success(
         return _unbound(
             cell, prepared, "no launch record for this identity in the records directory"
         )
+    # The accepted launch tool's own reservation-to-record rule -- specification,
+    # workload, target and verified placement -- and then the runner's stricter need:
+    # a receipt-verified launch had a release, so the record carries its placement.
+    binding = bind_record(reservation, record)
+    if binding is not RecordBinding.BOUND:
+        return _unbound(
+            cell, prepared, f"the launch record does not bind to the reservation: {binding.value}"
+        )
+    if record.network_interface_id is None:
+        return _unbound(cell, prepared, "the launch record carries no verified placement")
     target = reservation.specification.target
-    if (
-        record.specification_digest != digest
-        or record.identity != identity
-        or record.actor is not cell.actor
-        or record.kind is not LaunchKind.VERIFICATION
-        or record.entry is not cell.entry
-        or record.task_definition_arn != target.task_definition_arn
-        or record.image_digest != target.image_digest
-        or record.configuration_digest != target.configuration_digest
-        or record.code_commit != target.code_commit
-        or record.network_interface_id is None
-    ):
-        return _unbound(cell, prepared, "the launch record does not bind to the reservation")
     if evidence.inputs is None:
         return _unbound(cell, prepared, "no launch-inputs record to apply the evidence against")
     try:
