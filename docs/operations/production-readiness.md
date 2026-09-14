@@ -12,6 +12,11 @@ and the synthetic examples under [`examples/production/`](examples/production/RE
 not values. Reading this authorizes nothing. G2 OPEN; CONTROL DEFERRED; Phase 3 NOT COMPLETE;
 live trading HARD-DISABLED.
 
+**This record was merged as PR #103** (merge commit `8464128a9d890a5d43c2a685927742cad8428f8f`,
+2026-09-14) and **§9 below records the verification-and-launch cycle its §8 proposed**, carried out
+offline in the pull request that adds §9 and **proposed ADR-0045**. Sections 1–8 are kept as the
+record of the days before that cycle and are not rewritten; where a §7 gap has moved, §9 says so.
+
 **Baseline.** `main` at `02998fa9bde853d4262269c3b9032bd7fc171461` — the merge of **PR #102**
 (merged 2026-09-14T10:25:40Z, ordered parents `98addd070857143b2bd79ef3e2bf6c06539555ba` then
 `82d0a3b24e29aa309ad501fd8b7404db1e4c3644`, merge tree `89533df7207f44ee1b5817a0be6d1a73778e53e2`,
@@ -486,6 +491,10 @@ Read on 2026-09-14 from the public AWS documentation; no AWS call was made.
 
 ## 7. Unresolved code and contract gaps
 
+> **HISTORICAL — the register as of PR #103.** The verification-and-launch cycle (§9) has since
+> implemented G-1, G-2, G-3 and the Route B half of G-7 offline, and proposed decisions for G-12 and
+> G-15 in ADR-0045; §9.1 gives every gap's current disposition. Nothing below is rewritten.
+
 | # | Gap | Kind | Blocks |
 |---|---|---|---|
 | G-1 | **No verification-only task path** (§3): `RELEASED` continues into processing on both composed entries; no `TaskOutcome` for bootstrap-only verification; no R-2 origin probe; ADR-0036 R-1/R-2 as written cannot be run with the accepted images | contract (ADR-0043 §2 entries; ADR-0036 §2.9/§3) + code | S9 |
@@ -507,6 +516,10 @@ Read on 2026-09-14 from the public AWS documentation; no AWS call was made.
 ---
 
 ## 8. The single next bounded cycle
+
+> **HISTORICAL — the scope as proposed in PR #103.** This cycle has been carried out, offline and
+> on fakes only, in the pull request that proposes ADR-0045; §9 records what it delivered, what it
+> only proposed, and what it left. The text below is the scope as it was set and is not rewritten.
 
 **Scope: one offline, synthetic-only implementation cycle with one ADR, making the verification
 path coherent end to end — G-1, G-2, the Route B receipt amendment (G-7) and the re-verification
@@ -546,3 +559,77 @@ human-binding materializer), G-5 (the R-3 tool — it needs only the foundation 
 outside the repository, origin address resolution, the release commit choice, I-8/I-9), and G-8's
 calendar-source decision. **Not before the cycle above:** any AWS, Terraform, image, registry, launch or
 provider operation.
+
+---
+
+## 9. The verification-and-launch cycle — implemented offline, proposed, and what remains
+
+**Status: an offline implementation and a proposed decision, not an authorization and not runtime
+evidence.** Everything in this section was produced on synthetic fakes through the real modules,
+validated by the repository gates, and — for the Terraform additions — `terraform validate` in a
+task-owned external copy only. **Nothing was run against AWS**: no STS, ECS, EC2, SSM, Secrets Manager
+or provider call, no image built, pulled or published, no Terraform plan or apply, no launch, no probe,
+no Reachability Analyzer analysis. **Mocked results are not AWS verification.** The decision itself is
+[ADR-0045](../decisions/ADR-0045-verification-entries-observation-build-and-launch-tool.md) —
+**PROPOSED, NOT IN FORCE** while its pull request is open — and every disposition below that says
+*proposed* carries no authority until that ADR is independently reviewed and merged.
+
+### 9.1 Implemented offline (code on `main` only after the pull request merges)
+
+| Item | What exists | Held by |
+|---|---|---|
+| **G-1** — the verification entries | `TaskEntry.ACQUISITION_VERIFY` / `BUILD_VERIFY` (`…-acquire-verify`, `…-build-verify`), composing `run_task_bootstrap` and nothing after `RELEASED`; `TaskOutcome.VERIFIED_BOOTSTRAP`, exit **18**; `VerificationFactories` with no field for a secrets client, transport or S3 client; the compiled-configuration file's verification field set (origin addresses only); `CompiledTask` / `CompiledLaunch` admitting the verification family; the Dockerfile's `acquire-verify` and `build-verify` targets and entry executables; the entrypoint's `_SocketProbe` | `tests/unit/test_production_verification_entry.py` (39), the entry, compiled, receipt, generator, entrypoint and build-context suites |
+| **G-1 / G-15** — the build probe and its verdict | `probe.py`: one TCP connect, port 443, 5 s, at most one attempt, to the smallest resolved address **only when every resolved address is inside the compiled set**; closed `ProbeResolution` / `ProbeResult`; `ProbeObservation` invariants; `isolation_verdict` — `FAILED` on `CONNECTED`, `INCONCLUSIVE` otherwise, `VERIFIED` only with a Reachability Analyzer corroboration that matches source and destination, found no path and names a blocking component; the receipt renders the observation and `isolation_verdict=NOT_DECIDED_BY_THE_TASK` | the same suite; `test_adr_0045_governance.py` holds the vocabularies to ADR-0045 |
+| **G-7 (Route B)** — the observation build | an explicitly empty `AcceptedSchemas` admits nothing; `silver.normalize` collects every page's `schema_digest_of` before refusing `SCHEMA_UNSTABLE`; `SchemaObservation` (per dataset: sorted distinct digests, pages parsed / total; `complete` only when every page parsed); `BuildReport.schema_observation` only on `REFUSED_NORMALIZATION` with zero writes; receipt v2 (`kalpamani-task-receipt/v2`) carries `schema_observation` and `probe` blocks under closed admission rules; a static test that no production module writes an observation into an accepted set | `tests/unit/test_production_schema_observation.py` (18), through the real build entry over a store the real acquisition path populated |
+| **G-2 / G-3** — the owner-side launch tool | `scripts/production_launch.py` + `launch_records.py`: the owner ledger, launch-inputs, authorization, launch-record and evidence contracts parsed closed; acquisition input v2 / build input v1 materialized with `plan_digest_for`, `spent_identities_block` (the ledger's **whole** identity set) and `ledger_digest`, each re-parsed under the task's own contract; `CompiledLaunch` compiled per actor and kind; configuration equivalence (`EQUIVALENT` / `CODE_DIFFERS` / `ORIGIN_DIFFERS` / `ENTRY_MISMATCH` / `UNREADABLE`) and the registered-file check before a verification launch; `human_bootstrap` under the human and launcher profiles, then `launch_authorized_run` on four clients built **only** inside the authorized branch under pinned profiles with one attempt and finite timeouts; a provisional `EXIT_CODE_ONLY` ledger row per launch attempt (an identity is consumed by its authorization, task or no task); `--complete-row` verifying the hand-read receipt line against the launch record; refusal by default, refused spellings, containment under the private root, no identifier in output | `tests/unit/test_production_launch_records.py` (77) and `test_production_launch_script.py` (37), every client a fake |
+| **Terraform** | `production_acquire_verify` / `production_build_verify` task definitions (same roles, placement, `user`, read-only root, `/work`), gated on stage `a`/`b` **and** their digest keys (`acquisition_verify`, `build_verify`; any other key refused); each launcher's `RunTask` resource is `concat([production revision], verification revisions)`; three new `terraform test` runs (no verification digest → no family; both → both families, same roles, no assignment; unknown key → refused) | `test_production_infrastructure.py` (63) with mutation controls; in a task-owned external copy under the pinned `hashicorp/aws` 6.62.0: `terraform fmt -check`, `terraform init -backend=false`, `terraform validate` (valid) and `terraform test -test-directory` with the **mock** provider — **14 of 14 runs pass**; no plan, no apply, no backend, no credential, no account (§9.4) |
+| Vocabulary | `ActorConstants.verification_task_family`, `ActorConstants.launcher_profile` (`kalpamani-production-acquisition-launcher`, `kalpamani-research-build-launcher`), `is_known_family`; `LEDGER_OUTCOME_VERIFIED` | `test_adr_0045_governance.py` |
+
+### 9.2 Proposed — decided only by ADR-0045's acceptance
+
+| Question | Proposed answer (ADR-0045) |
+|---|---|
+| four closed entries (amends ADR-0043 §2) | §2 — verification entries terminate at the barrier with `VERIFIED_BOOTSTRAP` (18) |
+| the probe's rule and the R-2 verdict (G-15; amends ADR-0036 §3) | §3 — one connect, closed observation; the verdict is the tool's, not the task's; **Reachability Analyzer is the only admitted corroboration**; Flow Logs are not; the analyzer's IAM delta is recorded as an owner input (D-14) and **not granted** |
+| Route B as evidence (G-7; amends ADR-0044 §4 and the build's output rule) | §4 — an observed digest is evidence for owner review; promotion is an explicit owner act |
+| the verification families and the launcher resource (amends ADR-0036 §2.9) | §5 — one family per actor; exactly one more `RunTask` resource per launcher; no assignment change |
+| the launch tool's records and the identity rule (amends ADR-0036 §2.6, §2.12) | §6 — `verify-` reserved; an identity in the ledger is consumed for both kinds; no `RunTask` retry; a row is provisional until receipt-verified |
+| re-verification (G-12) | §7 — R-1/R-2 are repeated on a new commit or a new verification image digest; a stage-b production digest rotation needs neither and touches no assignment |
+
+### 9.3 Remaining runtime evidence (unchanged by this cycle)
+
+Every U row of §3.3, every L3 cell of §4.3, S1–S10 in full. The verification entries have never run as
+a task; the launch tool has never constructed a real client; the probe adapter has never opened a
+socket; the observation build has never read a real locator. The first authorized run of each is the
+first evidence of any of them, under its own written authorization.
+
+### 9.4 What could not be completed here, stated
+
+- **The external-copy Terraform validation ran, on the fifth attempt.** Four `terraform init
+  -backend=false` attempts earlier in the cycle could not download the pinned `hashicorp/aws` 6.62.0
+  provider (connection resets and TLS handshake timeouts against the registry); the fifth succeeded,
+  and `terraform validate` (valid) and `terraform test` with the **mock** provider (14 of 14 runs)
+  then passed in the task-owned external copy. One assertion the cycle first wrote compared the
+  verification and production task definitions' `task_role_arn` — a provider-computed value that is
+  **unknown at plan** — and was replaced by plan-evaluable assertions (the closed family names and the
+  Fargate shape); the role identity is held by the structural Python guard as the declared expression.
+  **A `terraform test` plan against a mock provider is a check of the configuration's own logic, not
+  of AWS**: no credential was read, no account was contacted, and no resource exists before or after.
+  The repository directory was never initialized. **No plan and no apply were run.**
+- **G-4 (the production human-binding materializer)** is not built; the launch tool loads the two
+  files through the accepted reader and would refuse without them.
+- **G-5, G-6, G-8, G-9, G-10, G-11, G-13** are untouched.
+
+### 9.5 Remaining owner inputs added by this cycle
+
+D-14 (the Reachability Analyzer permission delta and its principal), D-15 (one authorization record
+per launch), V-6's two verification digests, V-13's ledger under the private root, V-16's launch-inputs
+record, V-17's two launcher profiles, V-18's launch records — all in
+[`production-owner-inputs.md`](production-owner-inputs.md).
+
+### 9.6 Deferred, and kept deferred
+
+**G-14** (the bucket-policy transition procedure) is neither defined nor authorized by this cycle, and
+nothing in it depends on changing the deployed bucket policy. The receipt collector and its
+`logs:GetLogEvents` delta (ADR-0044 §5) stay deferred; the ledger row is completed from a hand-read
+line. The R-3 tool, the cell runner and the human-binding materializer stay separate cycles.

@@ -15,7 +15,13 @@ separately authorized owner actions (CLAUDE.md §4.21, §8). Reading this author
 ## What an image is, and what it cannot know
 
 One image per actor, built from `docker/production/Dockerfile` (targets `acquire` and
-`build`). An image carries the package source, the entrypoint, the accepted SDK pins
+`build`), and — under **proposed ADR-0045**, no authority while its pull request is open — one
+**verification** image per actor (targets `acquire-verify` and `build-verify`, entry tokens
+`kalpamani-production-acquire-verify` / `kalpamani-research-build-verify`), built from the same
+Dockerfile by the same procedure from a context prepared for its own entry. A verification image
+carries a compiled configuration of the verification field set (the origin address set and nothing
+else: no secret name, no build configuration), and its entry stops at the release barrier with exit
+18. An image carries the package source, the entrypoint, the accepted SDK pins
 (`docker/production/constraints.txt`), **one** entry executable named as its task definition's
 `command` token, and **one** compiled configuration file at
 `/etc/kalpamani/compiled-configuration.json`.
@@ -150,6 +156,14 @@ context preparer is.
        --target build ... --tag kalpamani-build:<commit> <outside>/kalpamani-context-build
    ```
 
+   The two verification targets (proposed ADR-0045) are built the same way from their own
+   contexts — `--target acquire-verify` from a context generated with
+   `--entry kalpamani-production-acquire-verify`, `--target build-verify` from one generated with
+   `--entry kalpamani-research-build-verify`; each is registered under its verification
+   task-definition family (`production_image_digests` keys `acquisition_verify`, `build_verify`).
+   **No verification image has been built**; the local verification below covers the two
+   production targets only.
+
    The repository root is **not** a build context. A mistaken `docker build .` from a checkout
    admits only the source allowlist (`.dockerignore`) and still fails, because no
    `configuration/` input exists there. A target built from the other entry's context fails at
@@ -250,7 +264,8 @@ mount point's mode as Docker does is **not established here** and is a check for
 
 ## What this document does not authorize
 
-Building, pulling or publishing any image beyond the one local verification recorded above;
+Building, pulling or publishing any image beyond the one local verification recorded above —
+the two verification targets included, which have never been built;
 `terraform plan` or `apply`; a launch; a run; any AWS, metadata, STS, credential or provider
 request. The compiled configuration carries no credential and no account identifier; the owner
 inputs file stays outside the repository.

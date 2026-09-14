@@ -22,6 +22,7 @@ from typing import Any, Final
 import pytest
 
 from fixtures.production_runtime import NOW
+from kalpamani.data.production.sharadar import launch_records as lr
 from kalpamani.data.production.sharadar.compiled import (
     build_compiled_configuration,
     parse_build_configuration,
@@ -30,6 +31,7 @@ from kalpamani.data.production.sharadar.compiled import (
 from kalpamani.data.production.sharadar.entry import TaskEntry
 from kalpamani.data.production.sharadar.inputs import parse_acquisition_input, parse_build_input
 from kalpamani.data.production.sharadar.plan import bind_plan
+from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
 pytestmark = pytest.mark.unit
 
@@ -48,6 +50,8 @@ EXPECTED_FILES: Final[frozenset[str]] = frozenset(
         "compiled-configuration.build.synthetic.json",
         "acquisition-input.v2.synthetic.json",
         "build-input.v1.synthetic.json",
+        "owner-ledger.synthetic.json",
+        "launch-authorization.synthetic.json",
     }
 )
 
@@ -165,3 +169,45 @@ def test_the_observation_example_admits_nothing_and_differs_only_in_its_accepted
     differing = {key for key in producing if producing[key] != observation.get(key)}
     assert differing == {"accepted_schemas"}
     assert set(observation) == set(producing)
+
+
+def test_the_owner_ledger_example_is_admitted_and_shows_every_row_kind() -> None:
+    """Proposed ADR-0045: a buildable row, a verification row, two provisional rows."""
+    raw = (EXAMPLES / "owner-ledger.synthetic.json").read_bytes()
+    ledger = lr.parse_owner_ledger(raw)
+    kinds = {(row.kind, row.evidence, row.outcome) for row in ledger.rows}
+    assert (lr.LaunchKind.PRODUCTION, lr.LedgerEvidence.RECEIPT_VERIFIED, "COMPLETED") in kinds
+    assert (lr.LaunchKind.VERIFICATION, lr.LedgerEvidence.RECEIPT_VERIFIED, "VERIFIED") in kinds
+    assert (lr.LaunchKind.PRODUCTION, lr.LedgerEvidence.EXIT_CODE_ONLY, "COMPLETED") in kinds
+    buildable = [row.identity for row in ledger.rows if row.buildable]
+    assert len(buildable) == 1 and buildable[0].startswith("synthetic-")
+    for row in ledger.rows:
+        assert row.identity.startswith(("synthetic-", "verify-synthetic-"))
+        assert (row.kind is lr.LaunchKind.VERIFICATION) == row.identity.startswith("verify-")
+    # Every identity in the ledger is consumed, whatever its row says.
+    for row in ledger.rows:
+        with pytest.raises(lr.LaunchRecordError):
+            lr.admit_identity(ledger, row.identity, kind=row.kind)
+
+
+def test_the_authorization_example_names_one_launch_and_expires() -> None:
+    raw = (EXAMPLES / "launch-authorization.synthetic.json").read_bytes()
+    document = json.loads(raw)
+    identity = document["identity"]
+    assert identity.startswith("synthetic-")
+    record = lr.parse_authorization(
+        raw,
+        actor=ProductionActor.ACQUISITION,
+        kind=lr.LaunchKind.PRODUCTION,
+        identity=identity,
+        now=NOW,
+    )
+    assert record.expires_at - record.issued_at <= lr.MAX_AUTHORIZATION_VALIDITY
+    with pytest.raises(lr.LaunchRecordError):
+        lr.parse_authorization(
+            raw,
+            actor=ProductionActor.ACQUISITION,
+            kind=lr.LaunchKind.VERIFICATION,
+            identity=identity,
+            now=NOW,
+        )
