@@ -98,19 +98,28 @@ image executes**; the first authorized production run is the evidence for that.
 the lexicographically smallest IPv4 literal the pinned origin resolves to — and only when **every**
 resolved address lies inside the compiled origin set. A set the origin has partly left is stale, and a
 probe against it observes nothing about the current provider; the same rule the accepted entries apply
-to the origin. The destination is therefore deterministic from the compiled set and the resolution, so
-the launch tool can name it from its own record without the task disclosing an address.
+to the origin. The destination is deterministic from the compiled set and the task's own
+resolution; the task records it under a keyed digest (below), and the launch tool recovers it from
+that record — never from a resolution of its own.
 
-**The observation is closed.** The receipt carries three fields:
+**The observation is closed, and it binds the destination the task actually selected.** The
+receipt carries four fields:
 
 ```text
-probe_resolution   RESOLVED_IN_SET | RESOLVED_OUTSIDE_SET | UNRESOLVED
-probe_result       CONNECTED | CONNECTION_REFUSED | TIMED_OUT | CONNECTION_ERROR | NOT_ATTEMPTED
-probe_attempts     0 | 1     -- exactly 1 iff RESOLVED_IN_SET; NOT_ATTEMPTED iff 0
+probe_resolution    RESOLVED_IN_SET | RESOLVED_OUTSIDE_SET | UNRESOLVED
+probe_result        CONNECTED | CONNECTION_REFUSED | TIMED_OUT | CONNECTION_ERROR | NOT_ATTEMPTED
+probe_attempts      0 | 1     -- exactly 1 iff RESOLVED_IN_SET; NOT_ATTEMPTED iff 0
+probe_destination   the keyed digest of the selected destination, or none -- present iff attempted
 ```
 
 A resolver that raises is `UNRESOLVED` with no attempt; an adapter that raises is `CONNECTION_ERROR`
-with the one attempt it made. **No address, host name, port or timing reaches the receipt.**
+with the one attempt it made. **No address, host name, port or timing reaches the receipt.** The
+destination is named by `destination_binding_digest(input_digest, address, 443)` — a SHA-256 keyed
+by the admitted input's digest, which the launch tool holds in its own record and a log reader does
+not (an unkeyed digest of an IPv4 address would name it to anyone). The tool recovers *which*
+compiled address the task selected by recomputing the digest for every address of the compiled set;
+**it never infers the task's DNS result from a later resolution or from the set alone**, and an
+observation whose digest recovers no compiled address is unbound (`DESTINATION_UNBOUND`).
 
 **The isolation verdict is not the task's.** The receipt line renders
 `isolation_verdict=NOT_DECIDED_BY_THE_TASK`, and the launch tool records the verdict beside the
@@ -119,16 +128,47 @@ receipt under this rule (`isolation_verdict`):
 - `CONNECTED` **fails** R-2 for that destination and instant, whatever any corroboration says;
 - a non-connection is **`INCONCLUSIVE`** — a destination failure, a remote rejection, a resolver failure
   and a transient condition produce the same observation as a network control;
-- **`VERIFIED`** requires a non-connection observed on an actual attempt (`probe_attempts = 1`) **and**
-  one corroboration of the one kind this ADR admits.
+- **`VERIFIED`** requires a non-connection observed on an actual attempt (`probe_attempts = 1`) whose
+  destination digest recovers a compiled address, **and** one corroboration of the one kind this ADR
+  admits, **bound by derivation** to that task, that destination and that instant.
 
 **The admitted corroboration is a VPC Reachability Analyzer analysis** (`CorroborationKind.
-REACHABILITY_ANALYSIS`), recorded as four closed facts: `source_interface_matches` (the analysis's
-source is the task's network interface, as the release names it), `destination_matches` (its
-destination is the probe's IP address and port), `network_path_found` (`false` required), and
-`blocking_components` — a non-empty subset of `ROUTE_TABLE`, `SECURITY_GROUP`, `NETWORK_ACL`, `SUBNET`
-naming the component of **this VPC's own controls** the analysis attributes the block to. An analysis
-that found a path, or names no component, corroborates nothing.
+REACHABILITY_ANALYSIS`), transcribed by the owner into a closed document
+(`kalpamani-reachability-evidence/v1`) whose fields are the documented `NetworkInsightsAnalysis`
+and `NetworkInsightsPath` attributes: `analysis_id`, `path_id`, `status` (`running | succeeded |
+failed`), `network_path_found`, `start_date`, the path's `source_interface_id`, `destination_ip`,
+`destination_port`, `protocol` (`tcp | udp`), and the `explanations` — each an `explanation_code`
+with the component object it names (`component_kind` ∈ `SECURITY_GROUP | NETWORK_ACL | ROUTE_TABLE |
+SUBNET`, `component_id`, and the `subnet_id` named beside it). **No match is supplied**: the verdict
+derives every comparison itself, in this order, and the first that fails names the reason —
+
+```text
+OBSERVED_CONNECTION                 CONNECTED -> FAILED, whatever the evidence
+NO_ATTEMPT · DESTINATION_UNBOUND    no attempt, or a digest that recovers no compiled address
+NO_CORROBORATION                    no evidence supplied
+ANALYSIS_NOT_SUCCEEDED              status != succeeded
+SOURCE_MISMATCH                     the path's source is not the interface the release named
+DESTINATION_MISMATCH                the path's destination is not the recovered address, TCP, 443
+ANALYSIS_OUTSIDE_TASK_WINDOW        start_date outside [launched_at, recorded_at] -- a later analysis
+                                    models a configuration the task never had
+PATH_FOUND_CONTRADICTS_OBSERVATION  the model found a path while the wire did not: contradictory
+UNSUPPORTED_EXPLANATION             no explanation carries an admitted code on the component kind it
+                                    attributes to (ENI_SG_RULES_MISMATCH, SG_HAS_NO_RULES -> security
+                                    group; SUBNET_ACL_RESTRICTION -> network ACL; NO_ROUTE_TO_DESTINATION
+                                    -> route table; every other documented code -- NO_PATH,
+                                    NO_POSSIBLE_DESTINATION, UNKNOWN_*, VPC_BLOCK_PUBLIC_ACCESS_ENABLED,
+                                    the load-balancer, gateway, peering and transit codes -- attributes
+                                    nothing to the four admitted components)
+COMPONENT_OUTSIDE_PLACEMENT         the admitted explanations name a security group that is not one
+                                    of the task's compiled groups, or a route table / NACL / subnet
+                                    not placed by the task's subnet
+CORROBORATED                        -> VERIFIED, with the components the evidence named
+```
+
+Every case but the last is `INCONCLUSIVE`. **Configuration-model evidence stays distinct from the
+packet observation**: the receipt block is what the wire returned once; the evidence document is what
+the model predicts; the verdict record carries both, and `analysis_bound` says whether the analysis
+was ever tied to this task at all.
 
 **Why this kind, and its limits, stated.** Reachability Analyzer evaluates the account's **network
 configuration** — route tables, security groups, NACLs, endpoints — and reports whether a path exists
@@ -143,7 +183,10 @@ release names before it is released); and it needs permissions **no declared pri
 `ec2:CreateNetworkInsightsPath`, `ec2:StartNetworkInsightsAnalysis`, `ec2:DescribeNetworkInsights*`
 and `ec2:DeleteNetworkInsights*`. **That IAM delta is not granted by this ADR** and is recorded as a
 remaining owner input; until it is declared and applied, every R-2 non-connection stays
-`INCONCLUSIVE`.
+`INCONCLUSIVE`. The launch tool's `--isolation-verdict` mode derives and records the verdict from the
+verified receipt, the launch record (which carries the interface and subnet the release named and
+the instants the launch was made and recorded) and the owner's transcription; it collects no
+analysis, and **`VERIFIED` is unreachable without one**.
 
 **VPC Flow Logs are not admitted as corroboration**, and the reason is recorded. A `REJECT` record
 attributes a drop to "security groups or network ACLs" collectively (the `reject-reason` field is
@@ -211,16 +254,69 @@ composing `human_bootstrap` and `launch_authorized_run` and adding nothing to th
 launched, production or verification, with actor, kind, outcome, `evidence` (`EXIT_CODE_ONLY` |
 `RECEIPT_VERIFIED`), the instants and — acquisition rows — the slice and plan digest. The
 **launch-inputs record** (`kalpamani-launch-inputs/v1`): cluster, execution role, binding key, platform
-version, and per actor the task role, subnet, security groups and the registered production and
-verification targets (revision ARN, image digest, configuration digest, code commit) — values the
-owner transcribes from Terraform outputs and the generation records, never typed into a command. The
+version, the R-3 verification digest (or none at stage a), and per actor the task role, subnet,
+security groups and the registered production and verification targets — revision ARN, image digest,
+configuration digest, code commit, the generation-record digest, and the **task-definition evidence**
+(family, revision, roles, cpu, memory, network mode, platform, `user`, read-only root, `/work` tmpfs,
+command, image digest) the owner transcribes from the post-apply verification — values transcribed
+from Terraform outputs and the generation records, never typed into a command. **The task-definition
+evidence is owner-supplied and validated offline**: the launcher permission sets hold no
+`ecs:DescribeTaskDefinition`, so the tool cannot read a revision back; that a transcription is
+faithful is not something the tool establishes, and the permission is recorded as a dependency, not
+added. The **launch specification** (`kalpamani-launch-specification/v1`): the canonical, reviewable
+statement of one launch that preparation writes and an authorization binds (below). The
 **authorization record** (`kalpamani-launch-authorization/v1`): the owner's written authorization for
-one launch of one identity of one kind, valid for at most 24 hours; a flag is never a substitute. The
-**launch record** (`kalpamani-launch-record/v1`): what the tool holds about one launch it made — the
-task ARN, the revision, the image and configuration digests, the commit, the identity and the input
-digest — exactly a `ReceiptExpectation`, owner-private, never exported. The **evidence document**
-(`kalpamani-launch-evidence/v1`): outcome, counts, incident, cleanup failures, exit codes — tokens and
-integers, no ARN, no identifier.
+one launch of one identity of one kind **of one specification digest**, valid for at most 24 hours;
+a flag is never a substitute. The **reservation** (`kalpamani-launch-reservation/v1`): the durable
+consumption of one identity for one specification, created before any external mutation and never
+deleted. The **launch record** (`kalpamani-launch-record/v1`): what the tool holds about one launch it
+made — the task ARN, the revision, the image and configuration digests, the commit, the identity, the
+input digest, the instants the launch was made and recorded, and the network interface and subnet
+the release named — exactly a `ReceiptExpectation` plus the R-2 binding, owner-private, never
+exported. The **evidence document** (`kalpamani-launch-evidence/v1`): outcome, counts, incident,
+cleanup failures, exit codes — tokens and integers, no ARN, no identifier. The **isolation verdict**
+(`kalpamani-isolation-verdict/v1`): the probe block, the derived verdict, its reason and components.
+
+**The authorization binds the whole launch, through the specification.** Preparation (no flag)
+builds the specification from the admitted records — actor, kind, identity, entry; the workload
+(the acquisition slice and its `plan_digest_for`, or the selected build runs with the ledger evidence
+each carried); the registered target (revision, image, configuration, commit, generation-record
+reference, task-definition evidence); the placement (cluster, subnet, security groups, public-IP
+setting, roles, platform version, binding key); and the gate evidence (the R-3 digest, applicable to
+a production launch and not to a verification launch, and the generation-record reference) — writes
+it beside the ledger for review, and prints its SHA-256. The owner's authorization names that digest.
+Execution rebuilds the specification from the same records and refuses any authorization naming
+another digest (`AUTHORIZATION_MISMATCH`) **before any client exists**, and revalidates the
+authorization's validity window **immediately before the first external mutation**. **The digest is
+neither circular nor unstable**: it is over what is authorized and excludes the input's issue and
+expiry instants and the ledger's spent-identity set, so a ledger that grows between preparation and
+execution changes the spent block and nothing the owner authorized, while a changed slice, a changed
+run selection or a changed run's own ledger evidence, a changed registered target or a changed
+placement changes the workload and refuses. A gate-evidence digest in the specification is a
+**reference to owner-held evidence**, never proof that the approval it refers to occurred.
+
+**The identity is consumed durably before any external mutation.** Under an exclusive ledger lock,
+the ledger is re-read, the identity re-checked against it and against the reservations directory,
+and a reservation naming the specification digest is created with `O_CREAT | O_EXCL` — before the
+bootstrap, before any client. A reservation that already exists refuses; one that cannot be
+persisted refuses; **a reservation is never deleted and never expires**, through cleanup, failures,
+ambiguous outcomes and interruptions. Every ledger write — the provisional row, its completion,
+recovery — happens under the same lock and replaces the ledger atomically (a fresh temporary file,
+synced, `os.replace`d) after re-checking that the ledger's bytes are the ones read, so a
+read-modify-write cannot lose an update; a lock another process left is refused and never removed by
+the tool. Evidence and launch records are created under exclusive names carrying the instant and
+eight random hex digits, so two records in one second cannot collide or overwrite. **An interrupted
+attempt** — a crash after the reservation, after `RunTask`, or a failed record or ledger write — leaves
+the reservation with no ledger row; every later launch of any identity refuses
+(`refused_recovery_pending`) until the owner runs `--recover`, which writes a `HALTED`,
+`EXIT_CODE_ONLY` row for the reserved identity, launches nothing, and keeps the reservation. What a
+task that started before the interruption did, the tool does not know and does not guess; the owner
+reviews ECS by hand. **This owner-side reservation is distinct from the acquisition task's accepted
+S3 run reservation** (ADR-0038): the store's reservation guards the identity against the provider; the
+workstation's guards it against the owner's own tool. A verification task still reserves nothing in
+the store. Durability is the platform's: NTFS honours exclusive creation and atomic replacement on
+one volume; a power loss before `fsync` returns can lose a write, and Windows syncs no directory
+entry separately — stated as limits, not designed away.
 
 **Input materialization uses the accepted digest functions and the task's own contract.** Acquisition
 input v2: `plan_digest_for` over the slice, `spent_identities_block` over the ledger's **whole**
@@ -237,12 +333,21 @@ the ledger is consumed for both kinds, whatever its outcome**, and the tool refu
 An identity is consumed by its **authorization**: a launch attempt that never started a task still
 writes a `REFUSED` row.
 
-**Configuration equivalence is checked before a verification launch.** The verification file must
-parse, name the production file's code commit, be the production entry's own verification entry, and
-carry the acquisition configuration's origin set (the build verification file is compared against the
-acquisition file's set, because the production build file has none); and it must be the file the
-launch-inputs record registered (its digest and commit). Any other verdict — `CODE_DIFFERS`,
-`ORIGIN_DIFFERS`, `ENTRY_MISMATCH`, `UNREADABLE` — refuses the launch.
+**Configuration equivalence binds every file to its registered counterpart.** Before a verification
+launch, the production file is bound to the actor's registered **production** target (digest, commit,
+entry, family), the verification file to its registered **verification** target, and — for a build
+pair — the acquisition file to the registered acquisition production target, because the build
+verification image carries the acquisition origin set and the production build file carries none.
+Then the two registered task-definition revisions are compared field by field: task and execution
+roles, cpu, memory, network mode, platform, `user`, read-only root and the `/work` tmpfs **must
+agree**; family, revision, command and image digest **differ by design**; anything else refuses. Then
+the configurations: the same code commit, the verification origin set equal to the acquisition set.
+The verdicts are closed — `EQUIVALENT`, `UNREADABLE`, `TARGET_MISMATCH`, `ENTRY_MISMATCH`,
+`CODE_DIFFERS`, `ORIGIN_DIFFERS`, `TASK_DEFINITION_DIFFERS`, `EVIDENCE_MISSING` — and every one but
+the first refuses the launch. **`EQUIVALENT` is a statement about configuration, never runtime
+proof**: a verification task exercises none of the production image's bytes, none of its processing
+path, and none of the fields only a production entry reads (the secret name, the build
+configuration); those are exercised by nothing but a production run.
 
 **The authorized branch.** `human_bootstrap` under the actor's human profile and again under its
 launcher profile (`launcher_profile`, a constant this ADR adds to the actor vocabulary — routing
@@ -261,7 +366,8 @@ for a task that never started; `HALTED` for a halt or an ambiguous state. **A `C
 from an exit code is not buildable** until `--complete-row` verifies the task's receipt — the line the
 owner reads from the log stream by hand until the deferred collector exists (ADR-0044 §5) — against the
 launch record's expectation and replaces the row with the receipt's disposition; a receipt that
-establishes none leaves the row provisional, and a row is never completed twice.
+establishes none leaves the row provisional, and a row is never completed twice. Completion runs under
+the ledger lock and through the same atomic replacement as every other ledger write.
 
 **Containment.** The ledger, the launch records and the evidence are written only beneath the private
 root (`%LOCALAPPDATA%\KalpaMani\private`, ADR-0023); a path outside it is refused before any record is
@@ -293,9 +399,10 @@ requires both families rebuilt and R-1/R-2 re-run before the production revision
 | ADR-0036 §2.9 (task definitions; the launcher's `RunTask` resource) | one verification family per actor; the launcher's resource set is `concat([production revision], verification revision list)` |
 | ADR-0036 §3 (R-1 / R-2) | run with the verification image; R-1's expected exit is 18; R-2 reads the probe under §3's verdict rule; corroboration is Reachability Analyzer only |
 | ADR-0036 §2.6 (the owner ledger) | rows carry `kind` and `evidence`; verification identities are consumed rows; the `verify-` prefix is reserved |
-| ADR-0036 §2.12 (the launch tool) | implemented as §6; the ledger row is provisional until receipt-verified |
+| ADR-0036 §2.12 (the launch tool) | implemented as §6; the authorization binds a launch specification; the identity is reserved durably before any external mutation; ledger writes are locked and atomic; the ledger row is provisional until receipt-verified; interrupted work is recovered, never relaunched |
 | ADR-0044 §2 (compiled configuration) | the verification field set (origin addresses only); `is_known_family` |
-| ADR-0044 §4 (the receipt) | `kalpamani-task-receipt/v2`: `probe` (build verify, `VERIFIED_BOOTSTRAP` only) and `schema_observation` (build, `REFUSED_NORMALIZATION` only); `VERIFIED` added to the ledger outcomes |
+| ADR-0044 §4 (the receipt) | `kalpamani-task-receipt/v2`: `probe` (build verify, `VERIFIED_BOOTSTRAP` only; resolution, result, attempts and the keyed `destination_digest`) and `schema_observation` (build, `REFUSED_NORMALIZATION` only); `VERIFIED` added to the ledger outcomes |
+| ADR-0036 §3 (R-2 evidence) | the corroboration is one transcribed Reachability Analyzer analysis, bound by derivation; the launch tool records the verdict; task-definition read-back (`ecs:DescribeTaskDefinition`) is a recorded dependency of the launcher sets, not granted |
 | ADR-0040 / the build's output rule | an explicitly empty accepted set is admitted, refuses at normalization, and writes nothing |
 
 No accepted document is edited; each is amended by this text alone.
@@ -310,3 +417,35 @@ IAM change (the analyzer permissions are a recorded delta, not a grant); **no** 
 (G-14 stays deferred). The verification entries, the launch tool and the Terraform declaration have
 never run against AWS; every result recorded beside them is a synthetic one. **G2 stays OPEN, CONTROL
 stays DEFERRED, Phase 3 stays NOT COMPLETE, live trading stays HARD-DISABLED.**
+
+---
+
+## 10. Corrections after the independent review of PR #104
+
+Four findings against the first revision of this proposal were each reproduced through the real
+modules on fakes before they were corrected, and the corrections are recorded here rather than
+written as though the first revision had said them.
+
+1. **Durable identity consumption came after external mutation.** The tool launched, then wrote the
+   ledger with a direct write; an interruption after `RunTask` left the identity unrecorded and a
+   second attempt launched it again (observed: `RunTask` count 1 → 2); two launches in one second
+   overwrote one evidence file. Corrected by §6's reservation, lock, atomic replacement, exclusive
+   record names and recovery.
+2. **The authorization bound only actor, kind, identity and validity.** A changed slice launched under
+   an unchanged authorization (observed: exit 0 with a different window). Corrected by the launch
+   specification and its digest in the authorization, checked before any client and revalidated for
+   freshness before mutation.
+3. **Only the verification file was bound to a registered target.** An unrelated but valid production
+   file, with a matching verification file, launched (observed: exit 0 with a production file whose
+   digest was not the registered one); no task-definition evidence was compared. Corrected by binding
+   every file to its own registered target and comparing the transcribed task-definition evidence
+   field by field, with the intentional differences named.
+4. **The verdict accepted supplied match booleans and no analysis identity.** `VERIFIED` was reachable
+   from two `True` values (observed), the receipt did not identify the selected destination, and the
+   tool never invoked the verdict. Corrected by the keyed destination digest in the receipt, the closed
+   evidence document, the derived comparisons and reasons, the launch record's interface, subnet and
+   instants, and the `--isolation-verdict` mode.
+
+Each correction narrows a proposed contract; none weakens one. The receipt's probe block, the
+authorization record and the launch record changed shape as stated in §8; the examples, parsers and
+guards changed with them.

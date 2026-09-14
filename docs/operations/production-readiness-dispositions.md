@@ -1,4 +1,4 @@
-# Production readiness — finding dispositions (PR #103 correction cycles, 2026-09-14)
+# Production readiness — finding dispositions (PR #103 correction cycles, 2026-09-14; PR #104 correction cycle, F-4 … F-7)
 
 **Revision 3** corrects three further findings inside F-1 … F-3 below, each marked *revision 3*: the network probe's
 observed result is not an isolation attribution (F-3); a changed bucket policy cannot have fresh R-3 evidence before it
@@ -139,6 +139,68 @@ What corroboration is sufficient, and its limits (a same-instant comparison cove
 address; a flow-log record names a rule, not a reason), is left to the proposed verification ADR; no
 procedure is accepted and no probe permission is broadened here (G-15). §3.3, the S9 matrix row and §8 are
 corrected accordingly.
+
+## F-4 — durable identity consumption before external mutation (PR #104 review)
+
+**Reproduced** at the reviewed head `73ec563f…`, through `scripts/production_launch.py` on fakes: an
+interruption raised at the release's `verified_at` clock read (after `RunTask`, before any record)
+left the ledger empty and the records directory absent; the next invocation of the same identity
+launched again (`RunTask` count 1 → 2). Two distinct identities recorded in the same second produced
+one evidence file. The ledger was written with `Path.write_bytes`.
+
+**Corrected** by `launch_store.py` and the tool's reordering: reservation → bootstrap → clients →
+launch → records → ledger, with the reservation exclusive, durable and permanent; the lock and atomic
+replacement around every ledger write; exclusive record names; `--recover`; refusal of every launch
+while a reservation has no ledger row. The owner-side reservation is distinct from ADR-0038's S3 run
+reservation, and a verification task still reserves nothing in the store.
+
+**Limits stated**: durability is the platform's `fsync` and `os.replace`; Windows syncs no directory
+entry; a stale lock is the owner's to remove; what a task started before an interruption did is not
+known to the tool and is recorded as `HALTED` for owner review.
+
+## F-5 — the authorization binds the workload and target (PR #104 review)
+
+**Reproduced**: a slice with a different `actions` window launched under an authorization written for
+the original (exit 0); the authorization record carried actor, kind, identity and the two instants.
+
+**Corrected** by the launch specification and its digest in the authorization (ADR-0045 §6): built by
+preparation, written for review, rebuilt at execution, compared before any client, freshness
+revalidated before the first mutation. Timestamps and the ledger's spent set are outside the digest by
+design; every bound category is covered by a test that changes it under an otherwise identical
+authorization. Gate-evidence references (the R-3 digest, the generation-record digest) are owner-held
+references whose grammar and applicability the tool checks; **that an approval occurred is not
+something a digest proves**, and the tool does not claim it.
+
+## F-6 — equivalence binds the actual registered counterparts (PR #104 review)
+
+**Reproduced**: with only the verification target's digest registered, an unrelated but valid
+production file (a different origin set) and a matching verification file launched (exit 0); the
+launch-inputs actor block carried no task-definition evidence to compare.
+
+**Corrected**: every file is bound to its own registered target (production, verification, and the
+acquisition file behind a build pair); the launch-inputs record carries owner-transcribed
+task-definition evidence per target, validated to its grammar and to the target (family, revision,
+image, command) and compared between the two families with the intentional differences named;
+`EQUIVALENT` is configuration equivalence and is stated as never being runtime proof — the production
+image's bytes, its processing and the fields only a production entry reads are exercised by a
+production run alone. **Dependency recorded, not added**: a live `DescribeTaskDefinition` read-back
+needs `ecs:DescribeTaskDefinition`, which the launcher permission sets do not hold; until it is
+declared and applied, the evidence is the owner's transcription.
+
+## F-7 — R-2 evidence binding and verdict integration (PR #104 review)
+
+**Reproduced**: `isolation_verdict` returned `VERIFIED` for a corroboration built from two supplied
+`True` booleans and no analysis identity, status or time; the probe observation carried resolution,
+result and attempts only; `scripts/production_launch.py` contained no verdict path.
+
+**Corrected**: the receipt binds the selected destination under a keyed digest, recovered by the tool
+against the compiled set and never inferred; a closed transcription of one Reachability Analyzer
+analysis (fields verified against the public `NetworkInsightsAnalysis`, `NetworkInsightsPath` and
+`Explanation` references and the published explanation-code list); every comparison derived from the
+evidence, the launch record and the compiled placement, with a closed reason per outcome;
+`CONNECTED` always fails; configuration-model evidence kept distinct from the packet observation;
+`--isolation-verdict` records the verdict beside the launch record. `VERIFIED` is unreachable without
+a transcribed analysis, and no analysis is made and no permission granted by this cycle.
 
 ## Validation performed for this cycle
 

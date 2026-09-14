@@ -135,13 +135,30 @@ def test_the_one_admitted_corroboration_and_its_limits_are_stated() -> None:
     }
     for member in probe.BlockingComponent:
         assert member.value in ADR_TEXT
+    # The corroboration is a closed transcription of one analysis, bound by derivation: the
+    # document names no supplied match, and the verdict's reasons are the document's.
+    assert not hasattr(probe, "IsolationCorroboration")
     for field in (
-        "source_interface_matches",
-        "destination_matches",
+        "analysis_id",
+        "path_id",
+        "status",
         "network_path_found",
-        "blocking_components",
+        "start_date",
+        "source_interface_id",
+        "destination_ip",
+        "destination_port",
+        "protocol",
+        "explanations",
     ):
-        assert field in probe.IsolationCorroboration.__dataclass_fields__ and field in ADR_TEXT
+        assert field in probe.ReachabilityEvidence.__dataclass_fields__ and field in ADR_TEXT
+    assert probe.REACHABILITY_EVIDENCE_CONTRACT_ID in ADR_TEXT
+    for reason in probe.VerdictReason:
+        assert reason.value in ADR_TEXT, reason
+    for code in probe.ADMITTED_EXPLANATIONS:
+        assert code in ADR_TEXT, code
+    assert "destination_binding_digest" in ADR_TEXT and "probe_destination" in ADR_TEXT
+    assert "never infers the task's DNS result" in ADR_PLAIN
+    assert "--isolation-verdict" in ADR_TEXT and "VERIFIED is unreachable without one" in ADR_PLAIN
     assert "sends **no packets**" in ADR_TEXT and "charged per analysis" in ADR_PLAIN
     for permission in (
         "ec2:CreateNetworkInsightsPath",
@@ -190,6 +207,22 @@ def test_the_launch_records_and_identity_rule_match_the_document() -> None:
     ):
         assert contract in ADR_TEXT
     assert launch_records.VERIFICATION_IDENTITY_PREFIX == "verify-" and "`verify-`" in ADR_TEXT
+    # The correction cycle's contracts (ADR s.10): the specification, the reservation, the
+    # task-definition evidence and the bound equivalence.
+    from kalpamani.data.production.sharadar import launch_store
+
+    assert launch_records.SPECIFICATION_CONTRACT_ID in ADR_TEXT
+    assert launch_store.RESERVATION_CONTRACT_ID in ADR_TEXT
+    assert "kalpamani-isolation-verdict/v1" in ADR_TEXT
+    assert "specification_digest" in launch_records._AUTHORIZATION_FIELDS
+    assert "O_CREAT | O_EXCL" in ADR_TEXT and "os.replace" in ADR_TEXT
+    assert "never deleted and never expires" in ADR_PLAIN
+    assert "--recover" in ADR_TEXT and "refused_recovery_pending" in ADR_TEXT
+    assert "ecs:DescribeTaskDefinition" in ADR_TEXT and "not added" in ADR_PLAIN
+    for name in launch_records.TASK_DEFINITION_SHARED_FIELDS:
+        assert name in launch_records.TaskDefinitionEvidence.__dataclass_fields__
+    assert "differ by design" in ADR_PLAIN and "never runtime proof" in ADR_PLAIN
+    assert "## 10. Corrections after the independent review of PR #104" in ADR_TEXT
     assert launch_records.MAX_AUTHORIZATION_VALIDITY.total_seconds() == 24 * 3600
     assert "at most 24 hours" in ADR_PLAIN
     assert {m.value for m in launch_records.LedgerEvidence} == {
@@ -198,10 +231,13 @@ def test_the_launch_records_and_identity_rule_match_the_document() -> None:
     }
     assert {m.value for m in launch_records.EquivalenceVerdict} == {
         "EQUIVALENT",
+        "UNREADABLE",
+        "TARGET_MISMATCH",
+        "ENTRY_MISMATCH",
         "CODE_DIFFERS",
         "ORIGIN_DIFFERS",
-        "ENTRY_MISMATCH",
-        "UNREADABLE",
+        "TASK_DEFINITION_DIFFERS",
+        "EVIDENCE_MISSING",
     }
     for verdict in launch_records.EquivalenceVerdict:
         if verdict is not launch_records.EquivalenceVerdict.EQUIVALENT:

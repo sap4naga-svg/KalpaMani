@@ -21,12 +21,16 @@ these stand in for are listed in [`../../production-owner-inputs.md`](../../prod
 | `acquisition-input.v2.synthetic.json` | `kalpamani-production-acquisition-input/v2` — the SSM `SecureString` the acquisition human actor materializes per run (ADR-0036 §2.6, ADR-0044 §3) | the acquisition human principal, per authorized run (no tool exists yet — see the readiness document) | the acquisition task |
 | `build-input.v1.synthetic.json` | `kalpamani-research-build-input/v1` — the build human actor's per-build input carrying the owner ledger rows | the research-build human principal, per authorized build (no tool exists yet) | the build task |
 | `owner-ledger.synthetic.json` | `kalpamani-owner-ledger/v1` — the owner ledger the launch tool of **proposed ADR-0045** cuts every input from and appends every launch to: one buildable row (`RECEIPT_VERIFIED`, `COMPLETED`), one verification row (`verify-` identity, `VERIFIED`), one provisional `COMPLETED` row (`EXIT_CODE_ONLY`, not buildable until its receipt is verified) and one halted build row. Every identity in it is consumed for both kinds | the launch tool, under the owner's private root; never typed | `scripts/production_launch.py` |
-| `launch-authorization.synthetic.json` | `kalpamani-launch-authorization/v1` — the owner's written authorization for exactly one launch of one identity of one kind, valid at most 24 h, required beside the tool's flag | the owner, per launch, never reused | `scripts/production_launch.py` |
+| `launch-authorization.synthetic.json` | `kalpamani-launch-authorization/v1` — the owner's written authorization for exactly one launch of one identity of one kind **of one launch specification** (its `specification_digest` is the value `scripts/production_launch.py` prints when run without its flag; the example names the digest the fixtures' synthetic records produce), valid at most 24 h, required beside the tool's flag | the owner, per launch, never reused | `scripts/production_launch.py` |
 
 The runtime-binding parameters (`kalpamani-production-*-runtime-binding/v1`), the placement
-release (`kalpamani-placement-release/v2`), the launch-inputs record (`kalpamani-launch-inputs/v1`)
-and the launch record (`kalpamani-launch-record/v1`) are deliberately **not** exemplified here: each
-carries an account-bearing ARN or account id, and the bindings are materialized by Terraform, the
-release and the launch record by the launch tool, the launch-inputs record transcribed from Terraform
-outputs, never typed by the owner. Their field sets are stated in the readiness document,
+release (`kalpamani-placement-release/v2`), the launch-inputs record (`kalpamani-launch-inputs/v1`),
+the launch specification (`kalpamani-launch-specification/v1`), the launch record
+(`kalpamani-launch-record/v1`) and the reservation (`kalpamani-launch-reservation/v1`) are deliberately
+**not** exemplified here: each carries an account-bearing ARN or account id or is written only by the
+tool, and the bindings are materialized by Terraform, the release, specification, record and reservation
+by the launch tool, the launch-inputs record transcribed from Terraform outputs, never typed by the
+owner. The Reachability Analyzer transcription (`kalpamani-reachability-evidence/v1`) is a closed
+document with no free-text field to carry a synthetic marker, so it is not exemplified either; its
+shape is `probe.parse_reachability_evidence` and the ADR-0045 §3 field list. Their field sets are stated in the readiness document,
 and the test suite builds and verifies synthetic instances of both from the fixtures on every run.

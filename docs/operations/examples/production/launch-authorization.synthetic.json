@@ -5,5 +5,6 @@
   "identity": "synthetic-production-run-0003",
   "issued_at": "2026-09-12T13:00:00+00:00",
   "kind": "production",
-  "schema_version": 1
+  "schema_version": 1,
+  "specification_digest": "d5630fdbc8a936a8e5a79a3d71b36669368bdc2c4b891ba18e003066647fa3a9"
 }

@@ -190,24 +190,41 @@ def test_the_owner_ledger_example_is_admitted_and_shows_every_row_kind() -> None
             lr.admit_identity(ledger, row.identity, kind=row.kind)
 
 
-def test_the_authorization_example_names_one_launch_and_expires() -> None:
+def test_the_authorization_example_names_one_launch_specification_and_expires() -> None:
+    from fixtures.production_launch import specification_digest_for
+
     raw = (EXAMPLES / "launch-authorization.synthetic.json").read_bytes()
     document = json.loads(raw)
     identity = document["identity"]
     assert identity.startswith("synthetic-")
+    # The digest names the specification the fixtures' synthetic records produce for this
+    # launch -- the value preparation prints and the owner copies into the authorization.
+    digest = specification_digest_for(
+        actor=ProductionActor.ACQUISITION, kind="production", identity=identity
+    )
+    assert document["specification_digest"] == digest
     record = lr.parse_authorization(
         raw,
         actor=ProductionActor.ACQUISITION,
         kind=lr.LaunchKind.PRODUCTION,
         identity=identity,
+        specification_digest=digest,
         now=NOW,
     )
     assert record.expires_at - record.issued_at <= lr.MAX_AUTHORIZATION_VALIDITY
-    with pytest.raises(lr.LaunchRecordError):
-        lr.parse_authorization(
-            raw,
-            actor=ProductionActor.ACQUISITION,
-            kind=lr.LaunchKind.VERIFICATION,
-            identity=identity,
-            now=NOW,
-        )
+    for wrong in (
+        {"kind": lr.LaunchKind.VERIFICATION},
+        {"specification_digest": "cd" * 32},
+    ):
+        with pytest.raises(lr.LaunchRecordError):
+            lr.parse_authorization(
+                raw,
+                **{
+                    "actor": ProductionActor.ACQUISITION,
+                    "kind": lr.LaunchKind.PRODUCTION,
+                    "identity": identity,
+                    "specification_digest": digest,
+                    "now": NOW,
+                    **wrong,
+                },
+            )
