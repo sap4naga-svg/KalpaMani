@@ -2338,11 +2338,13 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
     configuration exists and the credential environment is a task's; and the
     owner-side launch tool proposed with ADR-0045 is the sixth, constructing its
     four workstation clients only inside the authorized branch, after the flag,
-    every record and the authorization are admitted. Every one is named here, so a
-    **seventh** arriving anywhere under ``src/``, ``scripts/`` or ``tests/`` still
-    fails.
+    every record and the authorization are admitted; and the R-3 verification tool
+    proposed with ADR-0046 is the seventh, constructing one S3 client under the
+    foundation control profile only inside its authorized branch, after the identity
+    gate and the environment binding. Every one is named here, so an **eighth**
+    arriving anywhere under ``src/``, ``scripts/`` or ``tests/`` still fails.
 
-    **All six are in ``scripts/``, and that is the property that matters.** No
+    **All seven are in ``scripts/``, and that is the property that matters.** No
     module under ``src/`` constructs a client, which is checked separately and is
     what keeps the data platform free of ambient credential discovery.
     """
@@ -2356,6 +2358,7 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         SCRIPTS / "sharadar_qualification_assessment.py",
         SCRIPTS / "production_task_entrypoint.py",
         SCRIPTS / "production_launch.py",
+        SCRIPTS / "production_r3_verification.py",
         Path(__file__).resolve(),
         SCRIPTS / "phase3_docs_audit.py",
         # Asserts the absence of a client in those entry points, so it necessarily
