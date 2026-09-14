@@ -1,0 +1,30 @@
+{
+  "build_identity": "synthetic-production-build-0001",
+  "contract_id": "kalpamani-research-build-input/v1",
+  "expires_at": "2026-09-13T13:00:00+00:00",
+  "issued_at": "2026-09-12T13:00:00+00:00",
+  "ledger_digest": "229162641ee3369f455c98cf718689f5bcc8639809b5509e494a9a2a09f4111d",
+  "runs": [
+    {
+      "completed_at": "2026-09-10T15:00:00+00:00",
+      "launched_at": "2026-09-10T14:00:00+00:00",
+      "outcome": "COMPLETED",
+      "plan_digest": "8e57cc18ac51ef70adec3c33c3c9d767046293f888aeefba6d5f755fe7860f08",
+      "run_identity": "synthetic-production-run-0001",
+      "slice": {
+        "acquisition_mode": "BACKFILL",
+        "datasets": [
+          "actions",
+          "tickers"
+        ],
+        "max_response_bytes": 4194304,
+        "request_count": 6,
+        "windows": {
+          "actions": "2025-01-01/2025-12-31",
+          "tickers": "SNAPSHOT"
+        }
+      }
+    }
+  ],
+  "schema_version": 1
+}

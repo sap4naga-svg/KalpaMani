@@ -1,0 +1,25 @@
+{
+  "contract_id": "kalpamani-production-acquisition-input/v2",
+  "expires_at": "2026-09-13T13:00:00+00:00",
+  "issued_at": "2026-09-12T13:00:00+00:00",
+  "plan_digest": "8e57cc18ac51ef70adec3c33c3c9d767046293f888aeefba6d5f755fe7860f08",
+  "run_identity": "synthetic-production-run-0001",
+  "schema_version": 2,
+  "slice": {
+    "acquisition_mode": "BACKFILL",
+    "datasets": [
+      "actions",
+      "tickers"
+    ],
+    "max_response_bytes": 4194304,
+    "request_count": 6,
+    "windows": {
+      "actions": "2025-01-01/2025-12-31",
+      "tickers": "SNAPSHOT"
+    }
+  },
+  "spent_identities": {
+    "spent": [],
+    "spent_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  }
+}
