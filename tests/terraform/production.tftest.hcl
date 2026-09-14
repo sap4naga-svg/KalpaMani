@@ -143,6 +143,112 @@ run "stage_a_with_matching_accounts_declares_without_assignments" {
 }
 
 # ---------------------------------------------------------------------------
+# Proposed ADR-0045: verification families exist only with their own digest
+# ---------------------------------------------------------------------------
+
+run "stage_a_without_verification_digests_declares_no_verification_family" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_image_digests = {
+      acquisition = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.production_acquire_verify) == 0 && length(aws_ecs_task_definition.production_build_verify) == 0
+    error_message = "without verification digests no verification family is declared"
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.production_acquire) == 1 && length(aws_ecs_task_definition.production_build) == 1
+    error_message = "the production families are declared as before"
+  }
+}
+
+run "stage_a_with_verification_digests_declares_both_verification_families" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_image_digests = {
+      acquisition        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      acquisition_verify = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      build_verify       = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.production_acquire_verify) == 1 && length(aws_ecs_task_definition.production_build_verify) == 1
+    error_message = "with both verification digests both verification families are declared"
+  }
+
+  # The task-role ARN is provider-computed and unknown at plan; the role identity is
+  # held by the structural guard (tests/unit/test_production_infrastructure.py) as the
+  # declared expression. What plan can evaluate: each verification family is its own
+  # actor's verification family, on the same Fargate shape as its production family.
+  assert {
+    condition     = aws_ecs_task_definition.production_acquire_verify[0].family == "kalpamani-production-acquire-verify" && aws_ecs_task_definition.production_build_verify[0].family == "kalpamani-research-build-verify"
+    error_message = "the verification families carry their own closed family names"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.production_acquire_verify[0].cpu == aws_ecs_task_definition.production_acquire[0].cpu && aws_ecs_task_definition.production_acquire_verify[0].memory == aws_ecs_task_definition.production_acquire[0].memory && aws_ecs_task_definition.production_build_verify[0].network_mode == aws_ecs_task_definition.production_build[0].network_mode
+    error_message = "a verification family has the same task shape as its production family"
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_account_assignment.production_acquisition) == 0 && length(aws_ssoadmin_account_assignment.production_acquire_launcher) == 0
+    error_message = "verification families add no assignment at stage a"
+  }
+}
+
+run "an_unknown_image_digest_key_is_refused_by_the_variable" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_image_digests = {
+      acquisition = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      other       = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    }
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+  }
+
+  expect_failures = [var.production_image_digests]
+}
+
+# ---------------------------------------------------------------------------
 # Finding 5: Identity Center outside us-east-1 -> the REGIONAL role-ARN path
 # ---------------------------------------------------------------------------
 

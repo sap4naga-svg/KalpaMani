@@ -303,6 +303,10 @@ def _rule_stage_gating(model: Model) -> list[str]:
             gated = count in (
                 "local.production_count_a",
                 "local.production_secrets_endpoint_count",
+                # Proposed ADR-0045: a verification family exists only at stage a or b
+                # AND only with its own digest; both counts are conjunctions with stage a.
+                "local.production_acquire_verify_count",
+                "local.production_build_verify_count",
             ) or (
                 "local.production_stage_a" in for_each
                 or "local.production_interface_endpoints" in for_each
@@ -765,13 +769,29 @@ def _rule_launch(model: Model) -> list[str]:
             found.append(f"{td} must run as its own actor's task role")
         if definition.attributes.get("execution_role_arn", "") != "aws_iam_role.task_execution.arn":
             found.append(f"{td} must use the foundation execution role")
+        # The verification family (proposed ADR-0045): the same task and execution roles.
+        verify = model.resources.get(("aws_ecs_task_definition", f"{td}_verify"))
+        if verify is None:
+            found.append(f"task definition {td}_verify is missing")
+        else:
+            if verify.attributes.get("task_role_arn", "") != f"aws_iam_role.{role}[0].arn":
+                found.append(f"{td}_verify must run as its own actor's task role")
+            if verify.attributes.get("execution_role_arn", "") != "aws_iam_role.task_execution.arn":
+                found.append(f"{td}_verify must use the foundation execution role")
         launcher = model.documents.get(f"{td}_launcher", ())
         run = [s for s in _allows(launcher) if "ecs:RunTask" in s.actions]
-        if (
-            len(run) != 1
-            or run[0].raw_resources.strip() != f"[aws_ecs_task_definition.{td}[0].arn]"
-        ):
-            found.append(f"{actor} launcher must run exactly aws_ecs_task_definition.{td}[0].arn")
+        # Exactly two exact ARNs at most: this actor's production revision, and this
+        # actor's verification revision when it is declared. Never a wildcard, never
+        # a family ARN, never the other actor's.
+        expected_run = (
+            f"concat([aws_ecs_task_definition.{td}[0].arn],"
+            f"aws_ecs_task_definition.{td}_verify[*].arn,)"
+        )
+        if len(run) != 1 or re.sub(r"\s+", "", run[0].raw_resources) != expected_run:
+            found.append(
+                f"{actor} launcher must run exactly aws_ecs_task_definition.{td}[0].arn "
+                f"and aws_ecs_task_definition.{td}_verify[*].arn"
+            )
         elif not _has_condition(run[0], "ArnEquals", "ecs:cluster"):
             found.append(f"{actor} launcher RunTask lacks the ecs:cluster condition")
         passes = [s for s in _allows(launcher) if "iam:PassRole" in s.actions]
@@ -810,15 +830,25 @@ def _rule_task_definitions_text(sources: dict[str, str]) -> list[str]:
     for key in ("secrets", "environment", "portMappings", "mountPoints", "volumes"):
         if re.search(rf"^\s*{key}\s*=", text, re.MULTILINE):
             found.append(f"a task definition carries {key}")
-    if text.count("@${lookup(var.production_image_digests") != 2:
-        found.append("both images must be pinned by digest from production_image_digests")
+    # Two production containers and two verification containers (proposed ADR-0045),
+    # every one pinned by digest, read-only, with a fixed command.
+    if text.count("@${lookup(var.production_image_digests") != 4:
+        found.append("all four images must be pinned by digest from production_image_digests")
     if (
         "readonlyRootFilesystem = true" not in text
-        or text.count("readonlyRootFilesystem = true") != 2
+        or text.count("readonlyRootFilesystem = true") != 4
     ):
-        found.append("both containers must have a read-only root filesystem")
-    if text.count("command") != 2:
+        found.append("all four containers must have a read-only root filesystem")
+    if text.count("command") != 4:
         found.append("each container must fix its command")
+    for token in (
+        "kalpamani-production-acquire",
+        "kalpamani-research-build",
+        "kalpamani-production-acquire-verify",
+        "kalpamani-research-build-verify",
+    ):
+        if text.count(f'command   = ["{token}"]') != 1:
+            found.append(f"exactly one container fixes the command {token}")
     return found
 
 

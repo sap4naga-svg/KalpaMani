@@ -878,10 +878,16 @@ data "aws_iam_policy_document" "production_acquire_launcher" {
     for_each = local.production_stage_a ? [1] : []
 
     content {
-      sid       = "RunExactlyThisActorsRevisionInTheOneCluster"
-      effect    = "Allow"
-      actions   = ["ecs:RunTask"]
-      resources = [aws_ecs_task_definition.production_acquire[0].arn]
+      sid     = "RunExactlyThisActorsRevisionInTheOneCluster"
+      effect  = "Allow"
+      actions = ["ecs:RunTask"]
+      # Exactly this actor's production revision and, when declared, this actor's
+      # verification revision (proposed ADR-0045) -- two exact ARNs at most, never a
+      # family wildcard and never the other actor's.
+      resources = concat(
+        [aws_ecs_task_definition.production_acquire[0].arn],
+        aws_ecs_task_definition.production_acquire_verify[*].arn,
+      )
 
       condition {
         test     = "ArnEquals"
@@ -1052,10 +1058,16 @@ data "aws_iam_policy_document" "production_build_launcher" {
     for_each = local.production_stage_a ? [1] : []
 
     content {
-      sid       = "RunExactlyThisActorsRevisionInTheOneCluster"
-      effect    = "Allow"
-      actions   = ["ecs:RunTask"]
-      resources = [aws_ecs_task_definition.production_build[0].arn]
+      sid     = "RunExactlyThisActorsRevisionInTheOneCluster"
+      effect  = "Allow"
+      actions = ["ecs:RunTask"]
+      # Exactly this actor's production revision and, when declared, this actor's
+      # verification revision (proposed ADR-0045) -- two exact ARNs at most, never a
+      # family wildcard and never the other actor's.
+      resources = concat(
+        [aws_ecs_task_definition.production_build[0].arn],
+        aws_ecs_task_definition.production_build_verify[*].arn,
+      )
 
       condition {
         test     = "ArnEquals"
