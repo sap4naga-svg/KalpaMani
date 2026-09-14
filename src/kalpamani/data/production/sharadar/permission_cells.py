@@ -40,9 +40,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -205,6 +205,11 @@ TASK_PROBE_DEPENDENCY: Final = (
 DELETION_DEPENDENCY: Final = (
     "the deletion role has no execution path: no human may assume it and no deletion task "
     "definition exists (ADR-0007); its rehearsal is a separately authorized runbook step"
+)
+EXECUTE_COMMAND_DEPENDENCY: Final = (
+    "a running task of this actor to execute into: ExecuteCommand against a task that does "
+    "not exist is not a meaningful permission test, a task of ours runs only during an "
+    "authorized R-1 launch, and executing into it during that launch is a later decision"
 )
 
 
@@ -657,6 +662,7 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
             expectation=expectation,
             layer=layer,
             trace=trace,
+            blocked_on=EXECUTE_COMMAND_DEPENDENCY if layer is Layer.BLOCKED else None,
         )
         for short, launcher in (("ACQ", _AL), ("BLD", _BL))
         for name, operation, target, expectation, layer, trace in (
@@ -732,7 +738,7 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
                 Operation.ECS_EXECUTE_COMMAND,
                 TargetKind.OWN_TASK,
                 _DENY,
-                Layer.L3_RUNTIME,
+                Layer.BLOCKED,
                 "R-6 must be refused: ExecuteCommand",
             ),
         )
@@ -900,6 +906,20 @@ class PermissionTargets:
         """No value."""
         return "PermissionTargets(...)"
 
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": PERMISSION_TARGETS_CONTRACT_ID,
+            "foundation_task_role_arn": self.foundation_task_role_arn,
+            "qualification_secret_arn": self.qualification_secret_arn,
+            "control_bucket_name": self.control_bucket_name,
+        }
+
+    @property
+    def digest(self) -> str:
+        """The SHA-256 of the canonical document: what a statement binds the targets by."""
+        return sha256_hex(canonical_bytes(self.document()))
+
 
 def parse_permission_targets(raw: object) -> PermissionTargets:
     """The private targets document, parsed closed, or ``ValueError``."""
@@ -940,7 +960,13 @@ _STAMP_RE: Final = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}")
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolvedTarget:
-    """One subcell's exact target, resolved for one session stamp. Never rendered whole."""
+    """One subcell's exact target, resolved for one session stamp. Never rendered whole.
+
+    ``digest`` is the SHA-256 of the canonical target document -- what a statement and
+    therefore an authorization binds: the exact bucket and key, name or ARN, and for a
+    launch the cluster, definition, override role and the network placement the request
+    carries.
+    """
 
     kind: TargetKind
     #: For an S3 operation: the bucket and the physical key (``None`` for a listing).
@@ -952,10 +978,34 @@ class ResolvedTarget:
     cluster_arn: str | None = None
     task_definition_arn: str | None = None
     task_role_arn: str | None = None
+    #: For a launch: the placement the request must carry (FARGATE / awsvpc).
+    subnet_id: str | None = None
+    security_group_ids: tuple[str, ...] = ()
+    assign_public_ip: bool | None = None
+    platform_version: str | None = None
 
     def __repr__(self) -> str:
         """The kind only."""
         return f"ResolvedTarget(kind={self.kind.value!r})"
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind.value,
+            "bucket": self.bucket,
+            "key": self.key,
+            "name": self.name,
+            "cluster_arn": self.cluster_arn,
+            "task_definition_arn": self.task_definition_arn,
+            "task_role_arn": self.task_role_arn,
+            "subnet_id": self.subnet_id,
+            "security_group_ids": list(self.security_group_ids),
+            "assign_public_ip": self.assign_public_ip,
+            "platform_version": self.platform_version,
+        }
+
+    @property
+    def digest(self) -> str:
+        return sha256_hex(canonical_bytes(self.document()))
 
 
 def synthetic_run_id(stamp: str) -> str:
@@ -963,6 +1013,18 @@ def synthetic_run_id(stamp: str) -> str:
     if _STAMP_RE.fullmatch(stamp) is None:
         raise ValueError("a session stamp is required")
     return f"verification-{stamp}"
+
+
+def started_by_of(stamp: str) -> str:
+    """The ``startedBy`` every launching subcell of one session tags its request with.
+
+    An ambiguous launch answer -- a timeout, a network failure, a failure entry -- leaves
+    the question *did a task start?* open; the cleanup answers it by listing the cluster's
+    tasks by this tag, never by launching again.
+    """
+    if _STAMP_RE.fullmatch(stamp) is None:
+        raise ValueError("a session stamp is required")
+    return f"kalpamani-permission-{stamp}"
 
 
 def resolve_target(
@@ -973,20 +1035,37 @@ def resolve_target(
     inputs: LaunchInputs,
     targets: PermissionTargets,
     production_secret: str | None,
+    prerequisites: Mapping[str, PermissionRecord] | None = None,
 ) -> ResolvedTarget:
     """The exact target of ``cell`` for this session, from the bindings and registration.
 
     Every synthetic S3 key is a real key shape of its namespace (built by the accepted key
     builders) carrying the session stamp in its run identity and the marker's digest as its
     content address, so it lies exactly where the policy statement under test applies and
-    nowhere a production object could be. Launch targets are the registered ones (own) or
+    nowhere a production object could be. **A subcell that reads or deletes an object a
+    prerequisite subcell created takes the exact bucket and key that prerequisite's bound
+    record established** -- never a key derived from its own stamp -- so the object it
+    exercises is the one that exists. Launch targets are the registered ones (own) or
     deterministic derivations of them (another revision, another cluster) that the exact-
-    resource policies cannot name.
+    resource policies cannot name, each with the actor's registered placement.
     """
     actor = PRINCIPAL_ACTOR[cell.principal]
     digest = sha256_hex(SYNTHETIC_MARKER)
     run_id = synthetic_run_id(stamp)
     kind = cell.target
+    if cell.requires:
+        required = cell.requires[0]
+        record = (prerequisites or {}).get(required)
+        if (
+            record is None
+            or record.subcell_id != required
+            or record.outcome is not SubcellOutcome.MATCHED
+            or record.created_key is None
+            or record.created_bucket is None
+            or record.target is not kind
+        ):
+            raise ValueError("the prerequisite object is not established by a bound record")
+        return ResolvedTarget(kind=kind, bucket=record.created_bucket, key=record.created_key)
     if kind is TargetKind.BRONZE_PRODUCTION_PAYLOAD:
         key = production_payload_key_for_digest(dataset=_SYNTHETIC_DATASET, content_sha256=digest)
         return ResolvedTarget(kind=kind, bucket=licensed_bucket, key=physical_key(key))
@@ -1060,8 +1139,14 @@ def resolve_target(
     if match is None:
         raise ValueError("the registered revision is not a task-definition ARN")
     cluster = inputs.cluster_arn
+    placement: dict[str, Any] = {
+        "subnet_id": inputs.subnet_ids[actor],
+        "security_group_ids": tuple(inputs.security_group_ids[actor]),
+        "assign_public_ip": actor is ProductionActor.ACQUISITION,
+        "platform_version": inputs.platform_version,
+    }
     if kind is TargetKind.OWN_REVISION or kind is TargetKind.OWN_TASK:
-        return ResolvedTarget(kind=kind, cluster_arn=cluster, task_definition_arn=own)
+        return ResolvedTarget(kind=kind, cluster_arn=cluster, task_definition_arn=own, **placement)
     if kind is TargetKind.OTHER_ACTOR_REVISION:
         return ResolvedTarget(
             kind=kind,
@@ -1069,18 +1154,21 @@ def resolve_target(
             task_definition_arn=inputs.targets[
                 (other_actor, LaunchKind.VERIFICATION)
             ].task_definition_arn,
+            **placement,
         )
     if kind is TargetKind.OTHER_REVISION:
         return ResolvedTarget(
             kind=kind,
             cluster_arn=cluster,
             task_definition_arn=f"{match.group(1)}{match.group(2)}:{int(match.group(3)) + 1}",
+            **placement,
         )
     if kind is TargetKind.OTHER_FAMILY:
         return ResolvedTarget(
             kind=kind,
             cluster_arn=cluster,
             task_definition_arn=f"{match.group(1)}{match.group(2)}-verification-other:1",
+            **placement,
         )
     if kind is TargetKind.OTHER_CLUSTER:
         cluster_match = _CLUSTER_ARN_RE.fullmatch(cluster)
@@ -1090,6 +1178,7 @@ def resolve_target(
             kind=kind,
             cluster_arn=f"{cluster_match.group(1)}{cluster_match.group(2)}-verification-other",
             task_definition_arn=own,
+            **placement,
         )
     if kind is TargetKind.OTHER_ACTOR_TASK_ROLE:
         return ResolvedTarget(
@@ -1097,6 +1186,7 @@ def resolve_target(
             cluster_arn=cluster,
             task_definition_arn=own,
             task_role_arn=inputs.task_role_arns[other_actor],
+            **placement,
         )
     if kind is TargetKind.FOUNDATION_TASK_ROLE:
         return ResolvedTarget(
@@ -1104,6 +1194,7 @@ def resolve_target(
             cluster_arn=cluster,
             task_definition_arn=own,
             task_role_arn=targets.foundation_task_role_arn,
+            **placement,
         )
     raise ValueError("unresolvable target kind")  # pragma: no cover - closed vocabulary
 
@@ -1128,9 +1219,20 @@ class PermissionClient(Protocol):
     def get_parameter(self, name: str) -> Observation: ...
     def put_parameter(self, name: str, value: str) -> Observation: ...
     def run_task(
-        self, *, cluster_arn: str, task_definition_arn: str, task_role_arn: str | None
+        self,
+        *,
+        cluster_arn: str,
+        task_definition_arn: str,
+        task_role_arn: str | None,
+        started_by: str,
+        subnet_id: str,
+        security_group_ids: tuple[str, ...],
+        assign_public_ip: bool,
+        platform_version: str,
     ) -> Observation: ...
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
+    def list_tasks(self, *, cluster_arn: str, started_by: str) -> Observation: ...
+    def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Observation: ...
     def execute_command(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
 
 
@@ -1171,14 +1273,36 @@ _UNDECIDED_CLASSES: Final[frozenset[ObservedClass]] = frozenset(
         ObservedClass.NOT_EXERCISED,
     }
 )
+#: The classes after which a write or a launch definitely did NOT commit: the request was
+#: refused before it acted, or it addressed nothing. Every other non-success class leaves
+#: the question open, and an open question is a possibly committed write (or launch) the
+#: cleanup must settle.
+_DEFINITELY_NOT_COMMITTED: Final[frozenset[ObservedClass]] = frozenset(
+    {
+        *_DENIAL_CLASSES,
+        ObservedClass.AUTHENTICATION_FAILURE,
+        ObservedClass.NO_SUCH_BUCKET,
+        ObservedClass.NOT_FOUND_404,
+        ObservedClass.NOT_IMPLEMENTED_501,
+        ObservedClass.NO_SUCH_UPLOAD,
+    }
+)
 #: The RunTask operations, whose unexpected success is a task to stop.
 _LAUNCHING: Final[frozenset[Operation]] = frozenset(
     {Operation.ECS_RUN_TASK, Operation.ECS_RUN_TASK_ROLE_OVERRIDE}
 )
-#: Operations per executed subcell: the operation, plus one StopTask on an unexpected launch.
-SUBCELL_OPERATION_BUDGET: Final = 2
+#: A ``RunTask`` with ``count = 1`` returns at most one task; every task an answer carries
+#: is accounted for up to this bound, and an answer carrying more is not credited beyond it.
+MAX_RETURNED_TASKS: Final = 4
+#: Operations per executed subcell: the operation, plus one StopTask per returned task.
+SUBCELL_OPERATION_BUDGET: Final = 1 + MAX_RETURNED_TASKS
 #: Cleanup operations per created key: one DeleteObject and one HeadObject.
 CLEANUP_OPERATIONS_PER_KEY: Final = 2
+#: Cleanup operations per launching attempt: one ListTasks, then per task one DescribeTasks
+#: and, when it is not STOPPED, one StopTask.
+CLEANUP_OPERATIONS_PER_TASK_MAX: Final = 1 + 2 * MAX_RETURNED_TASKS
+#: The ECS ``lastStatus`` that alone confirms a task is no longer running.
+TASK_STOPPED_STATUS: Final = "STOPPED"
 
 
 def decide(cell: Subcell, observed: ObservedClass) -> SubcellOutcome:
@@ -1196,10 +1320,14 @@ def decide(cell: Subcell, observed: ObservedClass) -> SubcellOutcome:
     return SubcellOutcome.INVERTED if success else SubcellOutcome.UNDECIDED
 
 
+PERMISSION_STATEMENT_CONTRACT_ID: Final = "kalpamani-permission-statement/v1"
+PERMISSION_AUTHORIZATION_CONTRACT_ID: Final = "kalpamani-permission-authorization/v1"
 PERMISSION_ATTEMPT_CONTRACT_ID: Final = "kalpamani-permission-attempt/v1"
 PERMISSION_RECORD_CONTRACT_ID: Final = "kalpamani-permission-record/v1"
 PERMISSION_CLEANUP_CONTRACT_ID: Final = "kalpamani-permission-cleanup/v1"
 MAX_PERMISSION_RECORD_BYTES: Final = 32 * 1024
+#: An authorization is for now: it expires, and a stale one is refused.
+MAX_AUTHORIZATION_VALIDITY: Final = timedelta(hours=24)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1259,13 +1387,194 @@ def _binding_from(document: object) -> PermissionBinding:
     return PermissionBinding(**values)  # type: ignore[arg-type]
 
 
+def _prerequisites_from(document: object) -> dict[str, str]:
+    """``{required subcell id: the digest of its bound record}``, closed."""
+    if type(document) is not dict:
+        raise ValueError("permission record: prerequisites")
+    out: dict[str, str] = {}
+    for name, value in document.items():
+        if type(name) is not str or name not in SUBCELL_BY_ID or hex_digest(value) is None:
+            raise ValueError("permission record: prerequisites")
+        out[name] = str(value)
+    return out
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionStatement:
+    """The reviewable statement of one subcell execution: what an authorization binds.
+
+    Written by ``--prepare-subcell``: the subcell (principal, operation, target class), the
+    exact resolved target's digest, the session stamp the target was resolved for, the
+    binding (environment, declarations, registration), the digest of the private targets
+    document the target came from, and the bound prerequisite records (by digest) whose
+    objects the operation reads. Execution recomputes it and refuses any difference, so
+    a changed target, targets document, declaration, registration or prerequisite is
+    not what the owner authorized.
+    """
+
+    subcell_id: str
+    principal: Principal
+    operation: Operation
+    target: TargetKind
+    target_sha256: str
+    stamp: str
+    binding: PermissionBinding
+    targets_sha256: str
+    prerequisites: dict[str, str]
+    prepared_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": PERMISSION_STATEMENT_CONTRACT_ID,
+            "subcell_id": self.subcell_id,
+            "principal": self.principal.value,
+            "operation": self.operation.value,
+            "target": self.target.value,
+            "target_sha256": self.target_sha256,
+            "stamp": self.stamp,
+            "binding": self.binding.document(),
+            "targets_sha256": self.targets_sha256,
+            "prerequisites": dict(sorted(self.prerequisites.items())),
+            "prepared_at": self.prepared_at.isoformat(),
+        }
+
+    @property
+    def digest(self) -> str:
+        """The SHA-256 of the canonical document -- the value an authorization names."""
+        return sha256_hex(canonical_bytes(self.document()))
+
+
+def statement_for(
+    cell: Subcell,
+    *,
+    target: ResolvedTarget,
+    stamp: str,
+    binding: PermissionBinding,
+    targets_sha256: str,
+    prerequisites: Mapping[str, PermissionRecord],
+    prepared_at: datetime,
+) -> PermissionStatement:
+    """The statement of executing ``cell`` against ``target`` under ``binding`` now."""
+    return PermissionStatement(
+        subcell_id=cell.subcell_id,
+        principal=cell.principal,
+        operation=cell.operation,
+        target=cell.target,
+        target_sha256=target.digest,
+        stamp=stamp,
+        binding=binding,
+        targets_sha256=targets_sha256,
+        prerequisites={required: prerequisites[required].digest for required in cell.requires},
+        prepared_at=prepared_at,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PermissionAuthorization:
+    """The owner's written authorization for exactly one execution of one statement."""
+
+    subcell_id: str
+    statement_sha256: str
+    issued_at: datetime
+    expires_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": PERMISSION_AUTHORIZATION_CONTRACT_ID,
+            "subcell_id": self.subcell_id,
+            "statement_sha256": self.statement_sha256,
+            "issued_at": self.issued_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+        }
+
+    @property
+    def digest(self) -> str:
+        """The SHA-256 of the canonical document -- what the store consumes."""
+        return sha256_hex(canonical_bytes(self.document()))
+
+    def valid_at(self, now: datetime) -> bool:
+        return self.issued_at <= now < self.expires_at
+
+
+class AuthorizationDefect(StrEnum):
+    """Why an authorization does not admit an execution. Closed."""
+
+    MALFORMED = "MALFORMED"
+    SUBCELL_MISMATCH = "SUBCELL_MISMATCH"
+    STATEMENT_MISMATCH = "STATEMENT_MISMATCH"
+    NOT_YET_VALID = "NOT_YET_VALID"
+    EXPIRED = "EXPIRED"
+
+
+_AUTHORIZATION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "subcell_id",
+        "statement_sha256",
+        "issued_at",
+        "expires_at",
+    }
+)
+
+
+def parse_permission_authorization(
+    raw: object, *, subcell_id: str, statement_sha256: str | None, now: datetime
+) -> PermissionAuthorization:
+    """The authorization for THIS subcell and THIS statement, valid now, or ``ValueError``.
+
+    The statement digest is the one preparation printed and execution recomputes; an
+    authorization naming any other refuses before anything is consumed. ``None`` reads
+    the digest the authorization names without holding it yet (execution then finds the
+    prepared statement it names, recomputes it, and holds the digest to the result).
+    """
+    try:
+        d = _document(raw, PERMISSION_AUTHORIZATION_CONTRACT_ID, _AUTHORIZATION_FIELDS)
+    except ValueError:
+        raise ValueError(AuthorizationDefect.MALFORMED.value) from None
+    cell_id = exact_str(d["subcell_id"])
+    digest = hex_digest(d["statement_sha256"])
+    issued_at = instant(d["issued_at"])
+    expires_at = instant(d["expires_at"])
+    if (
+        cell_id is None
+        or digest is None
+        or issued_at is None
+        or expires_at is None
+        or expires_at <= issued_at
+        or expires_at - issued_at > MAX_AUTHORIZATION_VALIDITY
+    ):
+        raise ValueError(AuthorizationDefect.MALFORMED.value)
+    if cell_id != subcell_id:
+        raise ValueError(AuthorizationDefect.SUBCELL_MISMATCH.value)
+    if statement_sha256 is not None and digest != statement_sha256:
+        raise ValueError(AuthorizationDefect.STATEMENT_MISMATCH.value)
+    if now < issued_at:
+        raise ValueError(AuthorizationDefect.NOT_YET_VALID.value)
+    if now >= expires_at:
+        raise ValueError(AuthorizationDefect.EXPIRED.value)
+    return PermissionAuthorization(
+        subcell_id=cell_id, statement_sha256=digest, issued_at=issued_at, expires_at=expires_at
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PermissionAttempt:
-    """Written **before** the operation: what is attempted, and the key it may create."""
+    """Written **before** the operation: what is attempted, and the object it may create.
+
+    ``digest`` is the attempt's identity: the record that answers it names it, and the
+    cleanup entry that settles its object names it. Two attempts are never joined by
+    their order in time.
+    """
 
     subcell_id: str
     principal: Principal
     stamp: str
+    authorization_sha256: str
+    statement_sha256: str
+    bucket: str | None
     key: str | None
     started_at: datetime
     binding: PermissionBinding
@@ -1277,15 +1586,31 @@ class PermissionAttempt:
             "subcell_id": self.subcell_id,
             "principal": self.principal.value,
             "stamp": self.stamp,
+            "authorization_sha256": self.authorization_sha256,
+            "statement_sha256": self.statement_sha256,
+            "bucket": self.bucket,
             "key": self.key,
             "started_at": self.started_at.isoformat(),
             "binding": self.binding.document(),
         }
 
+    @property
+    def digest(self) -> str:
+        return sha256_hex(canonical_bytes(self.document()))
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PermissionRecord:
-    """What one executed subcell established. Classes, counts, digests -- no value."""
+    """What one executed subcell established. Classes, counts, digests -- no value.
+
+    ``created_key`` is the object the operation definitely created; ``possibly_created``
+    says the answer left the write open (a timeout, a network failure, an ambiguous
+    status) and the cleanup must settle the same key; ``started_task_ids`` are every task
+    a launching answer returned, ``stop_acknowledged_ids`` those whose immediate StopTask
+    was acknowledged -- **an acknowledgement is not a termination**, which only a later
+    ``DescribeTasks`` in the cleanup confirms -- and ``possibly_started`` says the launching
+    answer left the launch open, so the cleanup lists the cluster by ``started_by``.
+    """
 
     subcell_id: str
     cell_id: str
@@ -1294,14 +1619,20 @@ class PermissionRecord:
     target: TargetKind
     expectation: Expectation
     stamp: str
+    attempt_sha256: str
+    authorization_sha256: str
+    prerequisites: dict[str, str]
     observed: ObservedClass
     outcome: SubcellOutcome
-    #: The physical key this subcell may have created (present when ``creates``).
+    #: The physical bucket and key this subcell definitely created (when ``creates``).
+    created_bucket: str | None
     created_key: str | None
-    #: For a launching operation that unexpectedly started a task: its id and whether
-    #: the immediate StopTask was acknowledged.
-    started_task_id: str | None
-    stop_acknowledged: bool | None
+    possibly_created: bool
+    #: For a launching operation: every returned task, the acknowledged stops, the tag.
+    started_task_ids: tuple[str, ...]
+    stop_acknowledged_ids: tuple[str, ...]
+    started_by: str | None
+    possibly_started: bool
     operations: int
     identity_verified: bool
     started_at: datetime
@@ -1319,11 +1650,18 @@ class PermissionRecord:
             "target": self.target.value,
             "expectation": self.expectation.value,
             "stamp": self.stamp,
+            "attempt_sha256": self.attempt_sha256,
+            "authorization_sha256": self.authorization_sha256,
+            "prerequisites": dict(sorted(self.prerequisites.items())),
             "observed": self.observed.value,
             "outcome": self.outcome.value,
+            "created_bucket": self.created_bucket,
             "created_key": self.created_key,
-            "started_task_id": self.started_task_id,
-            "stop_acknowledged": self.stop_acknowledged,
+            "possibly_created": self.possibly_created,
+            "started_task_ids": list(self.started_task_ids),
+            "stop_acknowledged_ids": list(self.stop_acknowledged_ids),
+            "started_by": self.started_by,
+            "possibly_started": self.possibly_started,
             "operations": self.operations,
             "identity_verified": self.identity_verified,
             "started_at": self.started_at.isoformat(),
@@ -1335,19 +1673,33 @@ class PermissionRecord:
     def digest(self) -> str:
         return sha256_hex(canonical_bytes(self.document()))
 
+    @property
+    def object_open(self) -> bool:
+        """Whether an object of this record still needs settling by the cleanup."""
+        return self.created_key is not None or self.possibly_created
+
+    @property
+    def launch_open(self) -> bool:
+        """Whether a task of this record still needs settling by the cleanup."""
+        return bool(self.started_task_ids) or self.possibly_started
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CleanupKey:
-    """One key the cleanup attempted: what the delete and the confirmation answered."""
+    """One object the cleanup settled: the exact bucket and key, and the attempt it answers."""
 
+    bucket: str
     key: str
+    attempt_sha256: str
     delete_observed: ObservedClass
     confirmation_observed: ObservedClass | None
     confirmed_absent: bool
 
     def document(self) -> dict[str, Any]:
         return {
+            "bucket": self.bucket,
             "key": self.key,
+            "attempt_sha256": self.attempt_sha256,
             "delete_observed": self.delete_observed.value,
             "confirmation_observed": (
                 None if self.confirmation_observed is None else self.confirmation_observed.value
@@ -1357,11 +1709,52 @@ class CleanupKey:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CleanupTasks:
+    """One launching attempt's tasks, settled by listing, describing and stopping.
+
+    ``task_ids`` are the tasks known for the attempt (recorded, or listed by its
+    ``started_by`` tag); ``stopped_ids`` those a ``DescribeTasks`` answered ``STOPPED``;
+    every other known task is residue, stopped once more here and still not confirmed.
+    """
+
+    attempt_sha256: str
+    started_by: str
+    list_observed: ObservedClass
+    task_ids: tuple[str, ...]
+    stopped_ids: tuple[str, ...]
+    residue_ids: tuple[str, ...]
+    operations: int
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "attempt_sha256": self.attempt_sha256,
+            "started_by": self.started_by,
+            "list_observed": self.list_observed.value,
+            "task_ids": list(self.task_ids),
+            "stopped_ids": list(self.stopped_ids),
+            "residue_ids": list(self.residue_ids),
+            "operations": self.operations,
+        }
+
+    @property
+    def settled(self) -> bool:
+        """Every known task confirmed STOPPED, and the listing answered."""
+        return self.list_observed is ObservedClass.OK_200 and not self.residue_ids
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PermissionCleanup:
-    """One cleanup pass by the control principal over every key the session created."""
+    """One cleanup pass by the control principal over every object and task the session left.
+
+    ``deferred`` are objects kept on purpose: a prepared, not yet recorded subcell still
+    needs them; ``residue`` are objects not confirmed absent and tasks not confirmed
+    stopped -- both stay recorded, and a residue is never an absence.
+    """
 
     stamp: str
     keys: tuple[CleanupKey, ...]
+    tasks: tuple[CleanupTasks, ...]
+    deferred: tuple[str, ...]
     residue: tuple[str, ...]
     operations: int
     budget_exhausted: bool
@@ -1375,6 +1768,8 @@ class PermissionCleanup:
             "contract_id": PERMISSION_CLEANUP_CONTRACT_ID,
             "stamp": self.stamp,
             "keys": [k.document() for k in self.keys],
+            "tasks": [t.document() for t in self.tasks],
+            "deferred": list(self.deferred),
             "residue": list(self.residue),
             "operations": self.operations,
             "budget_exhausted": self.budget_exhausted,
@@ -1387,8 +1782,33 @@ class PermissionCleanup:
     def confirmed_keys(self) -> frozenset[str]:
         return frozenset(k.key for k in self.keys if k.confirmed_absent)
 
+    def settles_object(self, attempt_sha256: str, bucket: str, key: str) -> bool:
+        """Whether this pass confirmed THIS attempt's object absent."""
+        return any(
+            k.attempt_sha256 == attempt_sha256
+            and k.bucket == bucket
+            and k.key == key
+            and k.confirmed_absent
+            for k in self.keys
+        )
 
-def _issue(cell: Subcell, target: ResolvedTarget, client: PermissionClient) -> Observation:
+    def settles_attempt(self, attempt_sha256: str) -> bool:
+        """Whether this pass confirmed the object THIS attempt named absent (the key the
+        attempt record carried -- a possibly committed write knows no key of its own)."""
+        return any(k.attempt_sha256 == attempt_sha256 and k.confirmed_absent for k in self.keys)
+
+    def settles_tasks(self, attempt_sha256: str, task_ids: Iterable[str]) -> bool:
+        """Whether this pass confirmed every task of THIS attempt stopped."""
+        wanted = set(task_ids)
+        return any(
+            t.attempt_sha256 == attempt_sha256 and t.settled and wanted <= set(t.stopped_ids)
+            for t in self.tasks
+        )
+
+
+def _issue(
+    cell: Subcell, target: ResolvedTarget, client: PermissionClient, stamp: str
+) -> Observation:
     """Exactly one operation against the resolved target."""
     op = cell.operation
     if op is Operation.S3_PUT_CONDITIONAL:
@@ -1417,17 +1837,19 @@ def _issue(cell: Subcell, target: ResolvedTarget, client: PermissionClient) -> O
         return client.put_parameter(target.name, SYNTHETIC_MARKER.decode("ascii"))
     if op in _LAUNCHING:
         assert target.cluster_arn is not None and target.task_definition_arn is not None
+        assert target.subnet_id is not None and target.platform_version is not None
+        assert target.assign_public_ip is not None and target.security_group_ids
         return client.run_task(
             cluster_arn=target.cluster_arn,
             task_definition_arn=target.task_definition_arn,
             task_role_arn=target.task_role_arn,
+            started_by=started_by_of(stamp),
+            subnet_id=target.subnet_id,
+            security_group_ids=target.security_group_ids,
+            assign_public_ip=target.assign_public_ip,
+            platform_version=target.platform_version,
         )
-    if op is Operation.ECS_EXECUTE_COMMAND:
-        assert target.cluster_arn is not None
-        # No task of ours is running to execute into; the refusal is what is expected,
-        # and a task ARN of a well-formed shape on our cluster is enough to ask for it.
-        return client.execute_command(cluster_arn=target.cluster_arn, task_arn=_no_task(target))
-    raise ValueError("an R-1-evidenced operation is never issued here")
+    raise ValueError("an R-1-evidenced or blocked operation is never issued here")
 
 
 def bucket_of(target: TargetKind, *, licensed_bucket: str, control_bucket: str) -> str:
@@ -1435,57 +1857,68 @@ def bucket_of(target: TargetKind, *, licensed_bucket: str, control_bucket: str) 
     return control_bucket if target is TargetKind.CONTROL_BUCKET_OBJECT else licensed_bucket
 
 
-def _no_task(target: ResolvedTarget) -> str:
-    """A well-formed task ARN on the target cluster that names no task of ours."""
-    assert target.cluster_arn is not None
-    match = _CLUSTER_ARN_RE.fullmatch(target.cluster_arn)
-    assert match is not None
-    return f"{match.group(1).replace(':cluster/', ':task/')}{match.group(2)}/{'0' * 32}"
+def _task_id(task_arn: str) -> str:
+    match = TASK_ARN_RE.fullmatch(task_arn)
+    return match.group(3) if match else "unknown"
 
 
 def run_subcell(
     cell: Subcell,
     *,
     target: ResolvedTarget,
+    attempt: PermissionAttempt,
+    prerequisites: Mapping[str, str],
     client: PermissionClient,
-    stamp: str,
-    binding: PermissionBinding,
     identity_verified: bool,
     now: datetime,
-    started_at: datetime,
 ) -> PermissionRecord:
     """Execute one subcell: one operation, one decision, one bounded reaction.
 
-    The caller has already written the attempt record and verified the principal's
-    identity (``identity_verified`` records that it did). A DENIED launch that started a
-    task is stopped at once -- the one extra operation the budget allows -- and the record
-    carries the task id and the acknowledgement; the subcell is INVERTED either way.
+    The caller has already consumed the authorization, written ``attempt`` and verified
+    the principal's identity (``identity_verified`` records that it did). A DENIED launch
+    that started tasks stops each returned task at once -- the extra operations the budget
+    allows -- and the record carries every task id and the acknowledged stops; an answer
+    that left a write or a launch open is recorded as possibly committed so the cleanup
+    settles it. The subcell is INVERTED on any started task.
     """
     if cell.layer is not Layer.L3_RUNTIME:
         raise ValueError("only an L3 runtime subcell is executed")
-    observation = _issue(cell, target, client)
+    observation = _issue(cell, target, client, attempt.stamp)
     observed = classify(observation)
     outcome = decide(cell, observed)
     operations = 1
-    started_task_id: str | None = None
-    stop_acknowledged: bool | None = None
-    if cell.operation in _LAUNCHING and observed is ObservedClass.OK_200:
-        task_arn = observation.task_arn
-        match = TASK_ARN_RE.fullmatch(task_arn or "")
-        started_task_id = match.group(3) if match else "unknown"
-        assert target.cluster_arn is not None
-        if task_arn is not None:
-            stop = client.stop_task(cluster_arn=target.cluster_arn, task_arn=task_arn)
-            operations += 1
-            stop_acknowledged = classify(stop) is ObservedClass.OK_200
-        else:
-            stop_acknowledged = False
-        outcome = SubcellOutcome.INVERTED
-    created = (
-        target.key
-        if cell.creates and observed is ObservedClass.OK_200 and target.key is not None
-        else None
-    )
+    started: list[str] = []
+    acknowledged: list[str] = []
+    possibly_started = False
+    started_by: str | None = None
+    if cell.operation in _LAUNCHING:
+        started_by = started_by_of(attempt.stamp)
+        returned = tuple(observation.task_arns)[:MAX_RETURNED_TASKS]
+        if returned:
+            assert target.cluster_arn is not None
+            for task_arn in returned:
+                task_id = _task_id(task_arn)
+                started.append(task_id)
+                stop = client.stop_task(cluster_arn=target.cluster_arn, task_arn=task_arn)
+                operations += 1
+                if classify(stop) is ObservedClass.OK_200:
+                    acknowledged.append(task_id)
+            outcome = SubcellOutcome.INVERTED
+        elif observed not in _DEFINITELY_NOT_COMMITTED and observed is not ObservedClass.OK_200:
+            possibly_started = True
+        elif observed is ObservedClass.OK_200:
+            # A 200 that returned no task started nothing it told us about; the cleanup
+            # still lists by the tag, because a task not in the answer is not a task
+            # that does not exist.
+            possibly_started = True
+    created_key: str | None = None
+    created_bucket: str | None = None
+    possibly_created = False
+    if cell.creates and target.key is not None:
+        if observed is ObservedClass.OK_200:
+            created_key, created_bucket = target.key, target.bucket
+        elif observed not in _DEFINITELY_NOT_COMMITTED:
+            possibly_created = True
     return PermissionRecord(
         subcell_id=cell.subcell_id,
         cell_id=cell.cell_id,
@@ -1493,63 +1926,148 @@ def run_subcell(
         operation=cell.operation,
         target=cell.target,
         expectation=cell.expectation,
-        stamp=stamp,
+        stamp=attempt.stamp,
+        attempt_sha256=attempt.digest,
+        authorization_sha256=attempt.authorization_sha256,
+        prerequisites=dict(prerequisites),
         observed=observed,
         outcome=outcome,
-        created_key=created,
-        started_task_id=started_task_id,
-        stop_acknowledged=stop_acknowledged,
+        created_bucket=created_bucket,
+        created_key=created_key,
+        possibly_created=possibly_created,
+        started_task_ids=tuple(started),
+        stop_acknowledged_ids=tuple(acknowledged),
+        started_by=started_by,
+        possibly_started=possibly_started,
         operations=operations,
         identity_verified=identity_verified,
-        started_at=started_at,
+        started_at=attempt.started_at,
         finished_at=now,
-        binding=binding,
+        binding=attempt.binding,
     )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ObjectToSettle:
+    """One object the cleanup must settle: exact bucket and key, and the attempt it answers."""
+
+    bucket: str
+    key: str
+    attempt_sha256: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TasksToSettle:
+    """One launching attempt the cleanup must settle: its tag, cluster and known tasks."""
+
+    attempt_sha256: str
+    started_by: str
+    cluster_arn: str
+    known_task_ids: tuple[str, ...]
+
+
 def run_cleanup(
-    keys: tuple[tuple[str, str], ...],
+    objects: tuple[ObjectToSettle, ...],
+    tasks: tuple[TasksToSettle, ...],
     *,
     client: PermissionClient,
     stamp: str,
+    deferred: tuple[str, ...],
     binding: PermissionBinding,
     identity_verified: bool,
     now: datetime,
     budget: int,
 ) -> PermissionCleanup:
-    """The control principal removes every ``(bucket, key)`` and confirms each absent.
+    """The control principal settles every object and every launch the session left open.
 
-    Two operations per key inside ``budget``; a key whose confirmation is not ``404`` --
-    or that the budget did not reach -- is residue. Cleanup restores the buckets; it never
-    changes what a subcell established.
+    Two operations per object inside ``budget``; per launching attempt one ``ListTasks``
+    by its tag, then per known or listed task one ``DescribeTasks`` and, unless it answers
+    ``STOPPED``, one ``StopTask``. An object whose confirmation is not ``404``, a task not
+    confirmed ``STOPPED``, or anything the budget did not reach is residue. Cleanup
+    restores the buckets and the cluster; it never changes what a subcell established.
     """
     done: list[CleanupKey] = []
+    settled_tasks: list[CleanupTasks] = []
     residue: list[str] = []
     operations = 0
     exhausted = False
-    for bucket, key in keys:
+    for item in objects:
         if operations + CLEANUP_OPERATIONS_PER_KEY > budget:
             exhausted = True
-            residue.append(key)
+            residue.append(item.key)
             continue
-        delete = classify(client.delete_object(bucket, key))
+        delete = classify(client.delete_object(item.bucket, item.key))
         operations += 1
-        confirmation = classify(client.head_object(bucket, key))
+        confirmation = classify(client.head_object(item.bucket, item.key))
         operations += 1
         confirmed = confirmation is ObservedClass.NOT_FOUND_404
         done.append(
             CleanupKey(
-                key=key,
+                bucket=item.bucket,
+                key=item.key,
+                attempt_sha256=item.attempt_sha256,
                 delete_observed=delete,
                 confirmation_observed=confirmation,
                 confirmed_absent=confirmed,
             )
         )
         if not confirmed:
-            residue.append(key)
+            residue.append(item.key)
+    for launch in tasks:
+        if operations + CLEANUP_OPERATIONS_PER_TASK_MAX > budget:
+            exhausted = True
+            residue.extend(f"task:{t}" for t in launch.known_task_ids)
+            if not launch.known_task_ids:
+                residue.append(f"launch:{launch.started_by}")
+            continue
+        listed = client.list_tasks(cluster_arn=launch.cluster_arn, started_by=launch.started_by)
+        operations += 1
+        list_observed = classify(listed)
+        known = list(launch.known_task_ids)
+        for task_arn in tuple(listed.task_arns)[:MAX_RETURNED_TASKS]:
+            task_id = _task_id(task_arn)
+            if task_id not in known:
+                known.append(task_id)
+        known = known[:MAX_RETURNED_TASKS]
+        stopped: list[str] = []
+        left: list[str] = []
+        cluster_match = _CLUSTER_ARN_RE.fullmatch(launch.cluster_arn)
+        for task_id in known:
+            task_arn = (
+                f"{cluster_match.group(1).replace(':cluster/', ':task/')}"
+                f"{cluster_match.group(2)}/{task_id}"
+                if cluster_match
+                else task_id
+            )
+            described = client.describe_tasks(cluster_arn=launch.cluster_arn, task_arns=(task_arn,))
+            operations += 1
+            status = dict(described.task_statuses).get(task_arn)
+            if classify(described) is ObservedClass.OK_200 and status == TASK_STOPPED_STATUS:
+                stopped.append(task_id)
+                continue
+            client.stop_task(cluster_arn=launch.cluster_arn, task_arn=task_arn)
+            operations += 1
+            left.append(task_id)
+        if list_observed is not ObservedClass.OK_200 and not known:
+            left_marker = f"launch:{launch.started_by}"
+            residue.append(left_marker)
+        residue.extend(f"task:{t}" for t in left)
+        settled_tasks.append(
+            CleanupTasks(
+                attempt_sha256=launch.attempt_sha256,
+                started_by=launch.started_by,
+                list_observed=list_observed,
+                task_ids=tuple(known),
+                stopped_ids=tuple(stopped),
+                residue_ids=tuple(left),
+                operations=1 + len(known) + len(left),
+            )
+        )
     return PermissionCleanup(
         stamp=stamp,
         keys=tuple(done),
+        tasks=tuple(settled_tasks),
+        deferred=deferred,
         residue=tuple(residue),
         operations=operations,
         budget_exhausted=exhausted,
@@ -1574,11 +2092,18 @@ _RECORD_FIELDS: Final[frozenset[str]] = frozenset(
         "target",
         "expectation",
         "stamp",
+        "attempt_sha256",
+        "authorization_sha256",
+        "prerequisites",
         "observed",
         "outcome",
+        "created_bucket",
         "created_key",
-        "started_task_id",
-        "stop_acknowledged",
+        "possibly_created",
+        "started_task_ids",
+        "stop_acknowledged_ids",
+        "started_by",
+        "possibly_started",
         "operations",
         "identity_verified",
         "started_at",
@@ -1593,9 +2118,28 @@ _ATTEMPT_FIELDS: Final[frozenset[str]] = frozenset(
         "subcell_id",
         "principal",
         "stamp",
+        "authorization_sha256",
+        "statement_sha256",
+        "bucket",
         "key",
         "started_at",
         "binding",
+    }
+)
+_STATEMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "subcell_id",
+        "principal",
+        "operation",
+        "target",
+        "target_sha256",
+        "stamp",
+        "binding",
+        "targets_sha256",
+        "prerequisites",
+        "prepared_at",
     }
 )
 _CLEANUP_FIELDS: Final[frozenset[str]] = frozenset(
@@ -1604,6 +2148,8 @@ _CLEANUP_FIELDS: Final[frozenset[str]] = frozenset(
         "contract_id",
         "stamp",
         "keys",
+        "tasks",
+        "deferred",
         "residue",
         "operations",
         "budget_exhausted",
@@ -1612,6 +2158,7 @@ _CLEANUP_FIELDS: Final[frozenset[str]] = frozenset(
         "binding",
     }
 )
+_TASK_ID_RE: Final = re.compile(r"[0-9a-f]{32}|unknown")
 
 
 def _document(raw: object, contract_id: str, fields_: frozenset[str]) -> dict[str, Any]:
@@ -1644,6 +2191,34 @@ def _optional_key(value: object) -> str | None:
     return text
 
 
+def _optional_bucket(value: object) -> str | None:
+    if value is None:
+        return None
+    text = exact_str(value)
+    if text is None or _BUCKET_RE.fullmatch(text) is None:
+        raise ValueError("permission record: bucket")
+    return text
+
+
+def _task_ids(value: object) -> tuple[str, ...]:
+    if type(value) is not list or len(value) > MAX_RETURNED_TASKS:
+        raise ValueError("permission record: task ids")
+    out: list[str] = []
+    for item in value:
+        text = exact_str(item)
+        if text is None or _TASK_ID_RE.fullmatch(text) is None or text in out:
+            raise ValueError("permission record: task ids")
+        out.append(text)
+    return tuple(out)
+
+
+def _digest_field(value: object) -> str:
+    digest = hex_digest(value)
+    if digest is None:
+        raise ValueError("permission record: digest")
+    return digest
+
+
 def parse_permission_record(raw: object) -> PermissionRecord:
     """A permission record, parsed closed and held consistent with its subcell."""
     d = _document(raw, PERMISSION_RECORD_CONTRACT_ID, _RECORD_FIELDS)
@@ -1668,8 +2243,10 @@ def parse_permission_record(raw: object) -> PermissionRecord:
     outcome = _member(SubcellOutcome, d["outcome"])
     started_at = instant(d["started_at"])
     finished_at = instant(d["finished_at"])
-    started_task_id = d["started_task_id"]
-    stop = d["stop_acknowledged"]
+    started_task_ids = _task_ids(d["started_task_ids"])
+    acknowledged = _task_ids(d["stop_acknowledged_ids"])
+    started_by = d["started_by"]
+    launching = cell.operation in _LAUNCHING
     if (
         stamp is None
         or _STAMP_RE.fullmatch(stamp) is None
@@ -1680,20 +2257,40 @@ def parse_permission_record(raw: object) -> PermissionRecord:
         or type(d["operations"]) is bool
         or not 1 <= d["operations"] <= SUBCELL_OPERATION_BUDGET
         or type(d["identity_verified"]) is not bool
-        or (started_task_id is not None and exact_str(started_task_id) is None)
-        or (stop is not None and type(stop) is not bool)
-        or (started_task_id is None) != (stop is None)
+        or type(d["possibly_created"]) is not bool
+        or type(d["possibly_started"]) is not bool
+        or not set(acknowledged) <= set(started_task_ids)
+        or (started_by is not None and started_by != started_by_of(stamp))
+        or (launching != (started_by is not None))
+        or (not launching and (started_task_ids or d["possibly_started"]))
+        or d["operations"] != 1 + len(started_task_ids)
     ):
         raise ValueError("permission record: field")
+    prerequisites = _prerequisites_from(d["prerequisites"])
+    if set(prerequisites) != set(cell.requires):
+        raise ValueError("permission record: prerequisites contradict the subcell definition")
     # The outcome must be the one the class decides; a record cannot claim otherwise.
     expected = decide(cell, observed)
-    if started_task_id is not None:
+    if started_task_ids:
         expected = SubcellOutcome.INVERTED
     if outcome is not expected:
         raise ValueError("permission record: outcome contradicts the observed class")
     created = _optional_key(d["created_key"])
+    created_bucket = _optional_bucket(d["created_bucket"])
+    if (created is None) != (created_bucket is None):
+        raise ValueError("permission record: a created key names its bucket")
     if created is not None and not (cell.creates and observed is ObservedClass.OK_200):
         raise ValueError("permission record: a created key without a creating success")
+    if d["possibly_created"] and (
+        not cell.creates
+        or observed is ObservedClass.OK_200
+        or observed in _DEFINITELY_NOT_COMMITTED
+    ):
+        raise ValueError("permission record: possibly created contradicts the observed class")
+    if d["possibly_started"] and (
+        not launching or started_task_ids or observed in _DEFINITELY_NOT_COMMITTED
+    ):
+        raise ValueError("permission record: possibly started contradicts the observed class")
     return PermissionRecord(
         subcell_id=cell_id,
         cell_id=cell.cell_id,
@@ -1702,11 +2299,18 @@ def parse_permission_record(raw: object) -> PermissionRecord:
         target=target,
         expectation=expectation,
         stamp=stamp,
+        attempt_sha256=_digest_field(d["attempt_sha256"]),
+        authorization_sha256=_digest_field(d["authorization_sha256"]),
+        prerequisites=prerequisites,
         observed=observed,
         outcome=outcome,
+        created_bucket=created_bucket,
         created_key=created,
-        started_task_id=started_task_id,
-        stop_acknowledged=stop,
+        possibly_created=d["possibly_created"],
+        started_task_ids=started_task_ids,
+        stop_acknowledged_ids=acknowledged,
+        started_by=started_by,
+        possibly_started=d["possibly_started"],
         operations=d["operations"],
         identity_verified=d["identity_verified"],
         started_at=started_at,
@@ -1728,18 +2332,62 @@ def parse_permission_attempt(raw: object) -> PermissionAttempt:
     started_at = instant(d["started_at"])
     if stamp is None or _STAMP_RE.fullmatch(stamp) is None or started_at is None:
         raise ValueError("permission attempt: field")
+    key = _optional_key(d["key"])
+    bucket = _optional_bucket(d["bucket"])
+    if (key is None) != (bucket is None):
+        raise ValueError("permission attempt: a key names its bucket")
     return PermissionAttempt(
         subcell_id=cell_id,
         principal=principal,
         stamp=stamp,
-        key=_optional_key(d["key"]),
+        authorization_sha256=_digest_field(d["authorization_sha256"]),
+        statement_sha256=_digest_field(d["statement_sha256"]),
+        bucket=bucket,
+        key=key,
         started_at=started_at,
         binding=_binding_from(d["binding"]),
     )
 
 
+def parse_permission_statement(raw: object) -> PermissionStatement:
+    """A statement record, parsed closed and held consistent with its subcell."""
+    d = _document(raw, PERMISSION_STATEMENT_CONTRACT_ID, _STATEMENT_FIELDS)
+    cell_id = exact_str(d["subcell_id"])
+    if cell_id is None or cell_id not in SUBCELL_BY_ID:
+        raise ValueError("permission statement: subcell")
+    cell = SUBCELL_BY_ID[cell_id]
+    principal = _member(Principal, d["principal"])
+    operation = _member(Operation, d["operation"])
+    target = _member(TargetKind, d["target"])
+    if (
+        principal is not cell.principal
+        or operation is not cell.operation
+        or target is not cell.target
+    ):
+        raise ValueError("permission statement: contradicts the subcell definition")
+    stamp = exact_str(d["stamp"])
+    prepared_at = instant(d["prepared_at"])
+    if stamp is None or _STAMP_RE.fullmatch(stamp) is None or prepared_at is None:
+        raise ValueError("permission statement: field")
+    prerequisites = _prerequisites_from(d["prerequisites"])
+    if set(prerequisites) != set(cell.requires):
+        raise ValueError("permission statement: prerequisites contradict the subcell definition")
+    return PermissionStatement(
+        subcell_id=cell_id,
+        principal=principal,
+        operation=operation,
+        target=target,
+        target_sha256=_digest_field(d["target_sha256"]),
+        stamp=stamp,
+        binding=_binding_from(d["binding"]),
+        targets_sha256=_digest_field(d["targets_sha256"]),
+        prerequisites=prerequisites,
+        prepared_at=prepared_at,
+    )
+
+
 def parse_permission_cleanup(raw: object) -> PermissionCleanup:
-    """A cleanup record, parsed closed; residue must agree with the keys."""
+    """A cleanup record, parsed closed; residue must agree with the keys and tasks."""
     d = _document(raw, PERMISSION_CLEANUP_CONTRACT_ID, _CLEANUP_FIELDS)
     stamp = exact_str(d["stamp"])
     recorded_at = instant(d["recorded_at"])
@@ -1748,6 +2396,8 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
         or _STAMP_RE.fullmatch(stamp) is None
         or recorded_at is None
         or type(d["keys"]) is not list
+        or type(d["tasks"]) is not list
+        or type(d["deferred"]) is not list
         or type(d["residue"]) is not list
         or type(d["operations"]) is not int
         or type(d["operations"]) is bool
@@ -1759,14 +2409,17 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
     keys: list[CleanupKey] = []
     for block in d["keys"]:
         if type(block) is not dict or set(block) != {
+            "bucket",
             "key",
+            "attempt_sha256",
             "delete_observed",
             "confirmation_observed",
             "confirmed_absent",
         }:
             raise ValueError("permission cleanup: key block")
         key = _optional_key(block["key"])
-        if key is None or type(block["confirmed_absent"]) is not bool:
+        bucket = _optional_bucket(block["bucket"])
+        if key is None or bucket is None or type(block["confirmed_absent"]) is not bool:
             raise ValueError("permission cleanup: key block")
         confirmation = (
             None
@@ -1778,23 +2431,68 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
             raise ValueError("permission cleanup: confirmation contradicts the class")
         keys.append(
             CleanupKey(
+                bucket=bucket,
                 key=key,
+                attempt_sha256=_digest_field(block["attempt_sha256"]),
                 delete_observed=_member(ObservedClass, block["delete_observed"]),
                 confirmation_observed=confirmation,
                 confirmed_absent=confirmed,
             )
         )
+    tasks: list[CleanupTasks] = []
+    task_operations = 0
+    for block in d["tasks"]:
+        if type(block) is not dict or set(block) != {
+            "attempt_sha256",
+            "started_by",
+            "list_observed",
+            "task_ids",
+            "stopped_ids",
+            "residue_ids",
+            "operations",
+        }:
+            raise ValueError("permission cleanup: task block")
+        started_by = exact_str(block["started_by"])
+        task_ids = _task_ids(block["task_ids"])
+        stopped = _task_ids(block["stopped_ids"])
+        left = _task_ids(block["residue_ids"])
+        if (
+            started_by is None
+            or not started_by.startswith("kalpamani-permission-")
+            or type(block["operations"]) is not int
+            or type(block["operations"]) is bool
+            or set(stopped) | set(left) != set(task_ids)
+            or set(stopped) & set(left)
+            or block["operations"] != 1 + len(task_ids) + len(left)
+        ):
+            raise ValueError("permission cleanup: task block")
+        task_operations += block["operations"]
+        tasks.append(
+            CleanupTasks(
+                attempt_sha256=_digest_field(block["attempt_sha256"]),
+                started_by=started_by,
+                list_observed=_member(ObservedClass, block["list_observed"]),
+                task_ids=task_ids,
+                stopped_ids=stopped,
+                residue_ids=left,
+                operations=block["operations"],
+            )
+        )
     residue = tuple(_optional_key(r) or "" for r in d["residue"])
-    if any(not r for r in residue):
+    deferred = tuple(_optional_key(r) or "" for r in d["deferred"])
+    if any(not r for r in residue) or any(not r for r in deferred):
         raise ValueError("permission cleanup: residue")
     unconfirmed = {k.key for k in keys if not k.confirmed_absent}
+    unconfirmed |= {f"task:{t}" for block in tasks for t in block.residue_ids}
     if not unconfirmed <= set(residue):
-        raise ValueError("permission cleanup: an unconfirmed key is not residue")
-    if d["operations"] != CLEANUP_OPERATIONS_PER_KEY * len(keys):
+        raise ValueError("permission cleanup: an unconfirmed key or task is not residue")
+    if d["operations"] != CLEANUP_OPERATIONS_PER_KEY * len(keys) + task_operations:
         raise ValueError("permission cleanup: operations")
     return PermissionCleanup(
         stamp=stamp,
         keys=tuple(keys),
+        tasks=tuple(tasks),
+        deferred=deferred,
         residue=residue,
         operations=d["operations"],
         budget_exhausted=d["budget_exhausted"],
@@ -1837,9 +2535,40 @@ class PermissionEvidence:
 
     records: dict[str, tuple[PermissionRecord, ...]] = field(default_factory=dict)
     attempts: dict[str, tuple[PermissionAttempt, ...]] = field(default_factory=dict)
+    statements: dict[str, tuple[PermissionStatement, ...]] = field(default_factory=dict)
     cleanups: tuple[PermissionCleanup, ...] = ()
     malformed: int = 0
     binding: PermissionBinding | None = None
+
+
+def _settled(record: PermissionRecord, cleanups: Iterable[PermissionCleanup]) -> str | None:
+    """Why ``record``'s object or launch is not yet settled, or ``None`` when it is.
+
+    A cleanup settles a record only by naming its attempt and its exact object, and only
+    when recorded no earlier than the record -- a cleanup that predates a write cannot
+    have removed it, whatever key it names (and, joined by identity, cannot name an
+    attempt that did not yet exist).
+    """
+    later = [
+        c for c in cleanups if c.binding == record.binding and c.recorded_at >= record.finished_at
+    ]
+    if record.object_open:
+        bucket, key = record.created_bucket, record.created_key
+        if key is None:
+            if not any(c.settles_attempt(record.attempt_sha256) for c in later):
+                return "an ambiguous write left an object possibly committed; not yet settled"
+        elif not any(c.settles_object(record.attempt_sha256, bucket or "", key) for c in later):
+            return (
+                "an object this attempt created is not confirmed removed by a later cleanup "
+                "naming this attempt"
+            )
+    if record.launch_open:
+        if not any(c.settles_tasks(record.attempt_sha256, record.started_task_ids) for c in later):
+            return (
+                "a task this attempt started, or may have started, is not confirmed STOPPED by "
+                "a later cleanup naming this attempt (a stop acknowledgement is not a termination)"
+            )
+    return None
 
 
 def derive_subcell(
@@ -1850,11 +2579,14 @@ def derive_subcell(
 ) -> SubcellState:
     """One subcell's state from the records, bound to the current binding.
 
-    A record for another binding is HISTORICAL. Among records for the current binding
-    the latest by start decides, except that an INVERTED record is never superseded by a
-    later MATCHED one under the same binding (an observed failure does not disappear when
-    later evidence arrives); a created key must be confirmed removed by a cleanup under
-    the same binding. An attempt with no record after it is INTERRUPTED.
+    A record for another binding is HISTORICAL. Attempts and records are joined by the
+    attempt's digest, never by their order: an attempt no record names is INTERRUPTED,
+    whatever came after it. Among records for the current binding the latest by start
+    decides, except that an INVERTED record is never superseded by a later MATCHED one
+    under the same binding (an observed failure does not disappear when later evidence
+    arrives); every object or launch a record left open must be settled by a later
+    cleanup naming that attempt; every prerequisite the record names must be the exact
+    bound record it was prepared against.
     """
     if cell.layer is Layer.BLOCKED:
         assert cell.blocked_on is not None
@@ -1897,14 +2629,15 @@ def derive_subcell(
     records = [r for r in evidence.records.get(cell.subcell_id, ()) if r.binding == binding]
     stale = [r for r in evidence.records.get(cell.subcell_id, ()) if r.binding != binding]
     attempts = [a for a in evidence.attempts.get(cell.subcell_id, ()) if a.binding == binding]
+    answered = {r.attempt_sha256 for r in records}
+    if any(a.digest not in answered for a in attempts):
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.INTERRUPTED,
+            reason="an attempt was recorded and no result names it; the cleanup settles "
+            "the object it named, and the subcell is not re-executed automatically",
+        )
     if not records:
-        if attempts:
-            return SubcellState(
-                subcell_id=cell.subcell_id,
-                status=SubcellStatus.INTERRUPTED,
-                reason="an attempt was recorded and no result followed it; the cleanup "
-                "removes the key it named, and the subcell is not re-executed automatically",
-            )
         if stale:
             return SubcellState(
                 subcell_id=cell.subcell_id,
@@ -1917,22 +2650,15 @@ def derive_subcell(
             status=SubcellStatus.UNEXECUTED,
             reason="no record (scripts/production_permission_cells.py --execute-subcell)",
         )
-    # Every attempt under this binding must be answered by a record started at or after it.
-    latest_record_start = max(r.started_at for r in records)
-    if any(a.started_at > latest_record_start for a in attempts):
-        return SubcellState(
-            subcell_id=cell.subcell_id,
-            status=SubcellStatus.INTERRUPTED,
-            reason="a later attempt was recorded and no result followed it",
-        )
     if any(r.outcome is SubcellOutcome.INVERTED for r in records):
         inverted = [r for r in records if r.outcome is SubcellOutcome.INVERTED][-1]
         detail = ""
-        if inverted.started_task_id is not None:
+        if inverted.started_task_ids:
+            unsettled = _settled(inverted, evidence.cleanups)
             detail = (
-                "; a task was started and stopped"
-                if inverted.stop_acknowledged
-                else "; a task was started and the stop was NOT acknowledged"
+                f"; {len(inverted.started_task_ids)} task(s) started, "
+                f"{len(inverted.stop_acknowledged_ids)} stop(s) acknowledged, termination "
+                + ("confirmed by a later cleanup" if unsettled is None else "NOT confirmed")
             )
         return SubcellState(
             subcell_id=cell.subcell_id,
@@ -1940,45 +2666,40 @@ def derive_subcell(
             reason=f"observed {inverted.observed.value} against {cell.expectation.value}{detail}",
         )
     latest = sorted(records, key=lambda r: r.started_at)[-1]
-    if latest.outcome is SubcellOutcome.UNDECIDED:
-        return SubcellState(
-            subcell_id=cell.subcell_id,
-            status=SubcellStatus.UNDECIDED,
-            reason=f"the last answer decided nothing ({latest.observed.value})",
-        )
     if not latest.identity_verified:
         return SubcellState(
             subcell_id=cell.subcell_id,
             status=SubcellStatus.UNBOUND,
             reason="the record does not attest that the principal's identity was verified",
         )
-    for required in cell.requires:
+    for required, digest in latest.prerequisites.items():
         dependency = SUBCELL_BY_ID[required]
-        required_records = [
+        bound = [
             r
             for r in evidence.records.get(required, ())
-            if r.binding == binding and r.outcome is SubcellOutcome.MATCHED
+            if r.binding == binding and r.outcome is SubcellOutcome.MATCHED and r.digest == digest
         ]
-        if not required_records or required_records[-1].started_at > latest.started_at:
+        if not bound or bound[0].started_at > latest.started_at or bound[0].created_key is None:
             return SubcellState(
                 subcell_id=cell.subcell_id,
                 status=SubcellStatus.UNBOUND,
-                reason=f"its prerequisite object from {dependency.subcell_id} was not "
-                "established before it under this binding",
+                reason=f"its prerequisite object from {dependency.subcell_id} is not the exact "
+                "bound record it was prepared against",
             )
-    created = {r.created_key for r in records if r.created_key is not None}
-    if created:
-        confirmed: set[str] = set()
-        for cleanup in evidence.cleanups:
-            if cleanup.binding == binding:
-                confirmed |= cleanup.confirmed_keys
-        if not created <= confirmed:
+    for record in records:
+        unsettled = _settled(record, evidence.cleanups)
+        if unsettled is not None:
             return SubcellState(
                 subcell_id=cell.subcell_id,
                 status=SubcellStatus.CLEANUP_UNRESOLVED,
-                reason="an object this subcell created is not confirmed removed "
-                "(scripts/production_permission_cells.py --cleanup)",
+                reason=f"{unsettled} (scripts/production_permission_cells.py --cleanup)",
             )
+    if latest.outcome is SubcellOutcome.UNDECIDED:
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.UNDECIDED,
+            reason=f"the last answer decided nothing ({latest.observed.value})",
+        )
     return SubcellState(
         subcell_id=cell.subcell_id,
         status=SubcellStatus.PASSED,
@@ -1988,12 +2709,18 @@ def derive_subcell(
 
 __all__ = [
     "CLEANUP_OPERATIONS_PER_KEY",
+    "CLEANUP_OPERATIONS_PER_TASK_MAX",
     "DELETION_DEPENDENCY",
+    "EXECUTE_COMMAND_DEPENDENCY",
+    "MAX_AUTHORIZATION_VALIDITY",
     "MAX_PERMISSION_RECORD_BYTES",
     "MAX_PERMISSION_TARGETS_BYTES",
+    "MAX_RETURNED_TASKS",
     "PERMISSION_ATTEMPT_CONTRACT_ID",
+    "PERMISSION_AUTHORIZATION_CONTRACT_ID",
     "PERMISSION_CLEANUP_CONTRACT_ID",
     "PERMISSION_RECORD_CONTRACT_ID",
+    "PERMISSION_STATEMENT_CONTRACT_ID",
     "PERMISSION_TARGETS_CONTRACT_ID",
     "PRINCIPAL_ACTOR",
     "PRINCIPAL_PROFILE",
@@ -2002,17 +2729,23 @@ __all__ = [
     "SUBCELL_OPERATION_BUDGET",
     "SYNTHETIC_MARKER",
     "TASK_PROBE_DEPENDENCY",
+    "TASK_STOPPED_STATUS",
+    "AuthorizationDefect",
     "CleanupKey",
+    "CleanupTasks",
     "Expectation",
     "Layer",
+    "ObjectToSettle",
     "ObservedClass",
     "Operation",
     "PermissionAttempt",
+    "PermissionAuthorization",
     "PermissionBinding",
     "PermissionCleanup",
     "PermissionClient",
     "PermissionEvidence",
     "PermissionRecord",
+    "PermissionStatement",
     "PermissionTargets",
     "Principal",
     "ResolvedTarget",
@@ -2021,17 +2754,22 @@ __all__ = [
     "SubcellState",
     "SubcellStatus",
     "TargetKind",
+    "TasksToSettle",
     "bucket_of",
     "decide",
     "declaration_digest",
     "derive_subcell",
     "parse_permission_attempt",
+    "parse_permission_authorization",
     "parse_permission_cleanup",
     "parse_permission_record",
+    "parse_permission_statement",
     "parse_permission_targets",
     "resolve_target",
     "run_cleanup",
     "run_subcell",
+    "started_by_of",
+    "statement_for",
     "subcell",
     "subcells_of",
     "synthetic_run_id",

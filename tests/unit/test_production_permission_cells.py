@@ -15,7 +15,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -109,6 +109,8 @@ class FakePermissionClient:
 
     def __init__(self, *answers: r3.Observation) -> None:
         self.answers = list(answers)
+        #: Answers per operation name, consulted before the ordered script.
+        self.by_operation: dict[str, list[r3.Observation]] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.attempt_files_seen: list[int] = []
         self.records_dir: Path | None = None
@@ -117,6 +119,8 @@ class FakePermissionClient:
         self.calls.append((operation, kwargs))
         if self.records_dir is not None:
             self.attempt_files_seen.append(len(list(self.records_dir.glob("permission-attempt-*"))))
+        if self.by_operation.get(operation):
+            return self.by_operation[operation].pop(0)
         if not self.answers:
             return r3.Observation(status=403, code="AccessDenied", message="denied")
         return self.answers.pop(0)
@@ -149,18 +153,17 @@ class FakePermissionClient:
     def put_parameter(self, name: str, value: str) -> Any:
         return self._next("put_parameter", name=name, value=value)
 
-    def run_task(
-        self, *, cluster_arn: str, task_definition_arn: str, task_role_arn: str | None
-    ) -> Any:
-        return self._next(
-            "run_task",
-            cluster_arn=cluster_arn,
-            task_definition_arn=task_definition_arn,
-            task_role_arn=task_role_arn,
-        )
+    def run_task(self, **kwargs: Any) -> Any:
+        return self._next("run_task", **kwargs)
 
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Any:
         return self._next("stop_task", cluster_arn=cluster_arn, task_arn=task_arn)
+
+    def list_tasks(self, *, cluster_arn: str, started_by: str) -> Any:
+        return self._next("list_tasks", cluster_arn=cluster_arn, started_by=started_by)
+
+    def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Any:
+        return self._next("describe_tasks", cluster_arn=cluster_arn, task_arns=task_arns)
 
     def execute_command(self, *, cluster_arn: str, task_arn: str) -> Any:
         return self._next("execute_command", cluster_arn=cluster_arn, task_arn=task_arn)
@@ -171,17 +174,48 @@ NO_CONTENT = r3.Observation(status=204)
 NOT_FOUND = r3.Observation(status=404, code="404")
 DENIED = r3.Observation(status=403, code="AccessDenied", message="denied")
 TIMEOUT = r3.Observation(status=None, transport_failure="timeout")
-LAUNCHED = r3.Observation(status=200, task_arn=TASK_ARN)
+LAUNCHED = r3.Observation(status=200, task_arns=(TASK_ARN,))
+STOPPED = r3.Observation(status=200, task_statuses=((TASK_ARN, "STOPPED"),))
+RUNNING = r3.Observation(status=200, task_statuses=((TASK_ARN, "RUNNING"),))
+LISTED_NONE = r3.Observation(status=200, task_arns=())
+LISTED_ONE = r3.Observation(status=200, task_arns=(TASK_ARN,))
+AUTH_DIGEST: Final = "11" * 32
+STATEMENT_DIGEST: Final = "22" * 32
+
+
+def _attempt(cell_id: str, **fields: Any) -> pc.PermissionAttempt:
+    """An attempt for ``cell_id`` under BINDING, fields overridable."""
+    cell = pc.subcell(cell_id)
+    target = _resolve(cell) if not cell.requires else None
+    base: dict[str, Any] = {
+        "subcell_id": cell.subcell_id,
+        "principal": cell.principal,
+        "stamp": STAMP,
+        "authorization_sha256": AUTH_DIGEST,
+        "statement_sha256": STATEMENT_DIGEST,
+        "bucket": target.bucket if cell.creates and target is not None else None,
+        "key": target.key if cell.creates and target is not None else None,
+        "started_at": NOW,
+        "binding": BINDING,
+    }
+    base.update(fields)
+    return pc.PermissionAttempt(**base)
 
 
 def _record(cell_id: str, **fields: Any) -> pc.PermissionRecord:
-    """A MATCHED record for ``cell_id`` under BINDING, fields overridable."""
+    """A MATCHED record for ``cell_id`` under BINDING, fields overridable.
+
+    ``attempt`` (an attempt) binds the record to it by digest; ``prerequisites`` names the
+    bound prerequisite records; a ``created_key`` names its bucket.
+    """
     cell = pc.subcell(cell_id)
     matched = (
         pc.ObservedClass.DENIED_OTHER
         if cell.expectation is pc.Expectation.DENIED
         else pc._SUCCESS_CLASS[cell.operation]
     )
+    attempt: pc.PermissionAttempt | None = fields.pop("attempt", None)
+    prerequisites: dict[str, pc.PermissionRecord] = fields.pop("prerequisites", {})
     base: dict[str, Any] = {
         "subcell_id": cell.subcell_id,
         "cell_id": cell.cell_id,
@@ -189,20 +223,111 @@ def _record(cell_id: str, **fields: Any) -> pc.PermissionRecord:
         "operation": cell.operation,
         "target": cell.target,
         "expectation": cell.expectation,
-        "stamp": STAMP,
+        "stamp": STAMP if attempt is None else attempt.stamp,
+        "attempt_sha256": AUTH_DIGEST if attempt is None else attempt.digest,
+        "authorization_sha256": AUTH_DIGEST,
+        "prerequisites": {k: v.digest for k, v in prerequisites.items()},
         "observed": matched,
         "outcome": pc.SubcellOutcome.MATCHED,
+        "created_bucket": None,
         "created_key": None,
-        "started_task_id": None,
-        "stop_acknowledged": None,
+        "possibly_created": False,
+        "started_task_ids": (),
+        "stop_acknowledged_ids": (),
+        "started_by": (
+            pc.started_by_of(STAMP if attempt is None else attempt.stamp)
+            if cell.operation in pc._LAUNCHING
+            else None
+        ),
+        "possibly_started": False,
         "operations": 1,
         "identity_verified": True,
-        "started_at": NOW,
-        "finished_at": NOW + timedelta(seconds=1),
-        "binding": BINDING,
+        "started_at": NOW if attempt is None else attempt.started_at,
+        "finished_at": (NOW if attempt is None else attempt.started_at) + timedelta(seconds=1),
+        "binding": BINDING if attempt is None else attempt.binding,
     }
+    if fields.get("created_key") is not None and "created_bucket" not in fields:
+        fields["created_bucket"] = BUCKET
     base.update(fields)
     return pc.PermissionRecord(**base)
+
+
+def _run(
+    cell: pc.Subcell,
+    client: Any,
+    *,
+    target: pc.ResolvedTarget | None = None,
+    attempt: pc.PermissionAttempt | None = None,
+    now: datetime | None = None,
+) -> pc.PermissionRecord:
+    """``run_subcell`` on a fresh attempt for ``cell``."""
+    attempt = _attempt(cell.subcell_id) if attempt is None else attempt
+    return pc.run_subcell(
+        cell,
+        target=_resolve(cell) if target is None else target,
+        attempt=attempt,
+        prerequisites={},
+        client=client,
+        identity_verified=True,
+        now=attempt.started_at + timedelta(seconds=2) if now is None else now,
+    )
+
+
+def _cleanup_for(
+    *records: pc.PermissionRecord,
+    recorded_at: datetime | None = None,
+    confirmed: bool = True,
+    tasks_stopped: bool = True,
+) -> pc.PermissionCleanup:
+    """A cleanup settling every open object and launch of ``records`` by identity."""
+    keys = []
+    task_blocks = []
+    residue: list[str] = []
+    for r in records:
+        if r.created_key is not None:
+            assert r.created_bucket is not None
+            keys.append(
+                pc.CleanupKey(
+                    bucket=r.created_bucket,
+                    key=r.created_key,
+                    attempt_sha256=r.attempt_sha256,
+                    delete_observed=pc.ObservedClass.OK_204,
+                    confirmation_observed=(
+                        pc.ObservedClass.NOT_FOUND_404 if confirmed else pc.ObservedClass.OK_200
+                    ),
+                    confirmed_absent=confirmed,
+                )
+            )
+            if not confirmed:
+                residue.append(r.created_key)
+        if r.launch_open:
+            assert r.started_by is not None
+            ids = r.started_task_ids
+            task_blocks.append(
+                pc.CleanupTasks(
+                    attempt_sha256=r.attempt_sha256,
+                    started_by=r.started_by,
+                    list_observed=pc.ObservedClass.OK_200,
+                    task_ids=ids,
+                    stopped_ids=ids if tasks_stopped else (),
+                    residue_ids=() if tasks_stopped else ids,
+                    operations=1 + len(ids) + (0 if tasks_stopped else len(ids)),
+                )
+            )
+            if not tasks_stopped:
+                residue.extend(f"task:{i}" for i in ids)
+    return pc.PermissionCleanup(
+        stamp="20260914T200000Z-0c1e",
+        keys=tuple(keys),
+        tasks=tuple(task_blocks),
+        deferred=(),
+        residue=tuple(residue),
+        operations=2 * len(keys) + sum(b.operations for b in task_blocks),
+        budget_exhausted=False,
+        identity_verified=True,
+        recorded_at=(NOW + timedelta(hours=1)) if recorded_at is None else recorded_at,
+        binding=BINDING,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,26 +361,22 @@ class TestCatalogue:
                 assert twin.principal in (pc.Principal.ACQUISITION_HUMAN, pc.Principal.BUILD_HUMAN)
             elif s.principal is pc.Principal.DELETION_ROLE:
                 assert s.layer is pc.Layer.BLOCKED and s.blocked_on == pc.DELETION_DEPENDENCY
+            elif s.operation is pc.Operation.ECS_EXECUTE_COMMAND:
+                # No running task of ours exists to execute into outside an R-1 launch;
+                # a request against a task that does not exist tests no permission.
+                assert s.layer is pc.Layer.BLOCKED
+                assert s.blocked_on == pc.EXECUTE_COMMAND_DEPENDENCY
             else:
                 assert s.layer is not pc.Layer.BLOCKED and s.blocked_on is None
-        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.BLOCKED) == 34
-        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.L3_RUNTIME) == 58
+        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.BLOCKED) == 36
+        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.L3_RUNTIME) == 56
 
     def test_the_launchers_positive_operations_are_evidenced_by_r1_only(self) -> None:
         by_r1 = [s for s in pc.SUBCELLS if s.layer is pc.Layer.L3_BY_R1]
         assert len(by_r1) == 6 and all(s.cell_id == "R6-LAUNCHERS" for s in by_r1)
         assert all(s.expectation is pc.Expectation.ALLOWED for s in by_r1)
         with pytest.raises(ValueError):
-            pc.run_subcell(
-                by_r1[0],
-                target=_resolve(by_r1[0]),
-                client=FakePermissionClient(),
-                stamp=STAMP,
-                binding=BINDING,
-                identity_verified=True,
-                now=NOW,
-                started_at=NOW,
-            )
+            _run(by_r1[0], FakePermissionClient())
 
     def test_prerequisites_name_existing_creating_subcells(self) -> None:
         for s in pc.SUBCELLS:
@@ -296,6 +417,68 @@ class TestTargets:
         assert _resolve(pc.subcell("R4-LIST-HUMAN")).key is None
         with pytest.raises(ValueError):
             pc.synthetic_run_id("not-a-stamp")
+        # Every synthetic key lies inside a namespace the tracked declarations name.
+        policies = (
+            REPO_ROOT / "infra" / "aws" / "research-data-plane" / "production_policies.tf"
+        ).read_text(encoding="utf-8")
+        storage = (REPO_ROOT / "infra" / "aws" / "research-data-plane" / "storage.tf").read_text(
+            encoding="utf-8"
+        )
+        for key in expectations.values():
+            prefix = key.split("/")[0] + "/"
+            assert f"/{prefix}" in policies or f"/{prefix}" in storage, key
+        assert "/_verification/*" in storage
+
+    def test_a_dependent_read_takes_the_exact_object_its_prerequisite_created(self) -> None:
+        """PR #106 correction 1, finding 2: never a key derived from the reader's own stamp."""
+        put = pc.subcell("R4-PUT-RECORD-HUMAN")
+        get = pc.subcell("R5-GET-RECORD-HUMAN")
+        created = _record(put.subcell_id, created_key=_resolve(put).key)
+        assert created.created_key is not None
+        target = pc.resolve_target(
+            get,
+            stamp="20260914T190000Z-ffff",
+            licensed_bucket=BUCKET,
+            inputs=INPUTS,
+            targets=TARGETS,
+            production_secret=None,
+            prerequisites={put.subcell_id: created},
+        )
+        assert target.bucket == BUCKET and target.key == created.created_key
+        assert pc.synthetic_run_id("20260914T190000Z-ffff") not in target.key
+        # Without a bound MATCHED record naming its object, the read has no target.
+        for wrong in (
+            {},
+            {put.subcell_id: _record(put.subcell_id)},
+            {
+                put.subcell_id: _record(
+                    "R4-PUT-PAYLOAD-HUMAN",
+                    created_key=_resolve(pc.subcell("R4-PUT-PAYLOAD-HUMAN")).key,
+                )
+            },
+        ):
+            with pytest.raises(ValueError):
+                pc.resolve_target(
+                    get,
+                    stamp=STAMP,
+                    licensed_bucket=BUCKET,
+                    inputs=INPUTS,
+                    targets=TARGETS,
+                    production_secret=None,
+                    prerequisites=wrong,
+                )
+
+    def test_launch_targets_carry_the_registered_placement_and_a_digest(self) -> None:
+        target = _resolve(pc.subcell("R6-ACQ-RUN-OTHER-REVISION"))
+        assert target.subnet_id == INPUTS.subnet_ids[ACQ]
+        assert target.security_group_ids == tuple(INPUTS.security_group_ids[ACQ])
+        assert (
+            target.assign_public_ip is True and target.platform_version == INPUTS.platform_version
+        )
+        build = _resolve(pc.subcell("R6-BLD-RUN-OTHER-CLUSTER"))
+        assert build.assign_public_ip is False and build.subnet_id == INPUTS.subnet_ids[BLD]
+        assert target.digest != build.digest and len(target.digest) == 64
+        assert TASK_ARN not in repr(target)
 
     def test_launch_targets_are_the_registered_ones_or_derivations_the_policy_cannot_name(
         self,
@@ -412,122 +595,119 @@ class TestEngine:
     def test_one_operation_one_record_created_key_on_success(self) -> None:
         cell = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
         client = FakePermissionClient(OK)
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=client,
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW + timedelta(seconds=2),
-            started_at=NOW,
-        )
+        attempt = _attempt(cell.subcell_id)
+        record = _run(cell, client, attempt=attempt)
         assert record.outcome is pc.SubcellOutcome.MATCHED and record.operations == 1
-        assert record.created_key == _resolve(cell).key and record.started_task_id is None
+        assert record.created_key == _resolve(cell).key and record.created_bucket == BUCKET
+        assert record.attempt_sha256 == attempt.digest and not record.possibly_created
+        assert record.started_task_ids == () and not record.possibly_started
         assert [c[0] for c in client.calls] == ["put_object"]
         assert client.calls[0][1]["if_none_match"] is True
         assert pc.parse_permission_record(canonical_bytes(record.document())) == record
 
     def test_a_refused_put_creates_nothing_and_an_allowed_put_refused_is_inverted(self) -> None:
         cell = pc.subcell("R4-PUT-SILVER-HUMAN")  # DENIED, creates
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=FakePermissionClient(DENIED),
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
+        record = _run(cell, FakePermissionClient(DENIED))
         assert record.outcome is pc.SubcellOutcome.MATCHED and record.created_key is None
-        inverted = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=FakePermissionClient(OK),
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
+        assert not record.possibly_created
+        inverted = _run(cell, FakePermissionClient(OK))
         # An unexpected success is an inversion AND an object: the key is recorded for cleanup.
         assert inverted.outcome is pc.SubcellOutcome.INVERTED
         assert inverted.created_key == _resolve(cell).key
         allowed = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
-        refused = pc.run_subcell(
-            allowed,
-            target=_resolve(allowed),
-            client=FakePermissionClient(DENIED),
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
+        refused = _run(allowed, FakePermissionClient(DENIED))
         assert refused.outcome is pc.SubcellOutcome.INVERTED and refused.created_key is None
+
+    def test_an_ambiguous_write_is_recorded_as_possibly_committed(self) -> None:
+        """PR #106 correction 1, finding 3: a timeout leaves the object open for the cleanup."""
+        cell = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
+        for answer in (
+            TIMEOUT,
+            r3.Observation(status=None, transport_failure="network"),
+            r3.Observation(status=412, code="PreconditionFailed"),
+            r3.Observation(status=503, code="SlowDown"),
+        ):
+            record = _run(cell, FakePermissionClient(answer))
+            assert record.outcome is pc.SubcellOutcome.UNDECIDED, answer
+            assert record.created_key is None and record.possibly_created, answer
+            assert record.object_open
+            assert pc.parse_permission_record(canonical_bytes(record.document())) == record
+        # A definitive refusal or a missing bucket committed nothing.
+        for answer in (DENIED, r3.Observation(status=404, code="NoSuchBucket")):
+            record = _run(cell, FakePermissionClient(answer))
+            assert not record.possibly_created and not record.object_open
+        # And a record cannot claim a possibly committed write its class rules out.
+        document = _run(cell, FakePermissionClient(DENIED)).document()
+        document["possibly_created"] = True
+        with pytest.raises(ValueError):
+            pc.parse_permission_record(canonical_bytes(document))
 
     def test_an_unexpected_launch_is_stopped_at_once_and_recorded(self) -> None:
         cell = pc.subcell("R9-ACQ-OVERRIDE-FOUNDATION-ROLE")
         client = FakePermissionClient(LAUNCHED, OK)
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=client,
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
+        attempt = _attempt(cell.subcell_id)
+        record = _run(cell, client, attempt=attempt)
         assert record.outcome is pc.SubcellOutcome.INVERTED and record.operations == 2
-        assert record.started_task_id == "a" * 32 and record.stop_acknowledged is True
+        assert record.started_task_ids == ("a" * 32,)
+        assert record.stop_acknowledged_ids == ("a" * 32,)
+        assert record.started_by == pc.started_by_of(attempt.stamp)
+        assert record.launch_open and not record.possibly_started
         assert [c[0] for c in client.calls] == ["run_task", "stop_task"]
-        assert client.calls[0][1]["task_role_arn"] == TARGETS.foundation_task_role_arn
+        run = client.calls[0][1]
+        assert run["task_role_arn"] == TARGETS.foundation_task_role_arn
+        assert run["started_by"] == record.started_by and run["subnet_id"] == INPUTS.subnet_ids[ACQ]
+        assert run["security_group_ids"] == tuple(INPUTS.security_group_ids[ACQ])
+        assert run["platform_version"] == INPUTS.platform_version and run["assign_public_ip"]
         assert client.calls[1][1]["task_arn"] == TASK_ARN
-        # A stop that is refused is recorded as not acknowledged; still INVERTED.
+        # A stop that is refused is recorded as not acknowledged; still INVERTED, still open.
         client = FakePermissionClient(LAUNCHED, DENIED)
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=client,
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
-        assert record.stop_acknowledged is False and record.outcome is pc.SubcellOutcome.INVERTED
+        record = _run(cell, client)
+        assert record.stop_acknowledged_ids == () and record.outcome is pc.SubcellOutcome.INVERTED
         assert pc.parse_permission_record(canonical_bytes(record.document())) == record
-        # The expected refusal: one operation, no task, MATCHED.
-        client = FakePermissionClient(DENIED)
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=client,
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
+        # Every returned task is accounted for, up to the bound, whatever failure entries
+        # came beside them (PR #106 correction 1, finding 4).
+        many = r3.Observation(
+            status=200,
+            task_arns=tuple(TASK_ARN[:-1] + c for c in "0123456"),
+            failures=1,
         )
+        client = FakePermissionClient(many, OK, OK, DENIED, OK)
+        record = _run(cell, client)
+        assert len(record.started_task_ids) == pc.MAX_RETURNED_TASKS
+        assert record.operations == 1 + pc.MAX_RETURNED_TASKS
+        assert len(record.stop_acknowledged_ids) == 3
+        assert [c[0] for c in client.calls].count("stop_task") == pc.MAX_RETURNED_TASKS
+        assert pc.parse_permission_record(canonical_bytes(record.document())) == record
+        # The expected refusal: one operation, no task, MATCHED, nothing open.
+        client = FakePermissionClient(DENIED)
+        record = _run(cell, client)
         assert record.outcome is pc.SubcellOutcome.MATCHED and len(client.calls) == 1
+        assert not record.launch_open
         assert record.digest and TASK_ARN not in json.dumps(record.document())
+
+    def test_an_ambiguous_launch_is_recorded_as_possibly_started_and_never_retried(self) -> None:
+        """PR #106 correction 1, finding 4: no blind RunTask retry; the cleanup lists by tag."""
+        cell = pc.subcell("R6-ACQ-RUN-OTHER-REVISION")
+        for answer in (
+            TIMEOUT,
+            r3.Observation(status=None, code="RunTaskFailureEntry", failures=1),
+            r3.Observation(status=None, transport_failure="network"),
+        ):
+            client = FakePermissionClient(answer)
+            record = _run(cell, client)
+            assert record.outcome is pc.SubcellOutcome.UNDECIDED and record.possibly_started
+            assert record.started_task_ids == () and record.launch_open
+            assert [c[0] for c in client.calls] == ["run_task"]
+            assert pc.parse_permission_record(canonical_bytes(record.document())) == record
+        record = _run(cell, FakePermissionClient(DENIED))
+        assert not record.possibly_started and not record.launch_open
 
     def test_a_transport_failure_decides_nothing(self) -> None:
         cell = pc.subcell("R5-LIST-HUMAN")
-        record = pc.run_subcell(
-            cell,
-            target=_resolve(cell),
-            client=FakePermissionClient(TIMEOUT),
-            stamp=STAMP,
-            binding=BINDING,
-            identity_verified=True,
-            now=NOW,
-            started_at=NOW,
-        )
+        record = _run(cell, FakePermissionClient(TIMEOUT))
         assert record.outcome is pc.SubcellOutcome.UNDECIDED
         assert record.observed is pc.ObservedClass.TIMEOUT
+        assert not record.object_open and not record.launch_open
 
     def test_the_record_contract_refuses_contradictions(self) -> None:
         record = _record("R4-LIST-HUMAN")
@@ -537,8 +717,11 @@ class TestEngine:
             (lambda d: d.__setitem__("outcome", "INVERTED"), "outcome contradicts the class"),
             (lambda d: d.__setitem__("operation", "S3_GET"), "contradicts the subcell definition"),
             (lambda d: d.__setitem__("created_key", "silver/x"), "created key without a success"),
-            (lambda d: d.__setitem__("operations", 3), "budget"),
-            (lambda d: d.__setitem__("started_task_id", "a" * 32), "task id without a stop flag"),
+            (lambda d: d.__setitem__("operations", 3), "operations without tasks"),
+            (lambda d: d.__setitem__("started_task_ids", ["a" * 32]), "a task on a non-launch"),
+            (lambda d: d.__setitem__("started_by", "x"), "a tag on a non-launch"),
+            (lambda d: d.__setitem__("attempt_sha256", "zz"), "attempt digest"),
+            (lambda d: d.__setitem__("prerequisites", {"R4-PUT-PAYLOAD-HUMAN": "ab" * 32}), "prq"),
             (lambda d: d.__setitem__("stamp", "nope"), "stamp"),
             (lambda d: d.__setitem__("identity_verified", "yes"), "identity flag"),
             (lambda d: d.__setitem__("subcell_id", "R4-NOTHING"), "unknown subcell"),
@@ -553,12 +736,21 @@ class TestEngine:
             del why
 
     def test_cleanup_confirms_each_key_or_reports_residue_within_the_budget(self) -> None:
-        keys = ((BUCKET, "silver/a"), (BUCKET, "gold/b"), (CONTROL_BUCKET, "_verification/c"))
+        objects = tuple(
+            pc.ObjectToSettle(bucket=b, key=k, attempt_sha256=a)
+            for b, k, a in (
+                (BUCKET, "silver/a", "a1" * 32),
+                (BUCKET, "gold/b", "b2" * 32),
+                (CONTROL_BUCKET, "_verification/c", "c3" * 32),
+            )
+        )
         client = FakePermissionClient(NO_CONTENT, NOT_FOUND, NO_CONTENT, OK, DENIED, NOT_FOUND)
         cleanup = pc.run_cleanup(
-            keys,
+            objects,
+            (),
             client=client,
             stamp=STAMP,
+            deferred=("silver/kept",),
             binding=BINDING,
             identity_verified=True,
             now=NOW,
@@ -566,15 +758,20 @@ class TestEngine:
         )
         assert cleanup.confirmed_keys == {"silver/a", "_verification/c"}
         assert cleanup.residue == ("gold/b",) and cleanup.operations == 6
-        assert not cleanup.budget_exhausted
+        assert cleanup.deferred == ("silver/kept",) and not cleanup.budget_exhausted
+        assert cleanup.settles_object("a1" * 32, BUCKET, "silver/a")
+        assert not cleanup.settles_object("zz" * 32, BUCKET, "silver/a")  # another attempt
+        assert not cleanup.settles_object("b2" * 32, BUCKET, "gold/b")
         assert client.calls[4][1]["bucket"] == CONTROL_BUCKET
         assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
         # The budget is never exceeded: keys beyond it are residue, untouched.
         client = FakePermissionClient(NO_CONTENT, NOT_FOUND)
         exhausted = pc.run_cleanup(
-            keys,
+            objects,
+            (),
             client=client,
             stamp=STAMP,
+            deferred=(),
             binding=BINDING,
             identity_verified=True,
             now=NOW,
@@ -585,6 +782,93 @@ class TestEngine:
         # A cleanup record that claims a confirmation its class contradicts is refused.
         broken = cleanup.document()
         broken["keys"][1]["confirmed_absent"] = True
+        with pytest.raises(ValueError):
+            pc.parse_permission_cleanup(canonical_bytes(broken))
+
+    def test_cleanup_settles_tasks_by_listing_describing_and_stopping(self) -> None:
+        """PR #106 correction 1, finding 4: termination is confirmed by DescribeTasks only."""
+        launch = pc.TasksToSettle(
+            attempt_sha256="d4" * 32,
+            started_by=pc.started_by_of(STAMP),
+            cluster_arn=CLUSTER_ARN,
+            known_task_ids=("a" * 32,),
+        )
+        # Known task STOPPED: list (nothing new), describe -> STOPPED; two operations.
+        client = FakePermissionClient(LISTED_NONE, STOPPED)
+        cleanup = pc.run_cleanup(
+            (),
+            (launch,),
+            client=client,
+            stamp=STAMP,
+            deferred=(),
+            binding=BINDING,
+            identity_verified=True,
+            now=NOW,
+            budget=20,
+        )
+        assert [c[0] for c in client.calls] == ["list_tasks", "describe_tasks"]
+        assert client.calls[0][1]["started_by"] == launch.started_by
+        block = cleanup.tasks[0]
+        assert block.stopped_ids == ("a" * 32,) and block.residue_ids == () and block.settled
+        assert cleanup.settles_tasks("d4" * 32, ("a" * 32,)) and cleanup.residue == ()
+        assert cleanup.operations == 2
+        assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
+        # Still RUNNING: stopped once more, residue, not settled.
+        client = FakePermissionClient(LISTED_NONE, RUNNING, OK)
+        cleanup = pc.run_cleanup(
+            (),
+            (launch,),
+            client=client,
+            stamp=STAMP,
+            deferred=(),
+            binding=BINDING,
+            identity_verified=True,
+            now=NOW,
+            budget=20,
+        )
+        assert [c[0] for c in client.calls] == ["list_tasks", "describe_tasks", "stop_task"]
+        assert cleanup.tasks[0].residue_ids == ("a" * 32,) and cleanup.residue == (
+            "task:" + "a" * 32,
+        )
+        assert not cleanup.settles_tasks("d4" * 32, ("a" * 32,))
+        # An ambiguous launch with no known task: the listing finds one, and it is settled.
+        unknown = pc.TasksToSettle(
+            attempt_sha256="e5" * 32,
+            started_by=pc.started_by_of(STAMP),
+            cluster_arn=CLUSTER_ARN,
+            known_task_ids=(),
+        )
+        client = FakePermissionClient(LISTED_ONE, STOPPED)
+        cleanup = pc.run_cleanup(
+            (),
+            (unknown,),
+            client=client,
+            stamp=STAMP,
+            deferred=(),
+            binding=BINDING,
+            identity_verified=True,
+            now=NOW,
+            budget=20,
+        )
+        assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.settles_tasks("e5" * 32, ())
+        # A listing that does not answer is residue, never an absence.
+        client = FakePermissionClient(DENIED)
+        cleanup = pc.run_cleanup(
+            (),
+            (unknown,),
+            client=client,
+            stamp=STAMP,
+            deferred=(),
+            binding=BINDING,
+            identity_verified=True,
+            now=NOW,
+            budget=20,
+        )
+        assert cleanup.residue == ("launch:" + unknown.started_by,)
+        assert not cleanup.settles_tasks("e5" * 32, ())
+        # A cleanup record cannot claim a task both stopped and residue.
+        broken = cleanup.document()
+        broken["tasks"][0]["stopped_ids"] = ["a" * 32]
         with pytest.raises(ValueError):
             pc.parse_permission_cleanup(canonical_bytes(broken))
 
@@ -660,20 +944,28 @@ class TestDerivation:
         assert pc.derive_subcell(cell, _evidence(undecided), r1_passed=R1).status is (
             pc.SubcellStatus.UNDECIDED
         )
-        attempt = pc.PermissionAttempt(
-            subcell_id=cell.subcell_id,
-            principal=cell.principal,
-            stamp=STAMP,
-            key=None,
-            started_at=NOW + timedelta(hours=2),
-            binding=BINDING,
-        )
+        attempt = _attempt(cell.subcell_id, started_at=NOW + timedelta(hours=2))
         state = pc.derive_subcell(
             cell, _evidence(_record(cell.subcell_id), attempts=(attempt,)), r1_passed=R1
         )
         assert state.status is pc.SubcellStatus.INTERRUPTED
         assert pc.derive_subcell(cell, _evidence(attempts=(attempt,)), r1_passed=R1).status is (
             pc.SubcellStatus.INTERRUPTED
+        )
+        # Attempts and records join by the attempt's digest, never by order: a record for
+        # ANOTHER attempt, however much later, does not answer this one (finding 3).
+        earlier = _attempt(cell.subcell_id, started_at=NOW - timedelta(hours=2))
+        answered = _record(cell.subcell_id, attempt=earlier)
+        assert (
+            pc.derive_subcell(cell, _evidence(answered, attempts=(earlier,)), r1_passed=R1).status
+            is pc.SubcellStatus.PASSED
+        )
+        other = _attempt(cell.subcell_id, started_at=NOW - timedelta(hours=3))
+        assert (
+            pc.derive_subcell(
+                cell, _evidence(answered, attempts=(other, earlier)), r1_passed=R1
+            ).status
+            is pc.SubcellStatus.INTERRUPTED
         )
         unverified = _record(cell.subcell_id, identity_verified=False)
         assert pc.derive_subcell(cell, _evidence(unverified), r1_passed=R1).status is (
@@ -696,30 +988,84 @@ class TestDerivation:
     def test_prerequisite_objects_and_cleanup_are_required(self) -> None:
         get = pc.subcell("R5-GET-PAYLOAD-HUMAN")
         put = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
-        get_record = _record(get.subcell_id, started_at=NOW + timedelta(minutes=5))
-        # Read before the object existed: unbound.
+        key = _resolve(put).key
+        put_record = _record(put.subcell_id, created_key=key)
+        get_record = _record(
+            get.subcell_id,
+            started_at=NOW + timedelta(minutes=5),
+            finished_at=NOW + timedelta(minutes=6),
+            prerequisites={put.subcell_id: put_record},
+        )
+        # The exact bound record must be present: absent, or another record, is unbound.
         assert pc.derive_subcell(get, _evidence(get_record), r1_passed=R1).status is (
             pc.SubcellStatus.UNBOUND
         )
-        key = _resolve(put).key
-        put_record = _record(put.subcell_id, created_key=key)
+        other = _record(put.subcell_id, created_key=key, stamp="20260914T170000Z-0000")
+        assert pc.derive_subcell(get, _evidence(other, get_record), r1_passed=R1).status is (
+            pc.SubcellStatus.UNBOUND
+        )
         state = pc.derive_subcell(get, _evidence(put_record, get_record), r1_passed=R1)
         assert state.status is pc.SubcellStatus.PASSED
-        # The creating subcell itself waits for its object to be confirmed removed.
+        # The creating subcell itself waits for its object to be confirmed removed -- by a
+        # cleanup naming ITS attempt, recorded after it.
         assert pc.derive_subcell(put, _evidence(put_record), r1_passed=R1).status is (
             pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
         assert key is not None
-        cleanup = pc.PermissionCleanup(
-            stamp=STAMP,
+        cleanup = _cleanup_for(put_record)
+        assert pc.derive_subcell(
+            put, _evidence(put_record, cleanups=(cleanup,)), r1_passed=R1
+        ).status is (pc.SubcellStatus.PASSED)
+        unresolved = _cleanup_for(put_record, confirmed=False)
+        assert (
+            pc.derive_subcell(
+                put, _evidence(put_record, cleanups=(unresolved,)), r1_passed=R1
+            ).status
+            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
+        # A cleanup that predates the write cannot have settled it (finding 3).
+        before = _cleanup_for(put_record, recorded_at=NOW - timedelta(minutes=1))
+        assert (
+            pc.derive_subcell(put, _evidence(put_record, cleanups=(before,)), r1_passed=R1).status
+            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
+        # A cleanup of the same key for ANOTHER attempt does not settle this one.
+        foreign = _record(
+            put.subcell_id,
+            created_key=key,
+            stamp="20260914T170000Z-0000",
+            attempt_sha256="99" * 32,
+        )
+        assert (
+            pc.derive_subcell(
+                put, _evidence(put_record, cleanups=(_cleanup_for(foreign),)), r1_passed=R1
+            ).status
+            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
+        # A possibly committed write stays open until settled; the UNDECIDED result stays.
+        open_record = _record(
+            put.subcell_id,
+            observed=pc.ObservedClass.TIMEOUT,
+            outcome=pc.SubcellOutcome.UNDECIDED,
+            possibly_created=True,
+        )
+        assert pc.derive_subcell(put, _evidence(open_record), r1_passed=R1).status is (
+            pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
+        settled = pc.PermissionCleanup(
+            stamp="20260914T200000Z-0c1e",
             keys=(
                 pc.CleanupKey(
+                    bucket=BUCKET,
                     key=key,
+                    attempt_sha256=open_record.attempt_sha256,
                     delete_observed=pc.ObservedClass.OK_204,
                     confirmation_observed=pc.ObservedClass.NOT_FOUND_404,
                     confirmed_absent=True,
                 ),
             ),
+            tasks=(),
+            deferred=(),
             residue=(),
             operations=2,
             budget_exhausted=False,
@@ -727,31 +1073,48 @@ class TestDerivation:
             recorded_at=NOW + timedelta(hours=1),
             binding=BINDING,
         )
-        assert pc.derive_subcell(
-            put, _evidence(put_record, cleanups=(cleanup,)), r1_passed=R1
-        ).status is (pc.SubcellStatus.PASSED)
-        unresolved = pc.PermissionCleanup(
-            stamp=STAMP,
-            keys=(
-                pc.CleanupKey(
-                    key=key,
-                    delete_observed=pc.ObservedClass.DENIED_OTHER,
-                    confirmation_observed=pc.ObservedClass.OK_200,
-                    confirmed_absent=False,
-                ),
-            ),
-            residue=(key,),
+        state = pc.derive_subcell(put, _evidence(open_record, cleanups=(settled,)), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.UNDECIDED and "TIMEOUT" in state.reason
+
+    def test_a_started_task_is_settled_only_by_a_confirmed_stop(self) -> None:
+        """PR #106 correction 1, finding 4: a stop acknowledgement is not a termination."""
+        cell = pc.subcell("R6-ACQ-RUN-OTHER-REVISION")
+        launched = _record(
+            cell.subcell_id,
+            observed=pc.ObservedClass.OK_200,
+            outcome=pc.SubcellOutcome.INVERTED,
+            started_task_ids=("a" * 32,),
+            stop_acknowledged_ids=("a" * 32,),
             operations=2,
-            budget_exhausted=False,
-            identity_verified=True,
-            recorded_at=NOW + timedelta(hours=1),
-            binding=BINDING,
+        )
+        state = pc.derive_subcell(cell, _evidence(launched), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.FAILED
+        assert (
+            "termination NOT confirmed" in state.reason and "1 stop(s) acknowledged" in state.reason
+        )
+        confirmed = pc.derive_subcell(
+            cell, _evidence(launched, cleanups=(_cleanup_for(launched),)), r1_passed=R1
+        )
+        assert confirmed.status is pc.SubcellStatus.FAILED
+        assert "termination confirmed by a later cleanup" in confirmed.reason
+        unstopped = _cleanup_for(launched, tasks_stopped=False)
+        state = pc.derive_subcell(cell, _evidence(launched, cleanups=(unstopped,)), r1_passed=R1)
+        assert "termination NOT confirmed" in state.reason
+        # An ambiguous launch (possibly started) is open until the cleanup lists and settles.
+        ambiguous = _record(
+            cell.subcell_id,
+            observed=pc.ObservedClass.TIMEOUT,
+            outcome=pc.SubcellOutcome.UNDECIDED,
+            possibly_started=True,
+        )
+        assert pc.derive_subcell(cell, _evidence(ambiguous), r1_passed=R1).status is (
+            pc.SubcellStatus.CLEANUP_UNRESOLVED
         )
         assert (
             pc.derive_subcell(
-                put, _evidence(put_record, cleanups=(unresolved,)), r1_passed=R1
+                cell, _evidence(ambiguous, cleanups=(_cleanup_for(ambiguous),)), r1_passed=R1
             ).status
-            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+            is pc.SubcellStatus.UNDECIDED
         )
 
     def test_r1_evidenced_and_blocked_subcells(self) -> None:
@@ -839,13 +1202,13 @@ class TestMatrix:
             r9[0].subcell_id,
             observed=pc.ObservedClass.OK_200,
             outcome=pc.SubcellOutcome.INVERTED,
-            started_task_id="a" * 32,
-            stop_acknowledged=True,
+            started_task_ids=("a" * 32,),
+            stop_acknowledged_ids=("a" * 32,),
             operations=2,
         )
         states = self._states(_evidence(inverted, _record(r9[1].subcell_id)))
         assert states["R9-FOUNDATION-TASK"].status is vc.CellStatus.FAILED
-        assert "a task was started and stopped" in states["R9-FOUNDATION-TASK"].reason
+        assert "termination NOT confirmed" in states["R9-FOUNDATION-TASK"].reason
         assert vc.aggregate(states) is vc.AggregateStatus.FAILED
 
     def test_r6_positive_subcells_follow_the_r1_bootstrap_cells(self) -> None:
@@ -855,14 +1218,17 @@ class TestMatrix:
             if s.layer is pc.Layer.L3_RUNTIME
         ]
         states = self._states(_evidence(*negatives))
-        assert states["R6-LAUNCHERS"].status is vc.CellStatus.UNEXECUTED
+        assert states["R6-LAUNCHERS"].status is vc.CellStatus.BLOCKED
         awaiting = [
             s for s in states["R6-LAUNCHERS"].subcells if s.status is pc.SubcellStatus.AWAITING_R1
         ]
         assert len(awaiting) == 6
         states = self._states(_evidence(*negatives), build=True, acquisition=True)
         assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
-        assert states["R6-LAUNCHERS"].status is vc.CellStatus.PASSED
+        # The two ExecuteCommand subcells are BLOCKED on a running task of the actor, so
+        # R-6 as a whole stays BLOCKED however its executable subcells read.
+        assert states["R6-LAUNCHERS"].status is vc.CellStatus.BLOCKED
+        assert pc.EXECUTE_COMMAND_DEPENDENCY in states["R6-LAUNCHERS"].reason
 
 
 # ---------------------------------------------------------------------------
@@ -980,6 +1346,72 @@ class _Tool:
     def files(self, prefix: str) -> list[Path]:
         return sorted(self.scenario.records.glob(f"{prefix}-*.json"))
 
+    def prepare(self, subcell: str, **overrides: Any) -> str:
+        """``--prepare-subcell``: the statement digest it printed."""
+        import io
+        from contextlib import redirect_stdout
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = self.main("--prepare-subcell", subcell, *self.base(), **overrides)
+        assert code == tool.EXIT_PREPARED, buffer.getvalue()
+        return buffer.getvalue().split("statement_sha256=")[1].split()[0]
+
+    def authorize(
+        self,
+        subcell: str,
+        statement_sha256: str,
+        *,
+        name: str = "permission-authorization.json",
+        hours: int = 2,
+    ) -> Path:
+        """The owner's authorization file for ``statement_sha256``, valid from now."""
+        path = self.root / name
+        now = self.clock.now()
+        path.write_bytes(
+            encode(
+                {
+                    "schema_version": 1,
+                    "contract_id": pc.PERMISSION_AUTHORIZATION_CONTRACT_ID,
+                    "subcell_id": subcell,
+                    "statement_sha256": statement_sha256,
+                    "issued_at": now.isoformat(),
+                    "expires_at": (now + timedelta(hours=hours)).isoformat(),
+                }
+            )
+        )
+        return path
+
+    def execute_argv(self, subcell: str, authorization: Path) -> list[str]:
+        return [
+            "--execute-subcell",
+            subcell,
+            *self.base(),
+            "--authorization",
+            str(authorization),
+            tool.AUTHORIZATION_FLAG,
+        ]
+
+    def execute(self, subcell: str, answers: list[Any], **overrides: Any) -> int:
+        """Prepare, authorize and execute ``subcell`` with the fake answering ``answers``."""
+        authorization = self.authorize(subcell, self.prepare(subcell))
+        self.client.answers = list(answers)
+        return self.main(*self.execute_argv(subcell, authorization), **overrides)
+
+    def control(self, tmp_path: Path) -> _Tool:
+        """The control principal's tool over this scenario, for the cleanup."""
+        control = _Tool(tmp_path / "control", pc.Principal.CONTROL)
+        control.scenario = self.scenario
+        control.root = self.root
+        control.declarations = self.declarations
+        control.client.records_dir = self.scenario.records
+        control.env = {**self.env, "AWS_PROFILE": r3.CONTROL_PROFILE}
+        return control
+
+    def cleanup(self, control: _Tool, answers: list[Any]) -> int:
+        control.client.answers = list(answers)
+        return control.main("--cleanup", *self.base(), tool.CLEANUP_FLAG)
+
 
 def test_the_plan_prints_the_catalogue_and_constructs_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1001,18 +1433,32 @@ def test_the_plan_prints_the_catalogue_and_constructs_nothing(
 @pytest.mark.parametrize("flag", sorted(tool.REFUSED_OPTIONS))
 def test_refused_options_and_contradictory_arguments(tmp_path: Path, flag: str) -> None:
     t = _Tool(tmp_path)
+    authorization = tmp_path / "auth.json"
+    authorization.write_bytes(b"{}")
     assert t.main(flag) == tool.EXIT_REFUSED_ARGUMENTS
     assert t.main(tool.AUTHORIZATION_FLAG) == tool.EXIT_REFUSED_ARGUMENTS
     assert t.main("--execute-subcell", "R4-LIST-HUMAN", *t.base()) == tool.EXIT_REFUSED_ARGUMENTS
+    # An execution without an authorization file is refused before anything else.
+    assert t.main("--execute-subcell", "R4-LIST-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG) == (
+        tool.EXIT_REFUSED_ARGUMENTS
+    )
     assert t.main("--execute-subcell", "R4-LIST-HUMAN", tool.AUTHORIZATION_FLAG) == (
         tool.EXIT_REFUSED_ARGUMENTS
     )
     assert (
         t.main(
-            "--execute-subcell", "R4-LIST-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG, "--cleanup"
+            *t.execute_argv("R4-LIST-HUMAN", authorization),
+            "--cleanup",
         )
         == tool.EXIT_REFUSED_ARGUMENTS
     )
+    # Preparation takes no flag and no authorization.
+    assert t.main("--prepare-subcell", "R4-LIST-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG) == (
+        tool.EXIT_REFUSED_ARGUMENTS
+    )
+    assert t.main(
+        "--prepare-subcell", "R4-LIST-HUMAN", *t.base(), "--authorization", str(authorization)
+    ) == (tool.EXIT_REFUSED_ARGUMENTS)
     assert t.constructions == [] and t.identity_calls == []
 
 
@@ -1020,7 +1466,8 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
     tmp_path: Path,
 ) -> None:
     t = _Tool(tmp_path)
-    execute = ["--execute-subcell", "R4-LIST-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG]
+    authorization = t.authorize("R4-LIST-HUMAN", t.prepare("R4-LIST-HUMAN"))
+    execute = t.execute_argv("R4-LIST-HUMAN", authorization)
     assert t.main(*execute, modules={"pytest": object()}) == tool.EXIT_REFUSED_EXECUTION_CONTEXT
     assert t.main(*execute, env={**t.env, "AWS_PROFILE": "default"}) == tool.EXIT_REFUSED_IDENTITY
     assert t.main(*execute, env={**t.env, "AWS_PROFILE": constants_for(BLD).profile}) == (
@@ -1033,15 +1480,10 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
         t.main(*execute, caller_identity=lambda _p: caller_identity(launcher_identity_arn(ACQ)))
         == tool.EXIT_REFUSED_IDENTITY
     )
-    assert t.main(
-        "--execute-subcell", "R4-SECRET-GET-TASK", *t.base(), tool.AUTHORIZATION_FLAG
-    ) == (tool.EXIT_REFUSED_SUBCELL)
-    assert t.main(
-        "--execute-subcell", "R6-ACQ-RUN-OWN-REVISION", *t.base(), tool.AUTHORIZATION_FLAG
-    ) == (tool.EXIT_REFUSED_SUBCELL)
-    assert t.main("--execute-subcell", "R4-NOTHING", *t.base(), tool.AUTHORIZATION_FLAG) == (
-        tool.EXIT_REFUSED_SUBCELL
-    )
+    for blocked in ("R4-SECRET-GET-TASK", "R6-ACQ-RUN-OWN-REVISION", "R6-ACQ-EXECUTE-COMMAND"):
+        assert t.main(*t.execute_argv(blocked, authorization)) == tool.EXIT_REFUSED_SUBCELL
+        assert t.main("--prepare-subcell", blocked, *t.base()) == tool.EXIT_REFUSED_SUBCELL
+    assert t.main(*t.execute_argv("R4-NOTHING", authorization)) == tool.EXIT_REFUSED_SUBCELL
     # A refused binding, targets file or declaration: still no client, no record.
     assert (
         t.main(*execute, load_environment_binding=lambda **_kw: None) == tool.EXIT_REFUSED_BINDING
@@ -1052,14 +1494,23 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
     assert t.main(*execute, declaration_dir=tmp_path / "missing") == tool.EXIT_REFUSED_DECLARATION
     assert t.constructions == [] and t.client.calls == []
     assert t.files("permission-attempt") == [] and t.files("permission-record") == []
+    # Every refusal above happened before the authorization was consumed.
+    assert not any(t.scenario.ledger.parent.glob("*.consumed/*"))
 
 
-def test_one_subcell_executes_with_the_attempt_written_before_the_operation(
+def test_one_subcell_executes_under_a_consumed_authorization_with_the_attempt_first(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     t = _Tool(tmp_path)
+    digest = t.prepare("R4-LIST-HUMAN")
+    capsys.readouterr()
+    statement = pc.parse_permission_statement(t.files("permission-statement")[0].read_bytes())
+    assert statement.digest == digest and statement.prerequisites == {}
+    assert statement.targets_sha256 == pc.parse_permission_targets(t.targets.read_bytes()).digest
+    assert t.constructions == [] and t.identity_calls == [] and t.client.calls == []
+    authorization = t.authorize("R4-LIST-HUMAN", digest)
     t.client.answers = [DENIED]
-    execute = ["--execute-subcell", "R4-LIST-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG]
+    execute = t.execute_argv("R4-LIST-HUMAN", authorization)
     assert t.main(*execute) == tool.EXIT_EXECUTED
     out = capsys.readouterr().out
     assert "outcome=MATCHED" in out and tool.SENTENCES["executed"] in out
@@ -1072,10 +1523,24 @@ def test_one_subcell_executes_with_the_attempt_written_before_the_operation(
     record = pc.parse_permission_record(t.files("permission-record")[0].read_bytes())
     attempt = pc.parse_permission_attempt(t.files("permission-attempt")[0].read_bytes())
     assert record.outcome is pc.SubcellOutcome.MATCHED and attempt.stamp == record.stamp
-    assert record.binding == attempt.binding and record.identity_verified
+    assert record.attempt_sha256 == attempt.digest and record.stamp == statement.stamp
+    assert attempt.statement_sha256 == digest and record.binding == attempt.binding
     assert record.binding.registration_sha256 == sha256_hex(t.scenario.inputs.read_bytes())
     assert record.binding.policy_declaration_sha256 == pc.declaration_digest(
         tool.declaration_paths(t.declarations)
+    )
+    # The authorization is consumed beside the ledger, named by its own digest.
+    parsed = pc.parse_permission_authorization(
+        authorization.read_bytes(),
+        subcell_id="R4-LIST-HUMAN",
+        statement_sha256=digest,
+        now=t.clock.now(),
+    )
+    store = t.scenario.store()
+    assert record.authorization_sha256 == parsed.digest
+    assert store.is_consumed(tool.CONSUMPTION_KIND, parsed.digest)
+    assert store.consumed_path(tool.CONSUMPTION_KIND, parsed.digest).parent.parent == (
+        t.scenario.ledger.parent
     )
     for canary in (*CANARIES, BUCKET):
         assert canary not in out
@@ -1085,77 +1550,309 @@ def test_one_subcell_executes_with_the_attempt_written_before_the_operation(
     assert t.main("--check-record", str(tmp_path / "broken.json")) == tool.EXIT_CHECK_REFUSED
 
 
+def test_an_authorization_is_consumed_once_whatever_follows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #106 correction 1, finding 1: one execution per authorization, durably."""
+    t = _Tool(tmp_path)
+    digest = t.prepare("R4-LIST-HUMAN")
+    authorization = t.authorize("R4-LIST-HUMAN", digest)
+    t.client.answers = [DENIED]
+    execute = t.execute_argv("R4-LIST-HUMAN", authorization)
+    assert t.main(*execute) == tool.EXIT_EXECUTED
+    # Repeated: refused, no identity call needed to say so, no operation.
+    calls = len(t.client.calls)
+    assert t.main(*execute) == tool.EXIT_REFUSED_AUTHORIZATION_CONSUMED
+    assert len(t.client.calls) == calls and len(t.files("permission-attempt")) == 1
+    # From another records directory holding a copy of the statement, the same ledger:
+    # still consumed -- the consumption lives beside the ledger, not under the records.
+    elsewhere = t.root / "elsewhere"
+    elsewhere.mkdir()
+    for path in t.files("permission-statement"):
+        (elsewhere / path.name).write_bytes(path.read_bytes())
+    argv = [a if a != str(t.scenario.records) else str(elsewhere) for a in execute]
+    assert t.main(*argv) == tool.EXIT_REFUSED_AUTHORIZATION_CONSUMED
+    assert len(t.client.calls) == calls and not list(elsewhere.glob("permission-attempt-*"))
+    # After an interruption between consumption and the attempt: consumed stays consumed.
+    second = t.authorize("R4-LIST-HUMAN", t.prepare("R4-LIST-HUMAN"), name="second.json")
+    original = t.scenario.store().__class__.write_record
+
+    def interrupted(self: Any, prefix: str, document: Any, *, at: Any) -> Any:
+        if prefix == "permission-attempt":
+            from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+
+            raise StoreError(StoreDefect.WRITE_FAILED)
+        return original(self, prefix, document, at=at)
+
+    import kalpamani.data.production.sharadar.launch_store as ls
+
+    ls.LaunchStore.write_record = interrupted  # type: ignore[method-assign]
+    try:
+        assert t.main(*t.execute_argv("R4-LIST-HUMAN", second)) == tool.EXIT_REFUSED_RECORD_WRITE
+    finally:
+        ls.LaunchStore.write_record = original  # type: ignore[method-assign]
+    assert len(t.client.calls) == calls
+    assert t.main(*t.execute_argv("R4-LIST-HUMAN", second)) == (
+        tool.EXIT_REFUSED_AUTHORIZATION_CONSUMED
+    )
+    # A new preparation and a new authorization execute again; the old one never does.
+    third = t.authorize("R4-LIST-HUMAN", t.prepare("R4-LIST-HUMAN"), name="third.json")
+    t.client.answers = [DENIED]
+    assert t.main(*t.execute_argv("R4-LIST-HUMAN", third)) == tool.EXIT_EXECUTED
+    assert t.main(*execute) == tool.EXIT_REFUSED_AUTHORIZATION_CONSUMED
+    capsys.readouterr()
+
+
+def test_an_authorization_binds_the_statement_and_changed_targets_invalidate_it(
+    tmp_path: Path,
+) -> None:
+    """PR #106 correction 1, finding 1: the statement is recomputed at execution."""
+    t = _Tool(tmp_path)
+    digest = t.prepare("R4-PUT-CONTROL-HUMAN")
+    # Another subcell's statement, a wrong digest, a stale or a future authorization refuse.
+    other = t.authorize("R4-LIST-HUMAN", t.prepare("R4-LIST-HUMAN"), name="other.json")
+    assert t.main(*t.execute_argv("R4-PUT-CONTROL-HUMAN", other)) == (
+        tool.EXIT_REFUSED_AUTHORIZATION
+    )
+    wrong = t.authorize("R4-PUT-CONTROL-HUMAN", "ff" * 32, name="wrong.json")
+    assert t.main(*t.execute_argv("R4-PUT-CONTROL-HUMAN", wrong)) == (tool.EXIT_REFUSED_PREPARATION)
+    expired = t.authorize("R4-PUT-CONTROL-HUMAN", digest, name="expired.json", hours=1)
+    t.clock.seconds += 2 * 3600
+    assert t.main(*t.execute_argv("R4-PUT-CONTROL-HUMAN", expired)) == (
+        tool.EXIT_REFUSED_AUTHORIZATION
+    )
+    assert t.client.calls == [] and not list(t.scenario.ledger.parent.glob("*.consumed/*"))
+    # The private targets document changed after preparation: the statement no longer
+    # recomputes, and the authorization for the old statement is refused unconsumed.
+    good = t.authorize("R4-PUT-CONTROL-HUMAN", digest, name="good.json")
+    t.targets.write_bytes(
+        t.targets.read_bytes().replace(b"synthetic-control-bucket", b"another-control-bucket")
+    )
+    assert t.main(*t.execute_argv("R4-PUT-CONTROL-HUMAN", good)) == tool.EXIT_REFUSED_PREPARATION
+    assert t.client.calls == [] and not list(t.scenario.ledger.parent.glob("*.consumed/*"))
+    # Prepared again against the changed targets, a new authorization executes once.
+    renewed = t.authorize(
+        "R4-PUT-CONTROL-HUMAN", t.prepare("R4-PUT-CONTROL-HUMAN"), name="renewed.json"
+    )
+    t.client.answers = [DENIED]
+    assert t.main(*t.execute_argv("R4-PUT-CONTROL-HUMAN", renewed)) == tool.EXIT_EXECUTED
+    assert t.client.calls[0][1]["bucket"] == "another-control-bucket"
+
+
+def test_a_dependent_subcell_reads_the_exact_object_and_the_cleanup_defers_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #106 correction 1, finding 2: prerequisites bound before, kept until, then removed."""
+    t = _Tool(tmp_path, pc.Principal.BUILD_HUMAN)
+    # The dependent cannot be prepared while its prerequisite object does not exist.
+    assert t.main("--prepare-subcell", "R5-GET-PAYLOAD-HUMAN", *t.base()) == (
+        tool.EXIT_REFUSED_PREREQUISITE
+    )
+    creator = _Tool(tmp_path / "creator", pc.Principal.ACQUISITION_HUMAN)
+    creator.scenario, creator.root, creator.declarations = t.scenario, t.root, t.declarations
+    creator.client.records_dir = t.scenario.records
+    creator.env = {**t.env, "AWS_PROFILE": constants_for(ACQ).profile}
+    assert creator.execute("R4-PUT-PAYLOAD-HUMAN", [OK]) == tool.EXIT_EXECUTED
+    created = pc.parse_permission_record(creator.files("permission-record")[0].read_bytes())
+    assert created.created_key is not None
+    # Prepared now: the statement names the creating record by digest, and the target
+    # the read will address is exactly the created object -- not a key of its own stamp.
+    digest = t.prepare("R5-GET-PAYLOAD-HUMAN")
+    statement = next(
+        s
+        for s in (
+            pc.parse_permission_statement(f.read_bytes()) for f in t.files("permission-statement")
+        )
+        if s.subcell_id == "R5-GET-PAYLOAD-HUMAN"
+    )
+    assert statement.digest == digest
+    assert statement.prerequisites == {"R4-PUT-PAYLOAD-HUMAN": created.digest}
+    # The cleanup keeps the object while the prepared dependent has not run (deferred),
+    # and reads nothing else as residue.
+    control = t.control(tmp_path)
+    assert t.cleanup(control, []) == tool.EXIT_EXECUTED
+    assert "deferred=1 residue=0 operations=0" in capsys.readouterr().out
+    assert control.client.calls == []
+    authorization = t.authorize("R5-GET-PAYLOAD-HUMAN", digest)
+    t.client.answers = [OK]
+    assert t.main(*t.execute_argv("R5-GET-PAYLOAD-HUMAN", authorization)) == tool.EXIT_EXECUTED
+    read = t.client.calls[-1]
+    assert read[0] == "get_object" and read[1]["key"] == created.created_key
+    assert read[1]["bucket"] == created.created_bucket
+    record = next(
+        r
+        for r in (pc.parse_permission_record(f.read_bytes()) for f in t.files("permission-record"))
+        if r.subcell_id == "R5-GET-PAYLOAD-HUMAN"
+    )
+    assert record.prerequisites == {"R4-PUT-PAYLOAD-HUMAN": created.digest}
+    # Now the cleanup removes it, naming the creating attempt; both subcells then pass.
+    assert t.cleanup(control, [NO_CONTENT, NOT_FOUND]) == tool.EXIT_EXECUTED
+    out = capsys.readouterr().out
+    assert "keys=1 confirmed=1" in out and "deferred=0 residue=0" in out
+    cleanups = [pc.parse_permission_cleanup(f.read_bytes()) for f in t.files("permission-cleanup")]
+    assert sorted(len(c.keys) for c in cleanups) == [0, 1]
+    settled = next(c for c in cleanups if c.keys)
+    assert settled.keys[0].attempt_sha256 == created.attempt_sha256 and settled.deferred == ()
+    assert next(c for c in cleanups if not c.keys).deferred == (created.created_key,)
+    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    for subcell in ("R4-PUT-PAYLOAD-HUMAN", "R5-GET-PAYLOAD-HUMAN"):
+        assert pc.derive_subcell(pc.subcell(subcell), evidence, r1_passed=R1).status is (
+            pc.SubcellStatus.PASSED
+        ), subcell
+    # Once removed, the dependent cannot be prepared or executed against it again.
+    assert t.main("--prepare-subcell", "R5-GET-PAYLOAD-HUMAN", *t.base()) == (
+        tool.EXIT_REFUSED_PREREQUISITE
+    )
+    again = t.authorize("R5-GET-PAYLOAD-HUMAN", digest, name="again.json")
+    assert t.main(*t.execute_argv("R5-GET-PAYLOAD-HUMAN", again)) == (
+        tool.EXIT_REFUSED_PREREQUISITE
+    )
+
+
 def test_an_inverted_or_undecided_subcell_is_recorded_and_exits_accordingly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     t = _Tool(tmp_path, pc.Principal.ACQUISITION_LAUNCHER)
-    t.client.answers = [LAUNCHED, OK]
-    execute = [
-        "--execute-subcell",
-        "R9-ACQ-OVERRIDE-FOUNDATION-ROLE",
-        *t.base(),
-        tool.AUTHORIZATION_FLAG,
-    ]
-    assert t.main(*execute) == tool.EXIT_INVERTED
+    assert t.execute("R9-ACQ-OVERRIDE-FOUNDATION-ROLE", [LAUNCHED, OK]) == tool.EXIT_INVERTED
     out = capsys.readouterr().out
-    assert "unexpected_task_started=yes stop_acknowledged=yes" in out
+    assert (
+        "tasks_started=1 stops_acknowledged=1 possibly_started=no termination_confirmed=no" in out
+    )
     assert [c[0] for c in t.client.calls] == ["run_task", "stop_task"]
+    run = t.client.calls[0][1]
+    assert run["subnet_id"] == INPUTS.subnet_ids[ACQ] and run["assign_public_ip"] is True
+    assert run["started_by"].startswith("kalpamani-permission-")
     assert t.identity_calls == [constants_for(ACQ).launcher_profile]
-    t.client.answers = [TIMEOUT]
-    assert t.main(*execute) == tool.EXIT_UNDECIDED
-    assert TASK_ARN not in capsys.readouterr().out
+    assert t.execute("R9-ACQ-OVERRIDE-FOUNDATION-ROLE", [TIMEOUT]) == tool.EXIT_UNDECIDED
+    out = capsys.readouterr().out
+    assert "possibly_started=yes" in out and TASK_ARN not in out
+    assert [c[0] for c in t.client.calls] == ["run_task", "stop_task", "run_task"]
 
 
-def test_cleanup_runs_under_the_control_principal_over_every_recorded_key(
+def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """PR #106 correction 1, findings 3 and 4, through the tool on real files."""
     t = _Tool(tmp_path)
-    t.client.answers = [OK]
-    put = ["--execute-subcell", "R4-PUT-PAYLOAD-HUMAN", *t.base(), tool.AUTHORIZATION_FLAG]
-    assert t.main(*put) == tool.EXIT_EXECUTED
-    capsys.readouterr()
-    # An interrupted attempt (no record) for a creating subcell: its key is cleaned too.
-    cell = pc.subcell("R4-PUT-INDEX-HUMAN")
-    record = pc.parse_permission_record(t.files("permission-record")[0].read_bytes())
-    attempt = pc.PermissionAttempt(
+    assert t.execute("R4-PUT-PAYLOAD-HUMAN", [OK]) == tool.EXIT_EXECUTED
+    created = pc.parse_permission_record(t.files("permission-record")[0].read_bytes())
+    assert created.subcell_id == "R4-PUT-PAYLOAD-HUMAN"
+    # An ambiguous write: possibly committed, tracked for the cleanup by its attempt.
+    assert t.execute("R4-PUT-INDEX-HUMAN", [TIMEOUT]) == tool.EXIT_UNDECIDED
+    ambiguous = next(
+        r
+        for r in (pc.parse_permission_record(f.read_bytes()) for f in t.files("permission-record"))
+        if r.subcell_id == "R4-PUT-INDEX-HUMAN"
+    )
+    assert ambiguous.possibly_created and ambiguous.created_key is None
+    # An interrupted attempt (no record) for a creating subcell.
+    cell = pc.subcell("R4-PUT-CLAIM-HUMAN")
+    interrupted = pc.PermissionAttempt(
         subcell_id=cell.subcell_id,
         principal=cell.principal,
-        stamp=record.stamp,
+        stamp=created.stamp,
+        authorization_sha256="ab" * 32,
+        statement_sha256="cd" * 32,
+        bucket=BUCKET,
         key=_resolve(cell).key,
-        started_at=t.clock.now() + timedelta(minutes=1),
-        binding=record.binding,
+        started_at=t.clock.now(),
+        binding=created.binding,
     )
-    t.scenario.store().write_record("permission-attempt", attempt.document(), at=attempt.started_at)
-    control = _Tool(tmp_path / "control", pc.Principal.CONTROL)
-    control.scenario = t.scenario
-    control.root = t.root
-    control.client.records_dir = t.scenario.records
-    control.env = {**t.env, "AWS_PROFILE": r3.CONTROL_PROFILE}
-    control.client.answers = [NO_CONTENT, NOT_FOUND, NO_CONTENT, NOT_FOUND]
-    cleanup = ["--cleanup", *t.base(), tool.CLEANUP_FLAG]
-    assert control.main(*cleanup, declaration_dir=t.declarations) == tool.EXIT_EXECUTED
+    t.scenario.store().write_record(
+        "permission-attempt", interrupted.document(), at=interrupted.started_at
+    )
+    # An unexpected launch under the launcher, and an ambiguous one.
+    launcher = _Tool(tmp_path / "launcher", pc.Principal.ACQUISITION_LAUNCHER)
+    launcher.scenario, launcher.root, launcher.declarations = t.scenario, t.root, t.declarations
+    launcher.client.records_dir = t.scenario.records
+    launcher.env = {**t.env, "AWS_PROFILE": constants_for(ACQ).launcher_profile}
+    assert launcher.execute("R6-ACQ-RUN-OTHER-REVISION", [LAUNCHED, OK]) == tool.EXIT_INVERTED
+    assert launcher.execute("R6-ACQ-RUN-OTHER-FAMILY", [TIMEOUT]) == tool.EXIT_UNDECIDED
+    capsys.readouterr()
+    control = t.control(tmp_path)
+    # Three objects (created, possibly created, interrupted), then two launches: the
+    # recorded task described STOPPED; the ambiguous launch listed, nothing found.
+    control.client.by_operation = {
+        "delete_object": [NO_CONTENT] * 3,
+        "head_object": [NOT_FOUND] * 3,
+        "list_tasks": [LISTED_NONE, LISTED_NONE],
+        "describe_tasks": [STOPPED],
+    }
+    assert t.cleanup(control, []) == tool.EXIT_EXECUTED
     out = capsys.readouterr().out
-    assert "cleanup keys=2 confirmed=2 residue=0 operations=4" in out
+    assert "keys=3 confirmed=3 launches=2 tasks_known=1 tasks_stopped=1" in out
+    assert "deferred=0 residue=0 operations=9" in out
     assert control.gate_calls == ["foundation"] and control.identity_calls == []
     assert control.constructions == [(r3.CONTROL_PROFILE, "us-east-1")]
     deleted = sorted(c[1]["key"] for c in control.client.calls if c[0] == "delete_object")
-    assert record.created_key is not None and attempt.key is not None
-    assert deleted == sorted([record.created_key, attempt.key])
-    # The matrix now reads the creating subcell PASSED (created and confirmed removed).
-    evidence = runner.permission_evidence(t.scenario.store(), record.binding)
-    assert (
-        pc.derive_subcell(pc.subcell("R4-PUT-PAYLOAD-HUMAN"), evidence, r1_passed=R1).status
-        is pc.SubcellStatus.PASSED
+    assert created.created_key is not None and interrupted.key is not None
+    assert created.created_key in deleted and interrupted.key in deleted and len(deleted) == 3
+    # The possibly committed index key is the one the attempt named for that stamp.
+    index_attempt = next(
+        pc.parse_permission_attempt(p.read_bytes())
+        for p in t.files("permission-attempt")
+        if pc.parse_permission_attempt(p.read_bytes()).digest == ambiguous.attempt_sha256
     )
-    # Residue: a delete refused leaves the key unresolved and the cleanup exit says so.
-    control.client.answers = [DENIED, OK, DENIED, OK]
-    assert control.main(*cleanup, declaration_dir=t.declarations) == tool.EXIT_CLEANUP_UNRESOLVED
-    assert "residue=2" in capsys.readouterr().out
+    assert index_attempt.key in deleted and index_attempt.key is not None
+    assert index_attempt.key.startswith("bronze/sharadar/_indexes/")
+    listed = [c[1]["started_by"] for c in control.client.calls if c[0] == "list_tasks"]
+    assert len(listed) == 2 and all(s.startswith("kalpamani-permission-") for s in listed)
+    described = [c for c in control.client.calls if c[0] == "describe_tasks"]
+    assert len(described) == 1 and described[0][1]["task_arns"] == (TASK_ARN,)
+    cleanup = pc.parse_permission_cleanup(t.files("permission-cleanup")[-1].read_bytes())
+    assert {k.attempt_sha256 for k in cleanup.keys} == {
+        created.attempt_sha256,
+        ambiguous.attempt_sha256,
+        interrupted.digest,
+    }
+    # The matrix: the creator PASSED (created and confirmed removed by its own attempt's
+    # entry); the ambiguous one stays UNDECIDED (its result is preserved, its object
+    # settled); the launch FAILED with termination confirmed; the ambiguous launch UNDECIDED.
+    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    states = {
+        s: pc.derive_subcell(pc.subcell(s), evidence, r1_passed=R1)
+        for s in (
+            "R4-PUT-PAYLOAD-HUMAN",
+            "R4-PUT-INDEX-HUMAN",
+            "R4-PUT-CLAIM-HUMAN",
+            "R6-ACQ-RUN-OTHER-REVISION",
+            "R6-ACQ-RUN-OTHER-FAMILY",
+        )
+    }
+    assert states["R4-PUT-PAYLOAD-HUMAN"].status is pc.SubcellStatus.PASSED
+    assert states["R4-PUT-INDEX-HUMAN"].status is pc.SubcellStatus.UNDECIDED
+    assert states["R4-PUT-CLAIM-HUMAN"].status is pc.SubcellStatus.INTERRUPTED
+    assert states["R6-ACQ-RUN-OTHER-REVISION"].status is pc.SubcellStatus.FAILED
+    assert "termination confirmed" in states["R6-ACQ-RUN-OTHER-REVISION"].reason
+    assert states["R6-ACQ-RUN-OTHER-FAMILY"].status is pc.SubcellStatus.UNDECIDED
+    # A second pass settles nothing again: everything is already settled by identity.
+    assert t.cleanup(control, []) == tool.EXIT_EXECUTED
+    assert "keys=0 confirmed=0 launches=0" in capsys.readouterr().out
+    # Residue: a delete refused and a task still RUNNING leave residue; the exit says so.
+    assert t.execute("R4-PUT-RECORD-HUMAN", [OK]) == tool.EXIT_EXECUTED
+    assert launcher.execute("R6-ACQ-RUN-OTHER-CLUSTER", [LAUNCHED, DENIED]) == tool.EXIT_INVERTED
+    capsys.readouterr()
+    control.client.by_operation = {
+        "delete_object": [DENIED],
+        "head_object": [OK],
+        "list_tasks": [LISTED_NONE],
+        "describe_tasks": [RUNNING],
+        "stop_task": [OK],
+    }
+    assert t.cleanup(control, []) == tool.EXIT_CLEANUP_UNRESOLVED
+    out = capsys.readouterr().out
+    assert "residue=2" in out and "tasks_stopped=0" in out
+    evidence = runner.permission_evidence(t.scenario.store(), created.binding)
+    state = pc.derive_subcell(pc.subcell("R6-ACQ-RUN-OTHER-CLUSTER"), evidence, r1_passed=R1)
+    assert state.status is pc.SubcellStatus.FAILED and "termination NOT confirmed" in state.reason
+    assert pc.derive_subcell(pc.subcell("R4-PUT-RECORD-HUMAN"), evidence, r1_passed=R1).status is (
+        pc.SubcellStatus.CLEANUP_UNRESOLVED
+    )
     # The wrong flag for the mode, or the wrong profile: refused before any client.
     assert control.main("--cleanup", *t.base(), tool.AUTHORIZATION_FLAG) == (
         tool.EXIT_REFUSED_ARGUMENTS
     )
-    assert t.main(*cleanup) == tool.EXIT_REFUSED_IDENTITY
+    assert t.main("--cleanup", *t.base(), tool.CLEANUP_FLAG) == tool.EXIT_REFUSED_IDENTITY
 
 
 def test_the_matrix_reads_permission_records_from_the_records_directory(
@@ -1181,6 +1878,7 @@ def test_the_matrix_reads_permission_records_from_the_records_directory(
     assert "cell=R7-QUALIFICATION ref=R-7 kind=PERMISSION_MATRIX status=PASSED" in out
     assert "  subcell=R7-ACQ-PUT-SILVER status=PASSED" in out
     assert "cell=R4-ACQUISITION ref=R-4 kind=PERMISSION_MATRIX status=BLOCKED" in out
+    assert "cell=R6-LAUNCHERS ref=R-6 kind=PERMISSION_MATRIX status=BLOCKED" in out
     assert cells.scenario.clients.constructions == []
     # A malformed permission file makes every permission subcell UNBOUND, never ignored.
     (cells.scenario.records / "permission-record-20260914T180000Z-ffff.json").write_bytes(b"{}")
@@ -1280,6 +1978,10 @@ class TestBoto3Adapter:
             lambda: adapter.get_parameter("/kalpamani/production/x"),
             lambda: adapter.put_parameter("/kalpamani/production/x", "marker"),
             lambda: adapter.execute_command(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN),
+            lambda: adapter.list_tasks(
+                cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x"
+            ),
+            lambda: adapter.describe_tasks(cluster_arn=CLUSTER_ARN, task_arns=(TASK_ARN,)),
         )
         for service_call in service_calls:
             before = transport.sends
@@ -1294,36 +1996,84 @@ class TestBoto3Adapter:
             client = adapter._clients[service]
             assert client.meta.config.retries["total_max_attempts"] == 1
 
-    def test_run_task_answers_carry_the_task_arn_and_failure_entries_decide_nothing(
+    def _run_task(self, adapter: Any, *, task_role_arn: str | None = None) -> Any:
+        return adapter.run_task(
+            cluster_arn=CLUSTER_ARN,
+            task_definition_arn=verification_revision_arn(ACQ),
+            task_role_arn=task_role_arn,
+            started_by="kalpamani-permission-20260914T180000Z-abcd",
+            subnet_id=INPUTS.subnet_ids[ACQ],
+            security_group_ids=tuple(INPUTS.security_group_ids[ACQ]),
+            assign_public_ip=True,
+            platform_version=INPUTS.platform_version,
+        )
+
+    def test_run_task_answers_carry_every_task_and_the_request_carries_its_placement(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """PR #106 correction 1, finding 4: at the real adapter, at the transport."""
         adapter, transport = self._adapter(monkeypatch)
         transport.script = [
             (200, json.dumps({"tasks": [{"taskArn": TASK_ARN}], "failures": []}).encode())
         ]
-        launched = adapter.run_task(
-            cluster_arn=CLUSTER_ARN,
-            task_definition_arn=verification_revision_arn(ACQ),
-            task_role_arn=TARGETS.foundation_task_role_arn,
+        launched = self._run_task(adapter, task_role_arn=TARGETS.foundation_task_role_arn)
+        assert launched.task_arns == (TASK_ARN,) and r3.classify(launched) is (
+            r3.ObservedClass.OK_200
         )
-        assert launched.task_arn == TASK_ARN and r3.classify(launched) is r3.ObservedClass.OK_200
         body = json.loads(transport.requests[-1].body)
         assert body["overrides"] == {"taskRoleArn": TARGETS.foundation_task_role_arn}
-        assert body["count"] == 1
+        assert body["count"] == 1 and body["launchType"] == "FARGATE"
+        assert body["platformVersion"] == INPUTS.platform_version
+        assert body["networkConfiguration"] == {
+            "awsvpcConfiguration": {
+                "subnets": [INPUTS.subnet_ids[ACQ]],
+                "securityGroups": list(INPUTS.security_group_ids[ACQ]),
+                "assignPublicIp": "ENABLED",
+            }
+        }
+        assert body["startedBy"] == "kalpamani-permission-20260914T180000Z-abcd"
+        assert body["enableExecuteCommand"] is False
+        # A task beside a failure entry is still a task: the ARN is preserved.
+        other = TASK_ARN[:-1] + "b"
+        transport.script = [
+            (
+                200,
+                json.dumps(
+                    {
+                        "tasks": [{"taskArn": TASK_ARN}, {"taskArn": other}],
+                        "failures": [{"arn": other, "reason": "RESOURCE:MEMORY"}],
+                    }
+                ).encode(),
+            )
+        ]
+        mixed = self._run_task(adapter)
+        assert mixed.task_arns == (TASK_ARN, other) and mixed.failures == 1
+        assert r3.classify(mixed) is r3.ObservedClass.OK_200
+        assert "overrides" not in json.loads(transport.requests[-1].body)
+        # Only failure entries: no task named, an ambiguous launch (never a denial).
         transport.script = [
             (200, json.dumps({"tasks": [], "failures": [{"reason": "synthetic"}]}).encode())
         ]
-        failed = adapter.run_task(
-            cluster_arn=CLUSTER_ARN,
-            task_definition_arn=verification_revision_arn(ACQ),
-            task_role_arn=None,
-        )
-        assert failed.task_arn is None and r3.classify(failed) is r3.ObservedClass.AMBIGUOUS
-        assert "overrides" not in json.loads(transport.requests[-1].body)
+        failed = self._run_task(adapter)
+        assert failed.task_arns == () and r3.classify(failed) is r3.ObservedClass.AMBIGUOUS
+        assert failed.failures == 1
         transport.script = [(200, json.dumps({"task": {"taskArn": TASK_ARN}}).encode())]
         assert r3.classify(adapter.stop_task(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN)) is (
             r3.ObservedClass.OK_200
         )
+        # ListTasks by the tag and DescribeTasks carry the documented fields.
+        transport.script = [(200, json.dumps({"taskArns": [TASK_ARN]}).encode())]
+        listed = adapter.list_tasks(cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x")
+        assert listed.task_arns == (TASK_ARN,)
+        body = json.loads(transport.requests[-1].body)
+        assert body["startedBy"] == "kalpamani-permission-x" and body["cluster"] == CLUSTER_ARN
+        transport.script = [
+            (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "STOPPED"}]}).encode())
+        ]
+        described = adapter.describe_tasks(cluster_arn=CLUSTER_ARN, task_arns=(TASK_ARN,))
+        assert described.task_statuses == ((TASK_ARN, "STOPPED"),)
+        assert json.loads(transport.requests[-1].body)["tasks"] == [TASK_ARN]
+        assert transport.sends == 6  # one attempt per operation, no retry anywhere
         from botocore.exceptions import ReadTimeoutError  # type: ignore[import-untyped]
 
         transport.script = [ReadTimeoutError(endpoint_url="https://synthetic")]

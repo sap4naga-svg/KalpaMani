@@ -281,6 +281,8 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
     for contract in (
         vc.NEGATIVE_EVIDENCE_CONTRACT_ID,
         pc.PERMISSION_TARGETS_CONTRACT_ID,
+        pc.PERMISSION_STATEMENT_CONTRACT_ID,
+        pc.PERMISSION_AUTHORIZATION_CONTRACT_ID,
         pc.PERMISSION_ATTEMPT_CONTRACT_ID,
         pc.PERMISSION_RECORD_CONTRACT_ID,
         pc.PERMISSION_CLEANUP_CONTRACT_ID,
@@ -291,6 +293,15 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
     assert "permission_cells.SUBCELLS" in ADR_TEXT
     assert "--release-mode withheld|mismatched" in ADR_TEXT
     assert "MODE_MISMATCH" in ADR_TEXT
+    # The review corrections (PR #106 correction 1) are stated by the decision.
+    assert "### 2.4 Recovering the evidence of a completed row" in ADR_TEXT
+    assert "--recover-negative-evidence" in ADR_TEXT
+    assert "the authorization consumed durably" in ADR_PLAIN
+    assert "joined by identity, never by their order in time" in ADR_PLAIN
+    assert "an acknowledged stop is not a termination" in ADR_PLAIN
+    assert "No RunTask is ever retried" in ADR_PLAIN
+    assert "## 8. Corrections on review (PR #106, correction 1)" in ADR_TEXT
+    assert "--prepare-subcell" in ADR_TEXT and "LaunchStore.consume" in ADR_TEXT
     for status in pc.SubcellStatus:
         assert status.value in ADR_TEXT, status
     for cell in vc.REQUIRED_CELLS:
@@ -301,13 +312,13 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
 def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
     by_layer = {layer: sum(1 for s in pc.SUBCELLS if s.layer is layer) for layer in pc.Layer}
     assert len(pc.SUBCELLS) == 98 and "98 in" in ADR_PLAIN
-    assert by_layer[pc.Layer.L3_RUNTIME] == 58
+    assert by_layer[pc.Layer.L3_RUNTIME] == 56
     assert by_layer[pc.Layer.L3_BY_R1] == 6
-    assert by_layer[pc.Layer.BLOCKED] == 34
+    assert by_layer[pc.Layer.BLOCKED] == 36
     per_cell = {
         "R4-ACQUISITION": (34, 17, 0, 17),
         "R5-BUILD": (30, 15, 0, 15),
-        "R6-LAUNCHERS": (18, 12, 6, 0),
+        "R6-LAUNCHERS": (18, 10, 6, 2),
         "R7-QUALIFICATION": (12, 12, 0, 0),
         "R8-DELETION": (2, 0, 0, 2),
         "R9-FOUNDATION-TASK": (2, 2, 0, 0),
@@ -325,14 +336,17 @@ def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
     )
     assert "| R-5 build (`R5-BUILD`) | 30 | 15" in ADR_TEXT
     assert (
-        "| R-6 launchers (`R6-LAUNCHERS`) | 18 | 12" in ADR_TEXT and "| 6 (own revision" in ADR_TEXT
+        "| R-6 launchers (`R6-LAUNCHERS`) | 18 | 10" in ADR_TEXT and "| 6 (own revision" in ADR_TEXT
     )
+    assert "| 2 (`ExecuteCommand`: no running task of the actor to execute into) |" in ADR_TEXT
+    assert "56 / 6 / 36" in ADR_PLAIN
     assert "| R-7 qualification (`R7-QUALIFICATION`) | 12 | 12" in ADR_TEXT
     assert "| R-8 deletion (`R8-DELETION`) | 2 | — | — | 2 (no execution path) |" in ADR_TEXT
     assert "| R-9 foundation task role (`R9-FOUNDATION-TASK`) | 2 | 2" in ADR_TEXT
     assert "the 32 task-role subcells of R-4 and R-5" in ADR_PLAIN
     assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.TASK_PROBE_DEPENDENCY) == 32
     assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.DELETION_DEPENDENCY) == 2
+    assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.EXECUTE_COMMAND_DEPENDENCY) == 2
 
 
 def test_every_adr_0036_clause_of_r4_to_r9_is_held_by_a_subcell() -> None:
@@ -361,6 +375,8 @@ def test_the_two_required_mechanisms_are_named_and_not_implemented() -> None:
     assert "## 5. Required and not implemented" in ADR_TEXT
     assert "task-side permission probe entry" in ADR_PLAIN
     assert "execution path for the deletion role" in ADR_PLAIN
+    assert "running task of the actor" in ADR_PLAIN
+    assert "not a meaningful permission test" in pc.EXECUTE_COMMAND_DEPENDENCY
     assert "not implemented; not authorized by this ADR" in ADR_PLAIN
     assert "A human role never stands in for a task role" in ADR_PLAIN
     assert "human role is never a substitute for a task role" in pc.TASK_PROBE_DEPENDENCY

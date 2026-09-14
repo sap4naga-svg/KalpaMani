@@ -134,9 +134,18 @@ class Observation:
     upload_id: str | None = None
     #: ``"timeout"`` / ``"network"`` when the request never produced a response.
     transport_failure: str | None = None
-    #: The task ARN a ``RunTask`` answered with, when one did (the permission cells'
-    #: unexpected-success reaction stops exactly that task). Never rendered.
-    task_arn: str | None = None
+    #: Every task ARN a ``RunTask`` or ``ListTasks`` answered with (the permission cells'
+    #: unexpected-success reaction stops each; the cleanup settles each). Never rendered.
+    task_arns: tuple[str, ...] = ()
+    #: ``(task ARN, lastStatus)`` pairs a ``DescribeTasks`` answered with. Never rendered.
+    task_statuses: tuple[tuple[str, str], ...] = ()
+    #: The count of ``failures`` entries a ``RunTask`` answer carried beside its tasks.
+    failures: int = 0
+
+    @property
+    def task_arn(self) -> str | None:
+        """The first returned task ARN, when one was returned."""
+        return self.task_arns[0] if self.task_arns else None
 
     def __repr__(self) -> str:
         """Status and code only -- never the message."""

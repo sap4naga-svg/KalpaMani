@@ -22,6 +22,13 @@ execute       --execute-cell <id> + the flag + --authorization: the cell must be
               never a second launch of the same cell, never a retry of an uncertain one
 complete      --complete-cell <id> --launch-record --receipt-lines: the launch tool's
               --complete-row for the cell's record
+recover       --recover-negative-evidence <id> --launch-record --receipt-lines: for a
+              negative cell whose row is already REFUSED / RECEIPT_VERIFIED and whose
+              negative-evidence record is missing (an interruption between the row's
+              completion and the evidence write), re-verify the reservation, the launch
+              record and the receipt through the launch tool's own reader and record the
+              evidence; no launch, no new identity, no ledger change; repeatable; a
+              contradicting record refuses
 verdict       --verdict-cell R2-BLD-ISOLATION --launch-record --receipt-lines
               [--reachability-evidence]: the launch tool's --isolation-verdict; allowed while
               the cell is UNEXECUTED or INCONCLUSIVE, so a later transcription for the SAME
@@ -90,6 +97,9 @@ EXIT_REFUSED_CELL_STATE: Final = 4
 EXIT_REFUSED_PREREQUISITE: Final = 5
 EXIT_REFUSED_AUTHORIZATION: Final = 6
 EXIT_REFUSED_LEDGER_LOCKED: Final = 13
+EXIT_RECOVERED: Final = 0
+EXIT_ALREADY_RECORDED: Final = 0
+EXIT_REFUSED_EVIDENCE_CONFLICT: Final = 14
 
 SENTENCES: Final[dict[str, str]] = {
     "refused_arguments": "cells refused: the arguments were not admitted",
@@ -102,6 +112,14 @@ SENTENCES: Final[dict[str, str]] = {
     "refused_ledger_locked": "cells refused: the ledger is locked by another process",
     "prepared": "cell prepared offline; authorize its specification digest to execute it",
     "matrix": "completion matrix derived from recorded state; nothing was launched",
+    "recovered": "negative launch evidence recorded from the re-verified receipt; nothing launched",
+    "already_recorded": (
+        "negative launch evidence already recorded and consistent; nothing written, "
+        "nothing launched"
+    ),
+    "refused_evidence_conflict": (
+        "cells refused: a recorded negative launch evidence contradicts the re-verified receipt"
+    ),
 }
 
 
@@ -171,6 +189,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--execute-cell")
     mode.add_argument("--complete-cell")
     mode.add_argument("--verdict-cell")
+    mode.add_argument("--recover-negative-evidence")
     parser.add_argument("--identity")
     parser.add_argument("--slice", dest="slice_path", type=Path)
     parser.add_argument("--run-identity", dest="run_identities", action="append", default=[])
@@ -301,6 +320,7 @@ def permission_evidence(store: Any, binding: Any) -> Any:
 
     records: dict[str, list[Any]] = {}
     attempts: dict[str, list[Any]] = {}
+    statements: dict[str, list[Any]] = {}
     cleanups: list[Any] = []
     malformed = 0
     records_dir: Path = store._records_dir
@@ -309,6 +329,7 @@ def permission_evidence(store: Any, binding: Any) -> Any:
     parsers: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]] | None], ...] = (
         ("permission-record", pc.parse_permission_record, records),
         ("permission-attempt", pc.parse_permission_attempt, attempts),
+        ("permission-statement", pc.parse_permission_statement, statements),
         ("permission-cleanup", pc.parse_permission_cleanup, None),
     )
     for prefix, parse, sink in parsers:
@@ -325,6 +346,9 @@ def permission_evidence(store: Any, binding: Any) -> Any:
     return pc.PermissionEvidence(
         records={k: tuple(sorted(v, key=lambda r: r.started_at)) for k, v in records.items()},
         attempts={k: tuple(sorted(v, key=lambda a: a.started_at)) for k, v in attempts.items()},
+        statements={
+            k: tuple(sorted(v, key=lambda st: st.prepared_at)) for k, v in statements.items()
+        },
         cleanups=tuple(sorted(cleanups, key=lambda c: c.recorded_at)),
         malformed=malformed,
         binding=binding,
@@ -584,6 +608,102 @@ def _record_negative_evidence(
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
 
+def recover_negative_evidence(
+    arguments: argparse.Namespace,
+    launch: Any,
+    store: Any,
+    cell: vc.CellDefinition,
+    prepared: vc.PreparedCell,
+    evidence: vc.RecordedEvidence,
+    *,
+    now: datetime,
+    root_source: Any,
+) -> str:
+    """Record the negative launch evidence a completed row lacks, or confirm it is there.
+
+    Offline: the reservation, the launch record and the receipt are re-verified through
+    the launch tool's own reader (the reservation-to-record rule and the receipt-to-record
+    rule, unchanged), the ledger row must already read REFUSED / RECEIPT_VERIFIED for
+    this identity, the record must be this cell's prepared launch under its release mode,
+    and the evidence document is recomputed from the verified receipt. An existing record
+    that equals it (``recorded_at`` aside) means nothing to do; one that differs is a
+    contradiction and refuses; none means it is written. No launch, no new identity, no
+    ledger change, no binding check weakened.
+    """
+    from kalpamani.data.production.sharadar.launch_records import LedgerEvidence
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    assert cell.release_mode is not None
+    row = evidence.ledger.row(prepared.identity)
+    if (
+        row is None
+        or row.outcome != "REFUSED"
+        or row.evidence is not LedgerEvidence.RECEIPT_VERIFIED
+        or prepared.identity in evidence.unreconciled
+    ):
+        raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+    mode_argv = _launch_argv(arguments, cell, prepared.identity, with_release_mode=False)
+    mode_argv = [
+        a for a in mode_argv if a != "--authorization" and a != str(arguments.authorization)
+    ]
+    mode_argv += [
+        "--complete-row",
+        "--launch-record",
+        str(arguments.launch_record),
+        "--receipt-lines",
+        str(arguments.receipt_lines),
+    ]
+    try:
+        _store, record, verified = launch._record_and_receipt(
+            launch.parse_arguments(mode_argv), root_source=root_source
+        )
+    except (launch.LaunchRefusalError, StoreError, ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if (
+        record.identity != prepared.identity
+        or record.specification_digest != prepared.specification_digest
+        or record.release_mode is not cell.release_mode
+        or record.actor is not cell.actor
+    ):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    # The receipt's outcome must be the terminal state the launcher itself observed for
+    # this launch: two pieces of evidence for one launch that disagree are a
+    # contradiction, refused rather than recorded.
+    from kalpamani.data.production.sharadar.entry import EXIT_STATUS
+
+    if (
+        record.observed_exit_code is None
+        or EXIT_STATUS.get(verified.outcome) != record.observed_exit_code
+    ):
+        raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+    try:
+        document = vc.negative_evidence_document(
+            cell=cell,
+            identity=prepared.identity,
+            specification_digest=record.specification_digest,
+            release_mode=record.release_mode,
+            receipt=verified,
+            recorded_at=now,
+        )
+    except (ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if prepared.specification_digest in evidence.malformed_negative_evidence:
+        raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+    existing = evidence.negative_evidence.get(prepared.specification_digest, ())
+    if existing:
+        expected = {k: v for k, v in document.items() if k != "recorded_at"}
+        for found in existing:
+            recorded = {k: v for k, v in found.document().items() if k != "recorded_at"}
+            if recorded != expected:
+                raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+        return "already_recorded"
+    try:
+        store.write_record("negative-launch-evidence", document, at=now)
+    except StoreError:
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return "recovered"
+
+
 def _require_state(
     states: dict[str, vc.CellState],
     cell: vc.CellDefinition,
@@ -720,6 +840,28 @@ def main(
             for line in vc.matrix_lines(states):
                 print(line)
             return code
+        if arguments.recover_negative_evidence is not None:
+            cell = _cell(arguments.recover_negative_evidence, {vc.CellKind.NEGATIVE_LAUNCH})
+            if arguments.launch_record is None or arguments.receipt_lines is None:
+                raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+            if cell.cell_id not in prepared:
+                raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+            outcome = recover_negative_evidence(
+                arguments,
+                launch,
+                store,
+                cell,
+                prepared[cell.cell_id],
+                evidence,
+                now=clock(),
+                root_source=root_source,
+            )
+            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            states = vc.derive_states(evidence, prepared)
+            for line in vc.matrix_lines(states):
+                print(line)
+            print(SENTENCES[outcome])
+            return EXIT_RECOVERED if outcome == "recovered" else EXIT_ALREADY_RECORDED
         if arguments.complete_cell is not None or arguments.verdict_cell is not None:
             completing = arguments.complete_cell is not None
             cell = _cell(
@@ -796,6 +938,7 @@ __all__ = [
     "prepare_cell",
     "read_prepared",
     "recorded_evidence",
+    "recover_negative_evidence",
     "write_prepared",
 ]
 

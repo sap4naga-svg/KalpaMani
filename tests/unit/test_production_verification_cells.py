@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -1500,16 +1501,21 @@ def _refused_receipt_lines(record: lr.LaunchRecord, outcome: TaskOutcome) -> str
     return receipt_line(receipt) + "\n"
 
 
-def test_a_negative_cell_end_to_end_through_the_runner_on_fakes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Prepare, execute (the launch tool under WITHHELD), complete: the cell passes.
+@dataclass
+class _NegativeLaunch:
+    """A negative cell prepared and executed on fakes, ready for completion."""
 
-    No release is written by the launcher, one task runs and is observed to its refusal,
-    the receipt completes the row to REFUSED, the negative evidence record is written,
-    and the matrix reads the cell PASSED -- with the bootstrap cell still PASSED and
-    the identity never buildable.
-    """
+    cells: Any
+    scenario: Any
+    identity: str
+    record: Any
+    record_path: Path
+    receipt_lines: Path
+    complete: list[str]
+
+
+def _negative_cell_executed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> _NegativeLaunch:
+    """Prepare and execute R1-BLD-NO-RELEASE through the runner on fakes (see the test)."""
     case = TestIsolationVerdict()
     scenario, record_path, lines_path = case._verify_scenario(tmp_path)
     # The bootstrap cell: its record in the records directory, the RUN_ID row the build
@@ -1619,8 +1625,6 @@ def test_a_negative_cell_end_to_end_through_the_runner_on_fakes(
     assert cells.main(*execute) == runner.EXIT_REFUSED_CELL_STATE
     assert len(scenario.ecs.names("run_task")) == 1
 
-    # Complete with the refused receipt: the row reads REFUSED / RECEIPT_VERIFIED, the
-    # negative evidence record is written, the cell PASSED.
     lines = scenario.root / "negative-receipt.txt"
     lines.write_text(_refused_receipt_lines(record, TaskOutcome.REFUSED_NO_RELEASE), "utf-8")
     complete = [
@@ -1632,6 +1636,32 @@ def test_a_negative_cell_end_to_end_through_the_runner_on_fakes(
         "--receipt-lines",
         str(lines),
     ]
+    return _NegativeLaunch(
+        cells=cells,
+        scenario=scenario,
+        identity=identity,
+        record=record,
+        record_path=negative_record_path,
+        receipt_lines=lines,
+        complete=complete,
+    )
+
+
+def test_a_negative_cell_end_to_end_through_the_runner_on_fakes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Prepare, execute (the launch tool under WITHHELD), complete: the cell passes.
+
+    No release is written by the launcher, one task runs and is observed to its refusal,
+    the receipt completes the row to REFUSED, the negative evidence record is written,
+    and the matrix reads the cell PASSED -- with the bootstrap cell still PASSED and
+    the identity never buildable.
+    """
+    launched = _negative_cell_executed(tmp_path, capsys)
+    cells, scenario, identity = launched.cells, launched.scenario, launched.identity
+    record, complete = launched.record, launched.complete
+    # Complete with the refused receipt: the row reads REFUSED / RECEIPT_VERIFIED, the
+    # negative evidence record is written, the cell PASSED.
     assert cells.main(*complete) == launch.EXIT_ROW_COMPLETED
     out = capsys.readouterr().out
     assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=PASSED" in out
@@ -1726,3 +1756,101 @@ def test_the_runner_parses_every_verdict_record_and_reports_malformed_ones(
     verdicts, malformed, unreadable = runner._verdicts(store)
     assert malformed == frozenset({"ef" * 32}) and unreadable == 1
     assert set(verdicts) == {digest}
+
+
+def test_negative_evidence_is_recovered_offline_after_an_interrupted_completion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #106 correction 1, finding 5: interruption after --complete-row, before the write.
+
+    The ledger row reads REFUSED / RECEIPT_VERIFIED and the negative evidence is missing,
+    so the cell reads UNBOUND and completion cannot be repeated. The recovery mode
+    re-verifies the reservation, the launch record and the receipt through the launch
+    tool's own reader and records the missing evidence: no launch, no new identity, no
+    ledger change; repeatable; a contradicting record refuses.
+    """
+    launched = _negative_cell_executed(tmp_path, capsys)
+    cells, scenario, identity = launched.cells, launched.scenario, launched.identity
+    original = ls.LaunchStore.write_record
+
+    def interrupted(self: Any, prefix: str, document: Any, *, at: Any) -> Any:
+        if prefix == "negative-launch-evidence":
+            raise ls.StoreError(ls.StoreDefect.WRITE_FAILED)
+        return original(self, prefix, document, at=at)
+
+    monkeypatch.setattr(ls.LaunchStore, "write_record", interrupted)
+    assert cells.main(*launched.complete) == runner.EXIT_REFUSED_RECORDS
+    monkeypatch.setattr(ls.LaunchStore, "write_record", original)
+    row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row["outcome"] == "REFUSED" and row["evidence"] == "RECEIPT_VERIFIED"
+    assert scenario.files("negative-launch-evidence") == []
+    capsys.readouterr()
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=UNBOUND" in out
+    # Completing again is refused: the row is complete. Executing again is refused too.
+    assert cells.main(*launched.complete) == runner.EXIT_REFUSED_CELL_STATE
+    runs_before = len(scenario.ecs.names("run_task"))
+    recover = [
+        *cells.base(),
+        "--recover-negative-evidence",
+        "R1-BLD-NO-RELEASE",
+        "--launch-record",
+        str(launched.record_path),
+        "--receipt-lines",
+        str(launched.receipt_lines),
+    ]
+    # A receipt whose outcome contradicts the terminal state the launcher observed for
+    # this launch, or a record that is not this cell's launch, refuses before anything
+    # is written; the binding checks are the launch tool's own.
+    wrong = scenario.root / "wrong-receipt.txt"
+    wrong.write_text(
+        _refused_receipt_lines(launched.record, TaskOutcome.REFUSED_RELEASE_MISMATCH), "utf-8"
+    )
+    assert cells.main(*recover[:-1], str(wrong)) == runner.EXIT_REFUSED_EVIDENCE_CONFLICT
+    assert scenario.files("negative-launch-evidence") == []
+    other_record = scenario.root / "other-record.json"
+    other_record.write_bytes(scenario.files("launch-record")[0].read_bytes())
+    assert cells.main(
+        *recover[:-3], str(other_record), "--receipt-lines", str(launched.receipt_lines)
+    ) == (runner.EXIT_REFUSED_RECORDS)
+    assert scenario.files("negative-launch-evidence") == []
+    capsys.readouterr()
+    # Recovery records the evidence from the re-verified receipt; the cell reads PASSED.
+    assert cells.main(*recover) == runner.EXIT_RECOVERED
+    out = capsys.readouterr().out
+    assert runner.SENTENCES["recovered"] in out
+    assert "cell=R1-BLD-NO-RELEASE ref=R-1 kind=NEGATIVE_LAUNCH status=PASSED" in out
+    files = scenario.files("negative-launch-evidence")
+    assert len(files) == 1
+    parsed = vc.parse_negative_launch_evidence(files[0].read_bytes())
+    assert parsed.receipt_outcome is TaskOutcome.REFUSED_NO_RELEASE and not parsed.released
+    assert len(scenario.ecs.names("run_task")) == runs_before
+    row_after = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row_after == row
+    # Repeatable: nothing written twice, nothing launched.
+    assert cells.main(*recover) == runner.EXIT_ALREADY_RECORDED
+    assert runner.SENTENCES["already_recorded"] in capsys.readouterr().out
+    assert len(scenario.files("negative-launch-evidence")) == 1
+    assert len(scenario.ecs.names("run_task")) == runs_before
+    # A contradicting record is refused, never overwritten or reconciled away.
+    contradiction = json.loads(files[0].read_bytes())
+    contradiction["receipt_outcome"] = TaskOutcome.REFUSED_RELEASE_MISMATCH.value
+    (scenario.records / "negative-launch-evidence-20260914T190000Z-ffff.json").write_bytes(
+        encode(contradiction)
+    )
+    assert cells.main(*recover) == runner.EXIT_REFUSED_EVIDENCE_CONFLICT
+    assert runner.SENTENCES["refused_evidence_conflict"] in capsys.readouterr().out
+    assert len(scenario.files("negative-launch-evidence")) == 2
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    assert "kind=NEGATIVE_LAUNCH status=UNBOUND" in capsys.readouterr().out
+    # The mode is for a negative cell whose row is complete: a positive cell, or an
+    # unprepared or still LAUNCHED negative cell, is refused.
+    assert cells.main(*recover[:-5], "R1-BLD-BOOTSTRAP", *recover[-4:]) == (
+        runner.EXIT_REFUSED_ARGUMENTS
+    )
+    assert cells.main(*recover[:-5], "R1-ACQ-NO-RELEASE", *recover[-4:]) == (
+        runner.EXIT_REFUSED_CELL_STATE
+    )
+    for canary in (*CANARIES, identity):
+        assert canary not in out
