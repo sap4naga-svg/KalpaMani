@@ -2005,6 +2005,7 @@ __all__ = [
     "CleanupKey",
     "Expectation",
     "Layer",
+    "ObservedClass",
     "Operation",
     "PermissionAttempt",
     "PermissionBinding",

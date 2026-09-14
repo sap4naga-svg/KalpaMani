@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -112,8 +113,8 @@ class FakePermissionClient:
         self.attempt_files_seen: list[int] = []
         self.records_dir: Path | None = None
 
-    def _next(self, name: str, **kwargs: Any) -> r3.Observation:
-        self.calls.append((name, kwargs))
+    def _next(self, operation: str, /, **kwargs: Any) -> r3.Observation:
+        self.calls.append((operation, kwargs))
         if self.records_dir is not None:
             self.attempt_files_seen.append(len(list(self.records_dir.glob("permission-attempt-*"))))
         if not self.answers:
@@ -344,13 +345,14 @@ class TestTargets:
             "control_bucket_name": CONTROL_BUCKET,
         }
         assert pc.parse_permission_targets(canonical_bytes(document)) == TARGETS
-        for mutate in (
+        mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
             lambda d: d.__setitem__("foundation_task_role_arn", "not-an-arn"),
             lambda d: d.__setitem__("qualification_secret_arn", "not-an-arn"),
             lambda d: d.__setitem__("control_bucket_name", "Bad Bucket"),
             lambda d: d.pop("control_bucket_name"),
             lambda d: d.__setitem__("extra", 1),
-        ):
+        )
+        for mutate in mutations:
             broken = dict(document)
             mutate(broken)
             with pytest.raises(ValueError):
@@ -531,7 +533,7 @@ class TestEngine:
         record = _record("R4-LIST-HUMAN")
         document = record.document()
         assert pc.parse_permission_record(canonical_bytes(document)) == record
-        for mutate, why in (
+        contradictions: tuple[tuple[Callable[[dict[str, Any]], object], str], ...] = (
             (lambda d: d.__setitem__("outcome", "INVERTED"), "outcome contradicts the class"),
             (lambda d: d.__setitem__("operation", "S3_GET"), "contradicts the subcell definition"),
             (lambda d: d.__setitem__("created_key", "silver/x"), "created key without a success"),
@@ -542,7 +544,8 @@ class TestEngine:
             (lambda d: d.__setitem__("subcell_id", "R4-NOTHING"), "unknown subcell"),
             (lambda d: d["binding"].__setitem__("registration_sha256", "zz"), "binding digest"),
             (lambda d: d.__setitem__("extra", 1), "closed fields"),
-        ):
+        )
+        for mutate, why in contradictions:
             broken = json.loads(json.dumps(document))
             mutate(broken)
             with pytest.raises(ValueError):
@@ -913,7 +916,7 @@ class _Tool:
 
     def caller_identity(self, profile: str) -> object:
         self.identity_calls.append(profile)
-        from fixtures.production_launch import caller_identity
+        from fixtures.production_runtime import caller_identity
 
         for actor in (ACQ, BLD):
             constants = constants_for(actor)
@@ -948,6 +951,9 @@ class _Tool:
             str(self.scenario.acquisition_configuration),
         ]
 
+    def _gate(self, name: str) -> None:
+        self.gate_calls.append(name)
+
     def fields(self, **overrides: Any) -> dict[str, Any]:
         fields: dict[str, Any] = {
             "env": self.env,
@@ -955,8 +961,8 @@ class _Tool:
             "now": self.clock.now,
             "client_factory": self.factory,
             "caller_identity": self.caller_identity,
-            "foundation_gate": lambda: (self.gate_calls.append("foundation"), None)[1],
-            "qualification_gate": lambda a: (self.gate_calls.append(a), None)[1],
+            "foundation_gate": lambda: self._gate("foundation"),
+            "qualification_gate": self._gate,
             "expected_account": lambda: ACCOUNT,
             "load_environment_binding": self.environment_binding,
             "read_private": lambda path: Path(path).read_bytes(),
@@ -1021,7 +1027,7 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
         tool.EXIT_REFUSED_IDENTITY
     )
     assert t.identity_calls == []
-    from fixtures.production_launch import caller_identity
+    from fixtures.production_runtime import caller_identity
 
     assert (
         t.main(*execute, caller_identity=lambda _p: caller_identity(launcher_identity_arn(ACQ)))
@@ -1133,6 +1139,7 @@ def test_cleanup_runs_under_the_control_principal_over_every_recorded_key(
     assert control.gate_calls == ["foundation"] and control.identity_calls == []
     assert control.constructions == [(r3.CONTROL_PROFILE, "us-east-1")]
     deleted = sorted(c[1]["key"] for c in control.client.calls if c[0] == "delete_object")
+    assert record.created_key is not None and attempt.key is not None
     assert deleted == sorted([record.created_key, attempt.key])
     # The matrix now reads the creating subcell PASSED (created and confirmed removed).
     evidence = runner.permission_evidence(t.scenario.store(), record.binding)
@@ -1247,7 +1254,7 @@ class TestBoto3Adapter:
             built._endpoint.http_session = transport
             return built
 
-        adapter._client = client  # type: ignore[method-assign]
+        adapter._client = client
         return adapter, transport
 
     def test_every_service_call_is_one_attempt_with_the_documented_parameters(
@@ -1264,7 +1271,7 @@ class TestBoto3Adapter:
         transport.script = [(503, _xml_error("SlowDown"))]
         assert r3.classify(adapter.get_object(BUCKET, "silver/x")) is r3.ObservedClass.THROTTLED
         assert transport.sends == 2  # a retryable answer is NOT retried
-        for service_call in (
+        service_calls: tuple[Callable[[], Any], ...] = (
             lambda: adapter.list_objects(BUCKET),
             lambda: adapter.delete_object(BUCKET, "silver/x"),
             lambda: adapter.head_object(BUCKET, "silver/x"),
@@ -1273,7 +1280,8 @@ class TestBoto3Adapter:
             lambda: adapter.get_parameter("/kalpamani/production/x"),
             lambda: adapter.put_parameter("/kalpamani/production/x", "marker"),
             lambda: adapter.execute_command(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN),
-        ):
+        )
+        for service_call in service_calls:
             before = transport.sends
             transport.script = [(403, b'{"__type":"AccessDeniedException","message":"synthetic"}')]
             observation = service_call()
