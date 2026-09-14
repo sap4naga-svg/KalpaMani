@@ -90,8 +90,8 @@ type into this repository, and none of it was supplied to finish the offline wor
 |---|---|---|
 | the R-3 record (`kalpamani-r3-verification-record/v1`), result `VERIFIED`, attesting to the current `storage.tf` and binding | S4 (stage a applied) and one authorized R-3 session | S5a (`production_r3_verification_digest`), S6, the cell runner's `R3` cell |
 | the four profile preflights and both human bindings | S6 (stage b) and S7 | the launch tool's bootstrap; the cell runner |
-| a `VERIFIED` ledger row with `RECEIPT_VERIFIED` evidence per bootstrap cell | one authorized launch per cell, the owner's receipt lines | `R1-*-BOOTSTRAP` PASSED; the verdict cell |
-| the isolation verdict record | the build bootstrap cell PASSED and one transcribed analysis (D-16) | `R2-BLD-ISOLATION` |
+| a `VERIFIED` ledger row with `RECEIPT_VERIFIED` evidence per bootstrap cell, its reservation and launch record bound to the prepared specification and to the inputs now registered | one authorized launch per cell, the owner's receipt lines; a later change to the registered target or placement makes the row `HISTORICAL` and requires re-verification (ADR-0045 §7) | `R1-*-BOOTSTRAP` PASSED; the verdict cell |
+| the isolation verdict record | the build bootstrap cell PASSED and one transcribed analysis (D-16); an `INCONCLUSIVE` verdict is re-evaluated for the same launch with a later qualifying transcription — no relaunch | `R2-BLD-ISOLATION` |
 | Route B observation receipts, the first production Bronze, the first manifest | S10a–S10c | later gates, unchanged |
 
 ### D.3 Permissions still requiring a decision (recorded, not granted)

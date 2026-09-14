@@ -250,12 +250,20 @@ a transcribed analysis, and no analysis is made and no permission granted by thi
 ## F-10 — the verification tooling (G-4, G-5, G-6), proposed ADR-0046
 
 **Disposition: implemented offline, proposed.** The human-binding materializer, the R-3 tool and the
-cell runner compose accepted contracts and add two closed records; none reaches AWS by default and each
+cell runner compose accepted contracts and add two closed records — and close a third, the verdict
+document the launch tool already writes; none reaches AWS by default and each
 authorized branch is opened by its own flag under its own written authorization. **Materializing a
 binding is not verifying an identity**; **an R-3 record attests only to the declaration and binding it
-names**; **a cell matrix is derived from the ledger, the reservations and the records, never
-remembered**; **the aggregate cannot read VERIFIED while the negative R-1 cells are undecided**
-(ADR-0046 §4). ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
+names**, its positive control **confirmed absent only by row 9's `404`** and its client held to **one
+transport attempt** (`total_max_attempts: 1`); **a cell matrix is derived from the ledger, the
+reservations, the launch records and the verdict records, never remembered** — a receipt-verified row
+passes only through its bound chain against the registration now in force (`HISTORICAL` when that
+changed, `UNBOUND` when the chain is missing, malformed or substituted), a verdict cell resolves its
+records deterministically (`FAILED` never erased; an `INCONCLUSIVE` re-evaluated for the same launch
+with no relaunch and no new probe); **the aggregate cannot read VERIFIED while the negative R-1 cells
+are undecided** (ADR-0046 §4). The four PR #105 review findings — the SDK retry budget, the unbound
+evidence chain, the permanent `INCONCLUSIVE`, the row-9 confirmation — were reproduced against
+`cf484410…` before the corrections and are held by the tests named in readiness §10. ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
 request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
 
 ## Validation performed for this cycle

@@ -75,8 +75,14 @@ refuses automation, requires `AWS_PROFILE` pinned to the control profile `kalpam
 the foundation identity gate to pass (one `sts:GetCallerIdentity`, compared with the local account
 binding, PASS/FAIL only), loads the environment binding for the bucket and holds its account to the
 governed one, digests the tracked declaration (`infra/aws/research-data-plane/storage.tf`), builds one
-S3 client (one attempt, finite connect and read timeouts) **only then**, runs the procedure, and writes
-the record exclusively under `KALPAMANI_PRODUCTION_R3_RECORD_DIR`. It prints the result and the two
+S3 client **only then** — `retries={"total_max_attempts": 1, "mode": "standard"}` with finite connect
+and read timeouts, so every operation is **one transport attempt**, a retryable answer (`SlowDown`,
+`500`, a timeout) included — runs the procedure, and writes the record exclusively under
+`KALPAMANI_PRODUCTION_R3_RECORD_DIR`. The SDK's `max_attempts` counts attempts *after* the first
+request, so `max_attempts: 1` had permitted a second; the effective budget is asserted from the
+constructed client's own configuration and observed at the transport (a counting fake in place of
+the client's HTTP session, under invented static credentials — no profile, no discovery, no socket),
+never assumed from the request. It prints the result and the two
 counts, and the record digest **only** when the result is `VERIFIED` (readiness S5a).
 
 **Classification is the evidence.** Every answer is one closed `ObservedClass`: `OK_200`, `OK_204`,
@@ -111,6 +117,18 @@ for cleanup purposes. A multipart creation that may have succeeded with no `Uplo
 aborted and is residue. All of it stays inside the ten-operation budget, and a failed row leaves R-3
 `NOT_VERIFIED` whatever the cleanup restored.
 
+**Row 8 acknowledges; row 9 confirms.** A `204` on row 8 is the service accepting the delete, not the
+object's absence: the positive control is **confirmed absent only when row 9 observes `404`**. Any
+other row-9 answer — `200` (the object is still there), a timeout, an access denial, a network
+failure, an ambiguous answer — leaves the object unconfirmed: row 9 stays a failed row, the tool
+performs the bounded cleanup (`DeleteObject`, then `HeadObject` held to `404`) inside the same
+ten-operation budget, and the record carries the failed row **and** the cleanup rows. A later
+confirmation restores the bucket and nothing else — the result is `NOT_VERIFIED`; an unconfirmed
+object after cleanup, a refused cleanup delete or an exhausted budget is residue, and the result is
+`NOT_VERIFIED_CLEANUP_UNRESOLVED`. `parse_r3_record` reads confirmation the same way (row 9's
+observed class is `NOT_FOUND_404`, never row 8's `204`) and refuses a record that claims removal
+from row 8 alone. **No cleanup outcome makes a failed verification `VERIFIED`.**
+
 ### 2.3 The verification cell runner (`scripts/production_verification_cells.py`, `verification_cells.py`)
 
 The required cells are enumerated from ADR-0036 §3 and readiness §4.3 as closed definitions — each
@@ -130,11 +148,56 @@ document (`kalpamani-verification-cells/v1`, beside the ledger at `<ledger>.cell
 atomically under the ledger lock): which `verify-` identity and which specification digest each
 runtime cell was prepared with — one identity per cell, refused for a second. Every status is
 derived from the owner ledger, the reservations beside it, the verdict records in the records
-directory, the R-3 record and the launch-inputs record: `UNEXECUTED`, `BLOCKED` (a prerequisite not
-`PASSED`, or the cell cannot be executed yet), `PREPARED`, `INTERRUPTED` (reserved, unrecorded —
-recover with the launch tool, never relaunch), `LAUNCHED` (a row from the exit code only — a missing
-receipt cannot pass), `PASSED`, `REFUSED`, `INCONCLUSIVE`, `FAILED`. The aggregate is `VERIFIED`
-only when every required cell is `PASSED`, `FAILED` on any `FAILED`, otherwise `INCOMPLETE`.
+directory, the launch records in the records directory, the R-3 record and the launch-inputs
+record: `UNEXECUTED`, `BLOCKED` (a prerequisite not `PASSED`, or the cell cannot be executed yet),
+`PREPARED`, `INTERRUPTED` (reserved, unrecorded — recover with the launch tool, never relaunch),
+`LAUNCHED` (a row from the exit code only — a missing receipt cannot pass), `PASSED`, `REFUSED`,
+`INCONCLUSIVE`, `FAILED`, `HISTORICAL` (bound evidence for a target or placement other than the one
+now registered — ADR-0045 §7's re-verification rule, checked rather than remembered), `UNBOUND`
+(evidence that is missing, malformed, contradictory or for another specification, identity, actor
+or kind — reported, never ignored, never passed). The aggregate is `VERIFIED` only when every
+required cell is `PASSED`, `FAILED` on any `FAILED`, otherwise `INCOMPLETE`; `HISTORICAL` and
+`UNBOUND` are `INCOMPLETE`, and a cell behind one is `BLOCKED`.
+
+**A receipt-verified row passes only through its whole chain.** A `VERIFIED` / `RECEIPT_VERIFIED`
+ledger row is a claim the runner binds before it is a pass: the **reservation** beside the ledger
+for the prepared identity must carry the prepared specification digest, this cell's actor, the
+verification kind and this cell's entry; the **launch record** in the records directory for that
+identity must name the same digest, identity, actor, kind and entry, carry the reservation's
+target (task-definition revision, image digest, configuration digest, code commit) and a verified
+network interface; two launch records for one identity bind neither. The bound evidence is then
+held **against the launch-inputs record now registered**: the specification compiled from the
+current inputs for this actor must equal the reservation's, target and placement alike — otherwise
+the row is `HISTORICAL`. A row with no reservation, no launch record, a reservation for another
+specification or a substituted record is `UNBOUND`. The runner derives every status from files it
+reads and performs no external operation to do so; what it trusts is the owner ledger, the
+reservations the launch tool wrote under the ledger lock and the records it wrote, and it trusts
+them **only where they agree with each other and with the current registration**.
+
+**Verdict records are parsed closed.** Each `isolation-verdict-*` record is read through the
+`kalpamani-isolation-verdict/v1` contract (§3): `schema_version`, `contract_id`, the actor and
+kind, the specification digest, the receipt's probe block, the verdict block, whether evidence was
+supplied, and the instant — no other field, and no field absent. A document whose blocks disagree
+is refused: a `CORROBORATED` verdict over a `CONNECTED` probe, `OBSERVED_CONNECTION` over any other
+result, a `NO_ATTEMPT` reason over a probe that attempted, a corroboration or an evidence-dependent
+reason with no evidence supplied, `NO_CORROBORATION` beside supplied evidence, a verdict or
+`analysis_bound` the reason does not imply. `CONNECTED` is `FAILED` and nothing else. An unreadable
+or refused record is counted and reported, and any such record for a prepared launch makes its
+verdict cell `UNBOUND`; a document for another actor or kind does not bind. The records for one
+launch resolve deterministically: no document is `UNEXECUTED`; **any `FAILED` is `FAILED`** whatever
+was recorded beside it; records carrying different probe blocks are not one launch's and conflict;
+a `VERIFIED` beside an `INCONCLUSIVE` whose reason a later analysis cannot resolve (`NO_ATTEMPT`,
+`DESTINATION_UNBOUND`, `PATH_FOUND_CONTRADICTS_OBSERVATION`) conflicts; a `VERIFIED` otherwise is
+`PASSED`; the rest is `INCONCLUSIVE`. A conflict is `UNBOUND`, never a pass.
+
+**An `INCONCLUSIVE` verdict is re-evaluated for the same launch, never relaunched.** `--verdict-cell`
+is admitted from `UNEXECUTED` and from `INCONCLUSIVE`; it re-runs the launch tool's `--isolation-verdict`
+on the **same** launch record, receipt lines and configuration — no new launch, no new probe — and
+appends one more verdict record; every earlier record is preserved. Qualifying, bound corroboration
+(the analysis over this launch's interface, its destination and inside its task window, succeeded,
+no path found) resolves `NO_CORROBORATION` and the other insufficiencies to `PASSED`; a
+wrong-source, wrong-destination, stale or contradictory transcription adds an `INCONCLUSIVE` record
+and promotes nothing. A `PASSED` or `FAILED` verdict cell is not re-evaluated.
 
 **Execution composes the launch tool and adds nothing.** `--prepare-cell` is the launch tool's
 offline preparation (specification written, digest printed; no client). `--execute-cell` requires the
@@ -142,7 +205,8 @@ flag, the cell exactly `PREPARED`, every prerequisite `PASSED`, and an authoriza
 prepared digest and identity — then exactly the launch tool's authorized branch, once; a cell that is
 `LAUNCHED`, `INTERRUPTED` or consumed is refused, and no authorization is generated or reused.
 `--complete-cell` and `--verdict-cell` are the launch tool's `--complete-row` and
-`--isolation-verdict` for the cell's record. Bootstrap completion and R-2 isolation are separate
+`--isolation-verdict` for the cell's record (`--verdict-cell` also from `INCONCLUSIVE`, for the
+same launch — above). Bootstrap completion and R-2 isolation are separate
 cells; receipt collection stays deferred (ADR-0044 §5) and the owner supplies the receipt lines and
 the analysis transcription. **No bypass switch exists** (`--all`, `--retry`, `--force`,
 `--skip-prerequisites`, `--bypass`, `--relaunch`, `--auto-authorize` are refused by name), and no
@@ -154,9 +218,15 @@ production processing path changed.
 |---|---|
 | `kalpamani-r3-verification-record/v1` | `r3_verification.py`: `R3Record`, `parse_r3_record`, `record_attests` |
 | `kalpamani-verification-cells/v1` | `verification_cells.py`: `PreparedCell`, `parse_cells_document` |
+| `kalpamani-isolation-verdict/v1` | `probe.py`: `IsolationVerdictDocument`, `parse_isolation_verdict_document` — the document the ADR-0045 launch tool already writes, now a closed, bounded (64 KiB) contract with the consistency rules of §2.3 |
 
-No accepted contract changed. The production bindings, the launch specification, the reservation, the
-launch record, the receipt and the verdict record are read and written exactly as ADR-0045 left them.
+**One contract change, stated.** The launch tool's verdict record was written under ADR-0045 with
+the contract identifier and the nine fields above but was read open — the first cell runner accepted
+any object carrying that identifier, a digest and a `verdict.verdict` token. It is now a contract:
+what the tool writes is unchanged byte for byte; what a reader accepts is the closed document, and
+nothing less. The production bindings, the launch specification, the reservation, the launch record
+and the receipt are read and written exactly as ADR-0045 left them; the runner reads the reservation
+and launch records it already had access to and adds no field to any of them.
 
 ## 4. Deferred: the negative R-1 cells
 
