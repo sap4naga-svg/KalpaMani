@@ -1,4 +1,4 @@
-"""The R-3 verification tool (ADR-0036 §2.7 / §3; proposed ADR-0046). **Refuses by default.**
+"""The R-3 verification tool (ADR-0036 §2.7 / §3; ADR-0046). **Refuses by default.**
 
 R-3 is the application-gate prerequisite: proof, by a single refused request under the
 otherwise-authorized **control principal** (the foundation's Terraform-apply profile,

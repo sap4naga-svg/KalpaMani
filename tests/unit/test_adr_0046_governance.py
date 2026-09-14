@@ -29,8 +29,18 @@ TWELVE_DIGITS: Final = re.compile(r"\b\d{12}\b")
 
 
 def test_the_adr_exists_is_proposed_and_names_its_gates() -> None:
+    # The conditional status line is kept as the record of the days before the merge; the
+    # post-merge note beside it records that the condition has been satisfied.
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0046-*.md"))] == [ADR.name]
     assert "Status: " + PROPOSED in ADR_TEXT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #105 merged" in ADR_PLAIN and "5174dcf290b4837d38af8ce4a4b975c6557e482e" in ADR_TEXT
+    assert (
+        "c4436648d90d39baa3769e990887e6f0f239df40" in ADR_TEXT
+        and "af20f36acbe8a3006830762fbad5cb01d1e9b38b" in ADR_TEXT
+    )
+    assert "ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert "Acceptance authorized no R-3 session" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     assert "## 6. Effectiveness and execution gates" in ADR_TEXT
     assert "Nothing was run to produce this decision" in ADR_PLAIN

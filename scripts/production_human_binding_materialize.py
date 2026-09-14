@@ -1,4 +1,4 @@
-"""Materialize one production HUMAN runtime binding (ADR-0036 §2.5; proposed ADR-0046).
+"""Materialize one production HUMAN runtime binding (ADR-0036 §2.5; ADR-0046).
 
 **Refused by default.**
 
