@@ -629,10 +629,15 @@ def test_the_dockerfile_copies_only_the_allowlisted_sources_and_the_declared_con
     assert dockerfile.count("COPY --chmod=0444 configuration/compiled-configuration.json") == 2
     assert dockerfile.count("ARG CONFIGURATION_DIGEST") == 2
     assert (
-        dockerfile.count('hashlib.sha256(raw).hexdigest() == os.environ["CONFIGURATION_DIGEST"]')
+        dockerfile.count('hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]')
         == 2
     )
-    assert dockerfile.count('document.get("code_commit") == commit') == 2
+    assert dockerfile.count('document.get("code_commit") != commit') == 2
+    # Every refusal is a closed sentence; no clause prints a digest, a commit or a field.
+    assert dockerfile.count("image check refused: ") == 2
+    for line in dockerfile.splitlines():
+        if line.strip().startswith("refuse("):
+            assert "{" not in line and "%" not in line and "+" not in line.split("refuse(")[1]
     for entry in TaskEntry:
         assert f"EXPECTED_ENTRY={entry.value} python" in dockerfile
     # The Dockerfile itself is archived from the tree, so a build uses the commit's own.

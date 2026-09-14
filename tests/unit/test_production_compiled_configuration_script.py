@@ -229,7 +229,7 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
     assert "pip install --no-deps --no-build-isolation ." in dockerfile
     assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
     assert "BUILD_BACKEND" in dockerfile
-    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 == 0o055') == 2
+    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 2
     assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 2
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert ignore[0].startswith("#") and "*" in ignore
