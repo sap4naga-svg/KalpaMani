@@ -172,6 +172,7 @@ def run_build_entry(*, configuration: EntryConfiguration, factories: BuildFactor
         code_commit=configuration.compiled.code_commit,
         configuration_digest=configuration.compiled.configuration_digest,
         evidence=report.bootstrap.evidence,
+        schema_observation=report.schema_observation,
     )
 
 

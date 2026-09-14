@@ -39,6 +39,7 @@ completeness nor snapshot consistency.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -52,6 +53,11 @@ from kalpamani.data.production.sharadar.pagination import (
     PaginationError,
     PaginationSummary,
     admit_pagination,
+)
+from kalpamani.data.production.sharadar.schema_observation import (
+    OBSERVED_DATASETS,
+    DatasetObservation,
+    SchemaObservation,
 )
 from kalpamani.data.qualify.sharadar.parser import ParsedPage, ParseError, parse_payload
 
@@ -106,14 +112,26 @@ class SilverDefect(StrEnum):
 
 
 class SilverError(Exception):
-    """One closed defect, raised ``from None``."""
+    """One closed defect, raised ``from None``.
 
-    __slots__ = ("defect",)
+    ``observation`` is the per-dataset schema observation collected before a
+    ``SCHEMA_UNSTABLE`` refusal (proposed ADR-0045, Route B) -- evidence for owner
+    review, never an accepted set -- and ``None`` for every other defect.
+    """
 
-    def __init__(self, defect: SilverDefect) -> None:
+    __slots__ = ("defect", "observation")
+
+    def __init__(
+        self, defect: SilverDefect, *, observation: SchemaObservation | None = None
+    ) -> None:
         if type(defect) is not SilverDefect:
             raise TypeError("defect must be an exact SilverDefect member")
+        if observation is not None and type(observation) is not SchemaObservation:
+            raise TypeError("observation must be an exact SchemaObservation or None")
+        if observation is not None and defect is not SilverDefect.SCHEMA_UNSTABLE:
+            raise ValueError("an observation accompanies a schema refusal only")
         self.defect = defect
+        self.observation = observation
         super().__init__(f"silver normalization refused: {defect.value}")
 
 
@@ -301,15 +319,52 @@ def _order_key(page: AcquiredPage) -> tuple[datetime, str, int]:
     return (page.retrieved_at, page.run_id, page.ordinal)
 
 
-def _parse(page: AcquiredPage, *, schemas: AcceptedSchemas) -> ParsedPage:
+def _parse_only(page: AcquiredPage) -> ParsedPage:
     try:
         dataset = SharadarDataset(page.dataset)
     except ValueError:
         raise _refuse(SilverDefect.DATASET_UNKNOWN) from None
     try:
-        parsed = parse_payload(page.payload, dataset=dataset)
+        return parse_payload(page.payload, dataset=dataset)
     except ParseError:
         raise _refuse(SilverDefect.PAYLOAD_UNPARSEABLE) from None
+
+
+def observe_schemas(pages: Iterable[AcquiredPage]) -> SchemaObservation:
+    """The per-dataset header digests of every page that parses, and the page accounting.
+
+    Nothing here consults an accepted set: the observation is what the deliveries
+    *say*, recorded before admission decides anything. A page that does not parse is
+    counted and unobserved, which makes the observation **partial** rather than
+    letting an unparseable header vanish into a claim of completeness.
+    """
+    digests: dict[str, set[str]] = {name: set() for name in OBSERVED_DATASETS}
+    parsed_count: dict[str, int] = dict.fromkeys(OBSERVED_DATASETS, 0)
+    total: dict[str, int] = dict.fromkeys(OBSERVED_DATASETS, 0)
+    for page in pages:
+        if page.dataset not in total:
+            continue
+        total[page.dataset] += 1
+        try:
+            parsed = _parse_only(page)
+        except SilverError:
+            continue
+        parsed_count[page.dataset] += 1
+        digests[page.dataset].add(parsed.schema_digest)
+    return SchemaObservation(
+        datasets={
+            name: DatasetObservation(
+                digests=tuple(sorted(digests[name])),
+                pages_parsed=parsed_count[name],
+                pages_total=total[name],
+            )
+            for name in OBSERVED_DATASETS
+        }
+    )
+
+
+def _parse(page: AcquiredPage, *, schemas: AcceptedSchemas) -> ParsedPage:
+    parsed = _parse_only(page)
     if not schemas.admits(page.dataset, parsed.schema_digest):
         raise _refuse(SilverDefect.SCHEMA_UNSTABLE)
     return parsed
@@ -591,8 +646,27 @@ def normalize(inputs: VerifiedBuildInputs, *, schemas: AcceptedSchemas) -> Silve
     parsed_pages: dict[str, list[tuple[AcquiredPage, ParsedPage]]] = {
         member.value: [] for member in SharadarDataset
     }
-    for page in inputs.pages():
-        parsed_pages[page.dataset].append((page, _parse(page, schemas=schemas)))
+    pages = list(inputs.pages())
+    unadmitted = False
+    unparseable = False
+    for page in pages:
+        try:
+            parsed_pages[page.dataset].append((page, _parse(page, schemas=schemas)))
+        except SilverError as error:
+            if error.defect is SilverDefect.SCHEMA_UNSTABLE:
+                unadmitted = True
+            elif error.defect is SilverDefect.PAYLOAD_UNPARSEABLE:
+                unparseable = True
+            else:
+                raise
+    if unadmitted:
+        # Route B (proposed ADR-0045): every page's header is observed before the
+        # refusal, so an observation build reports what the deliveries carry -- as
+        # evidence, never as an accepted set -- with zero writes. A page that did not
+        # parse stays unobserved and makes the observation partial, never complete.
+        raise SilverError(SilverDefect.SCHEMA_UNSTABLE, observation=observe_schemas(pages))
+    if unparseable:
+        raise _refuse(SilverDefect.PAYLOAD_UNPARSEABLE)
     pagination = _admit_pages([item for pages in parsed_pages.values() for item in pages])
     tickers_pages = parsed_pages[SharadarDataset.TICKERS.value]
     mapping = _snapshot_mapping(tickers_pages)
@@ -629,5 +703,6 @@ __all__ = [
     "SilverError",
     "SilverLayer",
     "normalize",
+    "observe_schemas",
     "security_id_for",
 ]
