@@ -4,35 +4,41 @@ One authorized launch of one identity of one kind -- production or verification 
 actor, composing the accepted libraries and adding nothing to their contracts:
 
 ```text
-records      the owner ledger, the launch-inputs record (Terraform outputs and image-gate
-             values the owner transcribed), the owner's written authorization record, the
-             slice (acquisition) or the run identities (build) -- each parsed closed by
-             kalpamani.data.production.sharadar.launch_records
-input        acquisition input v2 / build input v1, materialized with the accepted digest
-             functions and re-parsed under the task's own contract before it leaves the tool
-launch       CompiledLaunch from the records; human_bootstrap under the actor's human profile
-             and again under its launcher profile; launch_authorized_run on real clients
-             built ONLY inside the authorized branch; a launch record and a sanitized
-             evidence document; one EXIT_CODE_ONLY ledger row
+records      the owner ledger, the launch-inputs record (Terraform outputs, image-gate values
+             and the transcribed task-definition evidence), the owner's written authorization
+             record, the slice (acquisition) or the run identities (build) -- each parsed
+             closed by kalpamani.data.production.sharadar.launch_records
+prepare      (no flag) the canonical LAUNCH SPECIFICATION is built from the admitted records,
+             written beside the ledger for review, and its digest printed -- the value the
+             owner's authorization must name; no client, no reservation, nothing launched
+launch       (flag + authorization naming this specification) the identity is RESERVED durably
+             and exclusively BEFORE any bootstrap or client; then human_bootstrap under the
+             human and launcher profiles, launch_authorized_run on real clients built only
+             here, a launch record and a sanitized evidence document under names that cannot
+             collide, and one EXIT_CODE_ONLY ledger row written atomically under the ledger lock
 completion   --complete-row: the receipt line the owner read from the log stream, verified
-             against the launch record, completes the row -- or refuses
+             against the launch record, completes the row -- under the same lock and replacement
+recovery     --recover: an identity reserved but never recorded (an interruption) receives its
+             ledger row and is never launched again; nothing is launched
+verdict      --isolation-verdict: the R-2 verdict from the verified receipt, the launch record
+             and the owner's transcribed Reachability Analyzer evidence, derived and recorded
 ```
 
 **What the tool never does.** It never retries a ``RunTask`` (the adapter issues exactly
 one; an ambiguous outcome is recorded as such and the identity stays consumed); it never
-launches an identity the ledger already holds, for either kind; it never lets a
-verification launch spend a production identity (the ``verify-`` prefix is reserved and
-checked on every record); it never reads a receipt for the task (the owner hands it the
-line); it never prints an ARN, an account id, a bucket, a key or an identity.
+launches an identity the ledger or the reservations directory already holds, for either
+kind; it never lets a verification launch spend a production identity (the ``verify-``
+prefix is reserved and checked on every record); it never reads a receipt for the task
+(the owner hands it the line); it never prints an ARN, an account id, a bucket, a key or
+an identity; it never removes a reservation or another process's lock.
 
 **An ordinary import does nothing observable**, and so does an invocation without the
-authorization flag: the offline preparation runs, its sanitized summary is printed, and the
-tool exits non-zero having constructed no client. Every SDK import sits inside the authorized
-branch. **This tool has never run against AWS**: every test injects fakes.
+authorization flag. Every SDK import sits inside the authorized branch. **This tool has
+never run against AWS**: every test injects fakes.
 
 Refused by name, so a wrong reflex fails loudly: ``--run``, ``--live``, ``--execute``,
 ``--force``, ``--retry``, ``--profile``, ``--aws-profile``, ``--skip-placement``,
-``--no-cleanup``, ``--task-arn``.
+``--no-cleanup``, ``--task-arn``, ``--release-reservation``.
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ REFUSED_FLAGS: Final[dict[str, str]] = {
     "--skip-placement": "placement verification is not optional",
     "--no-cleanup": "the prescribed cleanup is not optional",
     "--task-arn": "the tool launches; it never adopts a task it did not start",
+    "--release-reservation": "a reservation is never released; recovery records it",
 }
 
 #: Exit codes. Command status only -- never a data verdict, never task completion.
@@ -75,20 +82,34 @@ EXIT_LAUNCH_TERMINAL: Final = 0
 EXIT_LAUNCH_NOT_TERMINAL: Final = 9
 EXIT_ROW_COMPLETED: Final = 0
 EXIT_ROW_NOT_COMPLETED: Final = 10
+EXIT_REFUSED_RESERVATION: Final = 11
+EXIT_REFUSED_RECOVERY_PENDING: Final = 12
+EXIT_REFUSED_LEDGER_LOCKED: Final = 13
+EXIT_INTERRUPTED_AFTER_LAUNCH: Final = 14
+EXIT_RECOVERED: Final = 0
+EXIT_VERDICT_RECORDED: Final = 0
 
 #: Allowlisted output sentences. Nothing else reaches stdout.
 SENTENCES: Final[dict[str, str]] = {
     "refused_arguments": "launch refused: the arguments were not admitted",
     "refused_records": "launch refused: an owner record was not admitted",
-    "refused_authorization": "launch refused: no authorization for this launch",
+    "refused_authorization": "launch refused: no authorization for this launch specification",
     "refused_equivalence": "launch refused: the verification configuration is not equivalent",
     "refused_containment": "launch refused: the ledger and records must sit under the private root",
     "refused_dependency": "launch refused: a dependency could not be built",
     "refused_bootstrap": "launch refused: the human bootstrap did not prove an identity",
+    "refused_reservation": "launch refused: the identity is already reserved",
+    "refused_recovery_pending": "launch refused: an interrupted attempt awaits recovery",
+    "refused_ledger_locked": "launch refused: the ledger is locked by another process",
     "prepared": "launch prepared offline; no client was constructed and nothing was launched",
     "launched": "launch sequence finished; see the evidence document",
+    "interrupted_after_launch": (
+        "launch interrupted after the sequence began; the identity stays reserved -- recover"
+    ),
     "row_completed": "ledger row completed from the verified receipt",
     "row_not_completed": "ledger row not completed: the receipt establishes no disposition",
+    "recovered": "interrupted attempt recorded; the identity is consumed and nothing was launched",
+    "verdict_recorded": "isolation verdict recorded beside the launch record",
 }
 
 _ACTORS: Final = ("acquisition", "build")
@@ -122,8 +143,11 @@ class LaunchArguments:
     acquisition_configuration: Path | None
     authorized: bool
     complete_row: bool
+    recover: bool
+    isolation_verdict: bool
     launch_record: Path | None
     receipt_lines: Path | None
+    reachability_evidence: Path | None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -146,8 +170,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--acquisition-configuration", type=Path)
     parser.add_argument(AUTHORIZATION_FLAG, dest="authorized", action="store_true")
     parser.add_argument("--complete-row", action="store_true")
+    parser.add_argument("--recover", action="store_true")
+    parser.add_argument("--isolation-verdict", action="store_true")
     parser.add_argument("--launch-record", type=Path)
     parser.add_argument("--receipt-lines", type=Path)
+    parser.add_argument("--reachability-evidence", type=Path)
     return parser
 
 
@@ -177,14 +204,24 @@ def parse_arguments(argv: Sequence[str]) -> LaunchArguments:
         acquisition_configuration=namespace.acquisition_configuration,
         authorized=bool(namespace.authorized),
         complete_row=bool(namespace.complete_row),
+        recover=bool(namespace.recover),
+        isolation_verdict=bool(namespace.isolation_verdict),
         launch_record=namespace.launch_record,
         receipt_lines=namespace.receipt_lines,
+        reachability_evidence=namespace.reachability_evidence,
     )
-    if arguments.complete_row:
+    modes = sum((arguments.complete_row, arguments.recover, arguments.isolation_verdict))
+    if modes > 1 or (modes == 1 and arguments.authorized):
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+    if arguments.complete_row or arguments.isolation_verdict:
         if arguments.launch_record is None or arguments.receipt_lines is None:
             raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
-        if arguments.authorized:
+        if arguments.isolation_verdict and arguments.verification_configuration is None:
             raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+        return arguments
+    if arguments.reachability_evidence is not None:
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+    if arguments.recover:
         return arguments
     acquisition = arguments.actor == "acquisition"
     if acquisition and (arguments.slice_path is None or arguments.run_identities):
@@ -224,6 +261,7 @@ class PreparedLaunch:
     entry: Any
     compiled: Any
     target: Any
+    specification: Any
     authorization: Any
     ledger: Any
     slice: Any
@@ -235,11 +273,12 @@ class PreparedLaunch:
         return "PreparedLaunch(<private>)"
 
     def summary(self) -> tuple[str, ...]:
-        """Sanitized lines: actor, kind, entry, input bytes, equivalence verdict."""
+        """Sanitized lines: actor, kind, entry, sizes, the specification digest, equivalence."""
         lines = [
             f"actor={self.actor.value} kind={self.kind.value} entry={self.entry.value}",
             f"input_bytes={len(self.authorization.input_bytes)} "
             f"ledger_rows={len(self.ledger.rows)}",
+            f"specification_digest={self.specification.digest}",
         ]
         if self.equivalence is not None:
             lines.append(f"equivalence={self.equivalence}")
@@ -262,52 +301,77 @@ def _contained(path: Path, root: Path) -> bool:
         return False
 
 
+def _private_root(root_source: Callable[[], Path] | None) -> Path:
+    from kalpamani.data.qualify.sharadar.runtime_binding import private_root
+
+    try:
+        return (private_root if root_source is None else root_source)()
+    except Exception:
+        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT) from None
+
+
+def _store(arguments: LaunchArguments, root: Path) -> Any:
+    """The launch store, after containment: the ledger and records under the private root."""
+    from kalpamani.data.production.sharadar.launch_store import LaunchStore
+
+    if not _contained(arguments.ledger, root) or not _contained(arguments.records_dir, root):
+        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
+    return LaunchStore(ledger_path=arguments.ledger, records_dir=arguments.records_dir)
+
+
 def prepare_launch(
     arguments: LaunchArguments,
     *,
     now: datetime,
     root_source: Callable[[], Path] | None = None,
 ) -> PreparedLaunch:
-    """Parse every record, materialize the input, compile the launch. **Offline.**
+    """Parse every record, build the specification, materialize the input, compile. **Offline.**
 
     Raises :class:`LaunchRefusalError` with a closed key; never a value.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
-    from kalpamani.data.production.sharadar.entry import TaskEntry
+    from kalpamani.data.production.sharadar.launch_store import StoreError
     from kalpamani.data.production.sharadar.launcher import LaunchAuthorization
     from kalpamani.data.production.sharadar.vocabulary import ProductionActor
-    from kalpamani.data.qualify.sharadar.runtime_binding import private_root
 
     actor = ProductionActor(arguments.actor)
     kind = lr.LaunchKind(arguments.kind)
-    entry = {
-        (ProductionActor.ACQUISITION, lr.LaunchKind.PRODUCTION): TaskEntry.ACQUISITION,
-        (ProductionActor.ACQUISITION, lr.LaunchKind.VERIFICATION): TaskEntry.ACQUISITION_VERIFY,
-        (ProductionActor.BUILD, lr.LaunchKind.PRODUCTION): TaskEntry.BUILD,
-        (ProductionActor.BUILD, lr.LaunchKind.VERIFICATION): TaskEntry.BUILD_VERIFY,
-    }[(actor, kind)]
-
-    # Containment: the ledger and the records directory sit under the private root, so an
-    # identity, a slice or an ARN can never be written into a tracked tree by this tool.
+    store = _store(arguments, _private_root(root_source))
     try:
-        root = (private_root if root_source is None else root_source)()
-    except Exception:
-        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT) from None
-    if not _contained(arguments.ledger, root) or not _contained(arguments.records_dir, root):
-        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
-
+        ledger, _ = store.read_ledger()
+        # Interrupted work is reconciled before anything else is prepared: a reservation
+        # with no ledger row is an identity the ledger cannot yet see.
+        if store.unreconciled(ledger):
+            raise LaunchRefusalError("refused_recovery_pending", EXIT_REFUSED_RECOVERY_PENDING)
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     try:
-        ledger = lr.parse_owner_ledger(_read(arguments.ledger))
         inputs = lr.parse_launch_inputs(_read(arguments.launch_inputs))
-        covered: Any = None
-        plan_digest: str | None = None
+        slice_document: Any = None
+        run_identities: list[str] | None = None
         if actor is ProductionActor.ACQUISITION:
-            assert arguments.slice_path is not None
             from kalpamani.data.production.sharadar.documents import decode_document
 
+            assert arguments.slice_path is not None
             slice_document = decode_document(
                 _read(arguments.slice_path), max_bytes=lr.MAX_RECORD_BYTES
             )
+        else:
+            run_identities = list(arguments.run_identities)
+        specification = lr.build_specification(
+            ledger=ledger,
+            inputs=inputs,
+            actor=actor,
+            kind=kind,
+            identity=arguments.identity,
+            slice_document=slice_document,
+            run_identities=run_identities,
+        )
+        covered: Any = None
+        plan_digest: str | None = None
+        if actor is ProductionActor.ACQUISITION:
+            from kalpamani.data.production.sharadar.inputs import parse_slice
+
             input_bytes = lr.materialize_acquisition_input(
                 ledger,
                 identity=arguments.identity,
@@ -315,14 +379,8 @@ def prepare_launch(
                 slice_document=slice_document,
                 now=now,
             )
-            from kalpamani.data.contracts.vocabulary import AcquisitionMode
-            from kalpamani.data.production.sharadar.inputs import parse_slice
-            from kalpamani.data.production.sharadar.plan import plan_digest_for
-
             covered = parse_slice(slice_document)
-            plan_digest = plan_digest_for(
-                covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode)
-            )
+            plan_digest = specification.workload["plan_digest"]
         else:
             input_bytes = lr.materialize_build_input(
                 ledger,
@@ -339,39 +397,30 @@ def prepare_launch(
     if kind is lr.LaunchKind.VERIFICATION:
         assert arguments.production_configuration is not None
         assert arguments.verification_configuration is not None
-        production = _read(arguments.production_configuration)
-        verification = _read(arguments.verification_configuration)
         acquisition = (
             None
             if arguments.acquisition_configuration is None
             else _read(arguments.acquisition_configuration)
         )
         verdict = lr.configuration_equivalence(
-            production=production, verification=verification, acquisition=acquisition
+            inputs,
+            actor=actor,
+            production=_read(arguments.production_configuration),
+            verification=_read(arguments.verification_configuration),
+            acquisition=acquisition,
         )
         equivalence = verdict.value
         if verdict is not lr.EquivalenceVerdict.EQUIVALENT:
-            raise LaunchRefusalError("refused_equivalence", EXIT_REFUSED_EQUIVALENCE)
-        # The verification file the image carries is the one the launch-inputs record
-        # registered: its digest and commit must be the target's, or the equivalence
-        # was checked against the wrong file.
-        from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
-
-        parsed, digest = parse_compiled_configuration(verification)
-        if (
-            digest != target.configuration_digest
-            or parsed.compiled.code_commit != target.code_commit
-            or parsed.entry is not entry
-        ):
             raise LaunchRefusalError("refused_equivalence", EXIT_REFUSED_EQUIVALENCE)
 
     authorization = LaunchAuthorization(identity=arguments.identity, input_bytes=input_bytes)
     return PreparedLaunch(
         actor=actor,
         kind=kind,
-        entry=entry,
+        entry=specification.entry,
         compiled=compiled,
         target=target,
+        specification=specification,
         authorization=authorization,
         ledger=ledger,
         slice=covered,
@@ -380,20 +429,37 @@ def prepare_launch(
     )
 
 
+def write_specification(
+    arguments: LaunchArguments, prepared: PreparedLaunch, *, now: datetime
+) -> Path:
+    """Write the reviewable specification beside the ledger; the owner authorizes its digest."""
+    from kalpamani.data.production.sharadar.launch_store import LaunchStore, StoreError
+
+    store = LaunchStore(ledger_path=arguments.ledger, records_dir=arguments.records_dir)
+    try:
+        path: Path = store.write_record(
+            "launch-specification", prepared.specification.document(), at=now
+        )
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return path
+
+
 def admit_authorization(
     arguments: LaunchArguments, prepared: PreparedLaunch, *, now: datetime
-) -> None:
-    """The owner's written authorization for THIS actor, kind and identity, or refuse."""
+) -> Any:
+    """The owner's written authorization for THIS specification, valid now, or refuse."""
     from kalpamani.data.production.sharadar import launch_records as lr
 
     if arguments.authorization is None:
         raise LaunchRefusalError("refused_authorization", EXIT_REFUSED_AUTHORIZATION)
     try:
-        lr.parse_authorization(
+        return lr.parse_authorization(
             _read(arguments.authorization),
             actor=prepared.actor,
             kind=prepared.kind,
             identity=arguments.identity,
+            specification_digest=prepared.specification.digest,
             now=now,
         )
     except lr.LaunchRecordError:
@@ -442,7 +508,7 @@ def workstation_client_config() -> dict[str, object]:
 
 
 class _Boto3Clients:
-    """Real clients from ``boto3.Session(profile_name=...)``. Constructed only when authorized."""
+    """Real clients from a profile-pinned SDK session. Constructed only when authorized."""
 
     __slots__ = ("_sessions",)
 
@@ -496,10 +562,64 @@ class LaunchResult:
         return f"LaunchResult(outcome={self.report.outcome.value!r}, row={self.ledger_outcome!r})"
 
 
+def reserve_identity(
+    arguments: LaunchArguments,
+    prepared: PreparedLaunch,
+    *,
+    now: Callable[[], datetime],
+    root_source: Callable[[], Path] | None = None,
+) -> Any:
+    """Consume the identity durably and exclusively, bound to the specification, or refuse.
+
+    Under the ledger lock: the ledger is re-read (a concurrent attempt may have written
+    it since preparation), the identity re-checked against it and against the
+    reservations directory, and the reservation created with exclusive semantics --
+    **before** any bootstrap, client or external mutation. A reservation that cannot be
+    persisted refuses; one that already exists refuses; neither launches.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.launch_store import (
+        Reservation,
+        StoreDefect,
+        StoreError,
+    )
+
+    store = _store(arguments, _private_root(root_source))
+    try:
+        with store.locked(now=now):
+            ledger, _ = store.read_ledger()
+            if store.unreconciled(ledger):
+                raise LaunchRefusalError("refused_recovery_pending", EXIT_REFUSED_RECOVERY_PENDING)
+            try:
+                lr.admit_identity(ledger, arguments.identity, kind=prepared.kind)
+            except lr.LaunchRecordError:
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+            if store.reservation(arguments.identity) is not None:
+                raise LaunchRefusalError("refused_reservation", EXIT_REFUSED_RESERVATION)
+            store.reserve(
+                Reservation(
+                    identity=arguments.identity,
+                    actor=prepared.actor,
+                    kind=prepared.kind,
+                    specification_digest=prepared.specification.digest,
+                    reserved_at=now(),
+                )
+            )
+    except StoreError as error:
+        if error.defect is StoreDefect.LEDGER_LOCKED:
+            raise LaunchRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
+        if error.defect is StoreDefect.RESERVATION_EXISTS:
+            raise LaunchRefusalError("refused_reservation", EXIT_REFUSED_RESERVATION) from None
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return store
+
+
 def execute_launch(
     arguments: LaunchArguments,
     prepared: PreparedLaunch,
     *,
+    store: Any,
+    authorization_record: Any,
     clients: ClientFactory,
     environment: Callable[[str], str | None],
     now: Callable[[], datetime],
@@ -508,13 +628,15 @@ def execute_launch(
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
 ) -> LaunchResult:
-    """The authorized branch: two bootstraps, one launch, the records, one ledger row.
+    """The authorized branch, after the reservation: two bootstraps, one launch, the records.
 
     The human bootstrap runs under the actor's human profile and again under its
     launcher profile, each proving its own identity against the same private binding
     file before any parameter or ECS call; the launcher's before-and-after proofs then
-    call STS under the profile the path names. A bootstrap that refuses stops the tool
-    before any adapter exists.
+    call STS under the profile the path names. The authorization's freshness is checked
+    once more immediately before the launch. Records and the ledger row are written
+    afterwards under names that cannot collide and under the ledger lock; a failure to
+    write any of them leaves the reservation in place, so the identity is never reusable.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.compute import Ec2InterfaceAdapter, EcsTaskAdapter
@@ -523,6 +645,7 @@ def execute_launch(
         production_identity_refusal,
     )
     from kalpamani.data.production.sharadar.inputs import input_digest
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
     from kalpamani.data.production.sharadar.launcher import LaunchAdapters, launch_authorized_run
     from kalpamani.data.production.sharadar.outcomes import LaunchOutcome
     from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
@@ -574,7 +697,10 @@ def execute_launch(
     except Exception:
         raise LaunchRefusalError("refused_dependency", EXIT_REFUSED_DEPENDENCY) from None
 
+    # Freshness, revalidated immediately before the first external mutation.
     launched_at = now()
+    if not authorization_record.valid_at(launched_at):
+        raise LaunchRefusalError("refused_authorization", EXIT_REFUSED_AUTHORIZATION)
     report = launch_authorized_run(
         compiled=prepared.compiled,
         adapters=adapters,
@@ -607,6 +733,9 @@ def execute_launch(
             slice=prepared.slice,
             plan_digest=prepared.plan_digest,
             launched_at=launched_at,
+            recorded_at=recorded_at,
+            network_interface_id=report.network_interface_id,
+            subnet_id=report.subnet_id,
         )
         row = lr.provisional_ledger_row(record, outcome=outcome, completed_at=recorded_at)
     else:
@@ -621,8 +750,6 @@ def execute_launch(
             slice=prepared.slice,
             plan_digest=prepared.plan_digest,
         )
-    ledger = lr.append_row(prepared.ledger, row)
-
     evidence = lr.evidence_document(
         actor=actor,
         kind=prepared.kind,
@@ -643,57 +770,56 @@ def execute_launch(
         exit_codes=list(report.task_exit_codes),
         recorded_at=recorded_at,
     )
-    # The ledger is rewritten last, after the records exist: a tool that died between the
-    # two would leave the identity unrecorded in the ledger but recorded in the records
-    # directory, and the owner reconciles from there. The ledger is never left half-written.
-    stamp = recorded_at.strftime("%Y%m%dT%H%M%SZ")
-    evidence_path = arguments.records_dir / f"launch-evidence-{stamp}.json"
-    record_path = None if record is None else arguments.records_dir / f"launch-record-{stamp}.json"
-    from kalpamani.data.contracts.canonical import canonical_bytes
-
-    arguments.records_dir.mkdir(parents=True, exist_ok=True)
-    evidence_path.write_bytes(canonical_bytes(evidence))
-    if record is not None and record_path is not None:
-        record_path.write_bytes(canonical_bytes(record.document()))
-    arguments.ledger.write_bytes(canonical_bytes(ledger.document()))
+    # Records first, the ledger last, all under the lock; every name is exclusive. A
+    # failure anywhere here leaves the reservation, which is what makes the identity
+    # unrepeatable: the owner recovers, and nothing is launched twice.
+    try:
+        with store.locked(now=now):
+            ledger, digest = store.read_ledger()
+            ledger = lr.append_row(ledger, row)
+            evidence_path: Path = store.write_record("launch-evidence", evidence, at=recorded_at)
+            record_path: Path | None = None
+            if record is not None:
+                record_path = store.write_record("launch-record", record.document(), at=recorded_at)
+            store.replace_ledger(ledger, expected_digest=digest)
+    except (StoreError, lr.LaunchRecordError) as error:
+        defect = getattr(error, "defect", None)
+        if defect is StoreDefect.LEDGER_LOCKED:
+            raise LaunchRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
+        raise LaunchRefusalError(
+            "interrupted_after_launch", EXIT_INTERRUPTED_AFTER_LAUNCH
+        ) from None
     return LaunchResult(
         report=report, ledger_outcome=outcome, evidence_path=evidence_path, record_path=record_path
     )
 
 
 # ---------------------------------------------------------------------------
-# Row completion
+# Row completion, recovery, and the isolation verdict
 # ---------------------------------------------------------------------------
 
 
-def complete_row(
-    arguments: LaunchArguments, *, root_source: Callable[[], Path] | None = None
-) -> bool:
-    """Verify the hand-read receipt against the launch record and complete the row.
-
-    Returns ``True`` when the row was completed and the ledger rewritten, ``False`` when
-    the verified receipt establishes no disposition (the row stays provisional). A
-    receipt that does not belong to the record refuses as a record refusal.
-    """
+def _record_and_receipt(
+    arguments: LaunchArguments, *, root_source: Callable[[], Path] | None
+) -> tuple[Any, Any, Any]:
+    """The store, the launch record and the receipt verified against it, or refuse."""
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.receipts import ReceiptError, collect_and_verify
-    from kalpamani.data.qualify.sharadar.runtime_binding import private_root
 
     assert arguments.launch_record is not None and arguments.receipt_lines is not None
-    try:
-        root = (private_root if root_source is None else root_source)()
-    except Exception:
-        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT) from None
-    if not _contained(arguments.ledger, root) or not _contained(arguments.launch_record, root):
+    root = _private_root(root_source)
+    if not _contained(arguments.launch_record, root):
         raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
+    store = _store(arguments, root)
     try:
-        ledger = lr.parse_owner_ledger(_read(arguments.ledger))
         record = lr.parse_launch_record(_read(arguments.launch_record))
     except lr.LaunchRecordError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-    if record.identity != arguments.identity or record.kind.value != arguments.kind:
-        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
-    if record.actor.value != arguments.actor:
+    if (
+        record.identity != arguments.identity
+        or record.kind.value != arguments.kind
+        or record.actor.value != arguments.actor
+    ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     try:
         text = _read(arguments.receipt_lines).decode("utf-8")
@@ -703,21 +829,193 @@ def complete_row(
         verified = collect_and_verify(text.splitlines(), expectation=record.expectation())
     except ReceiptError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-    existing = ledger.row(record.identity)
-    if existing is None or existing.evidence is not lr.LedgerEvidence.EXIT_CODE_ONLY:
-        # No provisional row to complete: never launched by this ledger, or completed already.
+    return store, record, verified
+
+
+def complete_row(
+    arguments: LaunchArguments,
+    *,
+    now: Callable[[], datetime],
+    root_source: Callable[[], Path] | None = None,
+) -> bool:
+    """Verify the hand-read receipt against the launch record and complete the row.
+
+    Under the ledger lock and through the atomic replacement, like every ledger write.
+    Returns ``True`` when the row was completed, ``False`` when the verified receipt
+    establishes no disposition (the row stays provisional). A receipt that does not
+    belong to the record refuses as a record refusal.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+
+    store, record, verified = _record_and_receipt(arguments, root_source=root_source)
+    try:
+        with store.locked(now=now):
+            ledger, digest = store.read_ledger()
+            existing = ledger.row(record.identity)
+            if existing is None or existing.evidence is not lr.LedgerEvidence.EXIT_CODE_ONLY:
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+            try:
+                completed = lr.complete_ledger_row(ledger, record=record, receipt=verified)
+            except lr.LaunchRecordError as error:
+                if error.defect is lr.LaunchRecordDefect.ROW_NOT_BUILDABLE:
+                    return False
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+            store.replace_ledger(completed, expected_digest=digest)
+    except StoreError as error:
+        if error.defect is StoreDefect.LEDGER_LOCKED:
+            raise LaunchRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return True
+
+
+def recover(
+    arguments: LaunchArguments,
+    *,
+    now: Callable[[], datetime],
+    root_source: Callable[[], Path] | None = None,
+) -> None:
+    """Record an interrupted attempt: the reserved identity receives its ledger row.
+
+    The reservation proves the identity was consumed; whether a task ran, and to what
+    end, the tool does not know -- the row is ``HALTED`` with ``EXIT_CODE_ONLY``
+    evidence, and the owner reviews ECS by hand. Nothing is launched, and the
+    reservation is kept: recovery makes the ledger agree with it, never the reverse.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+
+    store = _store(arguments, _private_root(root_source))
+    try:
+        with store.locked(now=now):
+            ledger, digest = store.read_ledger()
+            reservation = store.reservation(arguments.identity)
+            if reservation is None or ledger.row(arguments.identity) is not None:
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+            if reservation.kind.value != arguments.kind or reservation.actor.value != (
+                arguments.actor
+            ):
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+            covered: Any = None
+            plan_digest: str | None = None
+            launched_at = reservation.reserved_at
+            # A launch record written before the interruption names what started.
+            for path in store.launch_records():
+                try:
+                    candidate = lr.parse_launch_record(path.read_bytes())
+                except (lr.LaunchRecordError, OSError):
+                    continue
+                if candidate.identity == arguments.identity:
+                    covered, plan_digest = candidate.slice, candidate.plan_digest
+                    launched_at = candidate.launched_at
+            recorded_at = now()
+            row = lr.OwnerLedgerRow(
+                identity=arguments.identity,
+                actor=reservation.actor,
+                kind=reservation.kind,
+                outcome="HALTED",
+                evidence=lr.LedgerEvidence.EXIT_CODE_ONLY,
+                launched_at=launched_at,
+                completed_at=max(recorded_at, launched_at),
+                slice=covered,
+                plan_digest=plan_digest,
+            )
+            store.replace_ledger(lr.append_row(ledger, row), expected_digest=digest)
+    except StoreError as error:
+        if error.defect is StoreDefect.LEDGER_LOCKED:
+            raise LaunchRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    except lr.LaunchRecordError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+
+
+def record_isolation_verdict(
+    arguments: LaunchArguments,
+    *,
+    now: Callable[[], datetime],
+    root_source: Callable[[], Path] | None = None,
+) -> Any:
+    """Derive the R-2 verdict from the verified receipt and the owner's evidence; record it.
+
+    The receipt must be a build verification receipt that verified against the launch
+    record; the record must carry the verified interface; the evidence, when supplied,
+    is parsed closed and bound by derivation (:func:`probe.isolation_verdict`). The
+    verdict document -- verdict, reason, components, whether the analysis bound -- is
+    written beside the record under an exclusive name. ``VERIFIED`` is unreachable
+    without evidence, and this tool collects none.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar import probe as pp
+    from kalpamani.data.production.sharadar.entry import TaskEntry, TaskOutcome
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    store, record, verified = _record_and_receipt(arguments, root_source=root_source)
+    if (
+        record.entry is not TaskEntry.BUILD_VERIFY
+        or verified.outcome is not TaskOutcome.VERIFIED_BOOTSTRAP
+        or verified.probe is None
+        or record.network_interface_id is None
+        or record.subnet_id is None
+    ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     try:
-        completed = lr.complete_ledger_row(ledger, record=record, receipt=verified)
-    except lr.LaunchRecordError as error:
-        if error.defect is lr.LaunchRecordDefect.ROW_NOT_BUILDABLE:
-            # The receipt is this launch's and establishes no disposition: owner review.
-            return False
+        inputs = lr.parse_launch_inputs(_read(arguments.launch_inputs))
+        compiled, _ = lr.compile_launch(inputs, actor=record.actor, kind=record.kind)
+    except lr.LaunchRecordError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-    from kalpamani.data.contracts.canonical import canonical_bytes
+    evidence: Any = None
+    if arguments.reachability_evidence is not None:
+        try:
+            evidence = pp.parse_reachability_evidence(_read(arguments.reachability_evidence))
+        except ValueError:
+            raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    binding = pp.VerdictBinding(
+        network_interface_id=record.network_interface_id,
+        subnet_id=record.subnet_id,
+        security_group_ids=frozenset(compiled.security_group_ids),
+        launched_at=record.launched_at,
+        recorded_at=record.recorded_at,
+        binding_key=record.input_digest,
+        origin_addresses=_origin_addresses(arguments, record),
+    )
+    result = pp.isolation_verdict(verified.probe, evidence, binding=binding)
+    document = {
+        "schema_version": lr.RECORD_SCHEMA_VERSION,
+        "contract_id": "kalpamani-isolation-verdict/v1",
+        "actor": record.actor.value,
+        "kind": record.kind.value,
+        "probe": verified.probe.document(),
+        "verdict": result.document(),
+        "evidence_supplied": evidence is not None,
+        "recorded_at": now().isoformat(),
+    }
+    try:
+        store.write_record("isolation-verdict", document, at=now())
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return result
 
-    arguments.ledger.write_bytes(canonical_bytes(completed.document()))
-    return True
+
+def _origin_addresses(arguments: LaunchArguments, record: Any) -> frozenset[str]:
+    """The compiled origin set of the launched verification configuration.
+
+    Read from the verification configuration file the owner supplies (the file the
+    launch was prepared with), held to the record's registered digest so the set is
+    the one the task carried and not a later edit.
+    """
+    from kalpamani.data.production.sharadar.compiled import (
+        CompiledConfigurationError,
+        parse_compiled_configuration,
+    )
+
+    assert arguments.verification_configuration is not None
+    try:
+        parsed, digest = parse_compiled_configuration(_read(arguments.verification_configuration))
+    except CompiledConfigurationError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if digest != record.configuration_digest or parsed.origin_addresses is None:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    return frozenset(parsed.origin_addresses)
 
 
 # ---------------------------------------------------------------------------
@@ -747,11 +1045,11 @@ def main(
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
 ) -> int:
-    """Prepare offline; launch only with the flag and a matching authorization record.
+    """Prepare offline; launch only with the flag and an authorization naming this specification.
 
     The keyword seams exist for tests, which inject fakes for every one of them. With
-    none injected, the real clients are built **only** after the flag, the records and
-    the authorization are all admitted.
+    none injected, the real clients are built **only** after the flag, the records, the
+    authorization and the reservation are all admitted.
     """
     arguments_list = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -760,22 +1058,32 @@ def main(
         _emit([SENTENCES[refusal.key]])
         return refusal.exit_code
 
-    if arguments.complete_row:
-        try:
-            done = complete_row(arguments, root_source=root_source)
-        except LaunchRefusalError as refusal:
-            _emit([SENTENCES[refusal.key]])
-            return refusal.exit_code
-        _emit([SENTENCES["row_completed" if done else "row_not_completed"]])
-        return EXIT_ROW_COMPLETED if done else EXIT_ROW_NOT_COMPLETED
-
     clock = now if now is not None else (lambda: datetime.now(tz=UTC))
     try:
+        if arguments.complete_row:
+            done = complete_row(arguments, now=clock, root_source=root_source)
+            _emit([SENTENCES["row_completed" if done else "row_not_completed"]])
+            return EXIT_ROW_COMPLETED if done else EXIT_ROW_NOT_COMPLETED
+        if arguments.recover:
+            recover(arguments, now=clock, root_source=root_source)
+            _emit([SENTENCES["recovered"]])
+            return EXIT_RECOVERED
+        if arguments.isolation_verdict:
+            result = record_isolation_verdict(arguments, now=clock, root_source=root_source)
+            _emit(
+                [
+                    f"isolation_verdict={result.verdict.value} reason={result.reason.value}",
+                    SENTENCES["verdict_recorded"],
+                ]
+            )
+            return EXIT_VERDICT_RECORDED
         prepared = prepare_launch(arguments, now=clock(), root_source=root_source)
         if not arguments.authorized:
+            write_specification(arguments, prepared, now=clock())
             _emit([*prepared.summary(), SENTENCES["prepared"]])
             return EXIT_PREPARED
-        admit_authorization(arguments, prepared, now=clock())
+        authorization_record = admit_authorization(arguments, prepared, now=clock())
+        store = reserve_identity(arguments, prepared, now=clock, root_source=root_source)
     except LaunchRefusalError as refusal:
         _emit([SENTENCES[refusal.key]])
         return refusal.exit_code
@@ -786,6 +1094,8 @@ def main(
         result = execute_launch(
             arguments,
             prepared,
+            store=store,
+            authorization_record=authorization_record,
             clients=clients if clients is not None else _Boto3Clients(),
             environment=environment if environment is not None else _environment,
             now=clock,
@@ -828,7 +1138,11 @@ __all__ = [
     "main",
     "parse_arguments",
     "prepare_launch",
+    "record_isolation_verdict",
+    "recover",
+    "reserve_identity",
     "workstation_client_config",
+    "write_specification",
 ]
 
 

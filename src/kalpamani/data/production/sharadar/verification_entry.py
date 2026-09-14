@@ -174,10 +174,14 @@ def run_verification_entry(
     probe = None
     if entry is TaskEntry.BUILD_VERIFY:
         assert factories.probe is not None
+        assert report.evidence is not None
         probe = run_origin_probe(
             compiled=configuration.origin_addresses,
             resolve=factories.resolve_origin,
             adapter=factories.probe,
+            # The selected destination is bound under the admitted input's digest, which
+            # the launch tool holds in its own record (proposed ADR-0045 s.3).
+            binding_key=report.evidence.input_digest,
         )
     return TaskReceipt(
         entry=entry,

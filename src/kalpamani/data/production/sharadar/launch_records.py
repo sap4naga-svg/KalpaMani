@@ -36,12 +36,13 @@ build input.
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final
 
-from kalpamani.data.contracts.canonical import canonical_bytes
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.compiled import (
     CompiledConfigurationError,
@@ -100,6 +101,7 @@ from kalpamani.data.production.sharadar.receipts import (
     ledger_completion,
 )
 from kalpamani.data.production.sharadar.release import (
+    NETWORK_INTERFACE_ID_RE,
     SUBNET_ID_RE,
     TASK_ARN_RE,
     TASK_DEFINITION_ARN_RE,
@@ -470,6 +472,7 @@ _LAUNCH_INPUTS_FIELDS: Final[frozenset[str]] = frozenset(
         "execution_role_arn",
         "binding_key_arn",
         "platform_version",
+        "r3_verification_digest",
         "actors",
     }
 )
@@ -483,28 +486,151 @@ _LAUNCH_ACTOR_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 _LAUNCH_TARGET_FIELDS: Final[frozenset[str]] = frozenset(
-    {"task_definition_arn", "image_digest", "configuration_digest", "code_commit"}
+    {
+        "task_definition_arn",
+        "image_digest",
+        "configuration_digest",
+        "code_commit",
+        "generation_record_digest",
+        "task_definition",
+    }
 )
+_TASK_DEFINITION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "family",
+        "revision",
+        "task_role_arn",
+        "execution_role_arn",
+        "cpu",
+        "memory",
+        "network_mode",
+        "operating_system_family",
+        "cpu_architecture",
+        "user",
+        "readonly_root_filesystem",
+        "work_tmpfs",
+        "command",
+        "image_digest",
+    }
+)
+#: The fields of the registered task-definition evidence that a verification family
+#: must share with its production family (roles, size, network mode, platform, user,
+#: read-only root, ``/work`` tmpfs) -- and the ones that differ by design: ``family``,
+#: ``revision``, ``command`` and ``image_digest``.
+TASK_DEFINITION_SHARED_FIELDS: Final[tuple[str, ...]] = (
+    "task_role_arn",
+    "execution_role_arn",
+    "cpu",
+    "memory",
+    "network_mode",
+    "operating_system_family",
+    "cpu_architecture",
+    "user",
+    "readonly_root_filesystem",
+    "work_tmpfs",
+)
+TASK_DEFINITION_INTENTIONAL_DIFFERENCES: Final[tuple[str, ...]] = (
+    "family",
+    "revision",
+    "command",
+    "image_digest",
+)
+_TASK_USER: Final = "10001:10001"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskDefinitionEvidence:
+    """The owner's transcription of one registered task-definition revision.
+
+    **Owner-supplied evidence, validated offline.** The launcher permission sets hold
+    no ``ecs:DescribeTaskDefinition`` (ADR-0036 §2.9 scopes them to ``RunTask``,
+    ``DescribeTasks`` and ``StopTask``), so the tool cannot read a revision back; the
+    owner transcribes it from the post-apply verification, and the tool holds every
+    field to its grammar and to the compiled launch. **That a transcription is faithful
+    is not something this tool can establish.**
+    """
+
+    family: str
+    revision: int
+    task_role_arn: str
+    execution_role_arn: str
+    cpu: int
+    memory: int
+    network_mode: str
+    operating_system_family: str
+    cpu_architecture: str
+    user: str
+    readonly_root_filesystem: bool
+    work_tmpfs: bool
+    command: str
+    image_digest: str
+
+    def document(self) -> dict[str, Any]:
+        """The closed block."""
+        return {name: getattr(self, name) for name in sorted(_TASK_DEFINITION_FIELDS)}
+
+    def __repr__(self) -> str:
+        """Family and revision only."""
+        return f"TaskDefinitionEvidence(family={self.family!r}, revision={self.revision})"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LaunchTarget:
-    """One registered revision with the image and configuration records behind it."""
+    """One registered revision with the image, configuration and generation records behind it.
+
+    ``generation_record_digest`` is the SHA-256 of the image gate's generation record for
+    this target (an owner-held evidence reference: the tool checks its grammar and that
+    the authorization names the same one, and cannot establish that the record exists).
+    """
 
     task_definition_arn: str
     image_digest: str
     configuration_digest: str
     code_commit: str
+    generation_record_digest: str
+    task_definition: TaskDefinitionEvidence
+
+    @property
+    def family(self) -> str:
+        """The family the revision ARN names."""
+        match = TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn)
+        assert match is not None
+        return match.group(2)
+
+    @property
+    def revision(self) -> int:
+        """The revision the ARN names."""
+        match = TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn)
+        assert match is not None
+        return int(match.group(3))
+
+    def document(self) -> dict[str, Any]:
+        """The closed block."""
+        return {
+            "task_definition_arn": self.task_definition_arn,
+            "image_digest": self.image_digest,
+            "configuration_digest": self.configuration_digest,
+            "code_commit": self.code_commit,
+            "generation_record_digest": self.generation_record_digest,
+            "task_definition": self.task_definition.document(),
+        }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LaunchInputs:
-    """Everything the tool compiles launches from, per actor and kind."""
+    """Everything the tool compiles launches from, per actor and kind.
+
+    ``r3_verification_digest`` is the stage-b prerequisite's evidence reference (the
+    SHA-256 of the owner's R-3 record, as ``terraform.tfvars`` carries it), or ``None``
+    at stage a. It is **applicable to a production launch** -- the assignments the human
+    and launcher sets need exist only at stage b -- and not to a verification launch.
+    """
 
     cluster_arn: str
     execution_role_arn: str
     binding_key_arn: str
     platform_version: str
+    r3_verification_digest: str | None
     task_role_arns: dict[ProductionActor, str]
     subnet_ids: dict[ProductionActor, str]
     security_group_ids: dict[ProductionActor, tuple[str, ...]]
@@ -513,6 +639,64 @@ class LaunchInputs:
     def __repr__(self) -> str:
         """Nothing that is an identifier."""
         return "LaunchInputs()"
+
+
+def _task_definition(raw: object) -> TaskDefinitionEvidence:
+    if type(raw) is not dict or set(raw) != _TASK_DEFINITION_FIELDS:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    family = exact_str(raw["family"])
+    revision = raw["revision"]
+    task_role = exact_str(raw["task_role_arn"])
+    execution_role = exact_str(raw["execution_role_arn"])
+    cpu, memory = raw["cpu"], raw["memory"]
+    network_mode = exact_str(raw["network_mode"])
+    os_family = exact_str(raw["operating_system_family"])
+    architecture = exact_str(raw["cpu_architecture"])
+    user = exact_str(raw["user"])
+    readonly, tmpfs = raw["readonly_root_filesystem"], raw["work_tmpfs"]
+    command = exact_str(raw["command"])
+    image = exact_str(raw["image_digest"])
+    if (
+        family is None
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", family)
+        or type(revision) is not int
+        or revision < 1
+        or task_role is None
+        or ROLE_ARN_RE.fullmatch(task_role) is None
+        or execution_role is None
+        or ROLE_ARN_RE.fullmatch(execution_role) is None
+        or type(cpu) is not int
+        or cpu <= 0
+        or type(memory) is not int
+        or memory <= 0
+        or network_mode != "awsvpc"
+        or os_family != "LINUX"
+        or architecture != "X86_64"
+        or user != _TASK_USER
+        or type(readonly) is not bool
+        or type(tmpfs) is not bool
+        or command is None
+        or command not in {member.value for member in TaskEntry}
+        or image is None
+        or IMAGE_DIGEST_RE.fullmatch(image) is None
+    ):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    return TaskDefinitionEvidence(
+        family=family,
+        revision=revision,
+        task_role_arn=task_role,
+        execution_role_arn=execution_role,
+        cpu=cpu,
+        memory=memory,
+        network_mode=network_mode,
+        operating_system_family=os_family,
+        cpu_architecture=architecture,
+        user=user,
+        readonly_root_filesystem=readonly,
+        work_tmpfs=tmpfs,
+        command=command,
+        image_digest=image,
+    )
 
 
 def _target(raw: object) -> LaunchTarget | None:
@@ -524,6 +708,7 @@ def _target(raw: object) -> LaunchTarget | None:
     image = exact_str(raw["image_digest"])
     configuration = exact_str(raw["configuration_digest"])
     commit = exact_str(raw["code_commit"])
+    generation = hex_digest(raw["generation_record_digest"])
     if (
         definition is None
         or TASK_DEFINITION_ARN_RE.fullmatch(definition) is None
@@ -533,14 +718,29 @@ def _target(raw: object) -> LaunchTarget | None:
         or CONFIGURATION_DIGEST_RE.fullmatch(configuration) is None
         or commit is None
         or CODE_COMMIT_RE.fullmatch(commit) is None
+        or generation is None
     ):
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
-    return LaunchTarget(
+    target = LaunchTarget(
         task_definition_arn=definition,
         image_digest=image,
         configuration_digest=configuration,
         code_commit=commit,
+        generation_record_digest=generation,
+        task_definition=_task_definition(raw["task_definition"]),
     )
+    # The transcribed revision is the registered one: family, revision, image and the
+    # command token all agree with the ARN and the target, or the evidence is not this
+    # target's.
+    evidence = target.task_definition
+    if (
+        evidence.family != target.family
+        or evidence.revision != target.revision
+        or evidence.image_digest != target.image_digest
+        or evidence.command != target.family
+    ):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    return target
 
 
 def parse_launch_inputs(raw: object) -> LaunchInputs:
@@ -552,6 +752,7 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
     execution = exact_str(document["execution_role_arn"])
     key = exact_str(document["binding_key_arn"])
     platform = exact_str(document["platform_version"])
+    r3 = document["r3_verification_digest"]
     if (
         cluster is None
         or CLUSTER_ARN_RE.fullmatch(cluster) is None
@@ -562,6 +763,7 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
         or platform is None
         or PLATFORM_VERSION_RE.fullmatch(platform) is None
         or platform == "LATEST"
+        or (r3 is not None and hex_digest(r3) is None)
     ):
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
     actors = document["actors"]
@@ -600,14 +802,18 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
             target = _target(block[field])
             if target is None:
                 continue
-            family = TASK_DEFINITION_ARN_RE.fullmatch(target.task_definition_arn)
-            assert family is not None
             expected = (
                 constants_for(actor).task_family
                 if kind is LaunchKind.PRODUCTION
                 else constants_for(actor).verification_task_family
             )
-            if family.group(2) != expected:
+            if target.family != expected:
+                raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+            # The registered roles are this actor's and the shared execution role.
+            if (
+                target.task_definition.task_role_arn != role
+                or target.task_definition.execution_role_arn != execution
+            ):
                 raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
             targets[(actor, kind)] = target
     return LaunchInputs(
@@ -615,6 +821,7 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
         execution_role_arn=execution,
         binding_key_arn=key,
         platform_version=platform,
+        r3_verification_digest=r3,
         task_role_arns=task_roles,
         subnet_ids=subnets,
         security_group_ids=groups,
@@ -649,57 +856,113 @@ def compile_launch(
 
 
 # ---------------------------------------------------------------------------
-# Configuration equivalence -- verification versus production
+# Configuration equivalence -- verification versus production, bound to the registered targets
 # ---------------------------------------------------------------------------
 
 
 class EquivalenceVerdict(StrEnum):
-    """Whether a verification image's configuration stands for the production one."""
+    """Whether a verification image's configuration stands for the production one.
+
+    ``EQUIVALENT`` is a statement about **configuration**: the two registered files
+    agree on what a verification task can check. It is never runtime proof -- the
+    production image's bytes, its processing path and every field only a production
+    entry reads (the secret name, the build configuration) are exercised by nothing but
+    a production run.
+    """
 
     EQUIVALENT = "EQUIVALENT"
+    UNREADABLE = "UNREADABLE"
+    TARGET_MISMATCH = "TARGET_MISMATCH"
+    ENTRY_MISMATCH = "ENTRY_MISMATCH"
     CODE_DIFFERS = "CODE_DIFFERS"
     ORIGIN_DIFFERS = "ORIGIN_DIFFERS"
-    ENTRY_MISMATCH = "ENTRY_MISMATCH"
-    UNREADABLE = "UNREADABLE"
+    TASK_DEFINITION_DIFFERS = "TASK_DEFINITION_DIFFERS"
+    EVIDENCE_MISSING = "EVIDENCE_MISSING"
+
+
+def _bound_to_target(raw: bytes, target: LaunchTarget, entry: TaskEntry) -> Any:
+    """The parsed configuration, or the verdict that refuses it against its target."""
+    try:
+        parsed, digest = parse_compiled_configuration(raw)
+    except CompiledConfigurationError:
+        return EquivalenceVerdict.UNREADABLE
+    if parsed.entry is not entry:
+        return EquivalenceVerdict.ENTRY_MISMATCH
+    if digest != target.configuration_digest or parsed.compiled.code_commit != target.code_commit:
+        return EquivalenceVerdict.TARGET_MISMATCH
+    if parsed.compiled.family != target.family:
+        return EquivalenceVerdict.TARGET_MISMATCH
+    return parsed
 
 
 def configuration_equivalence(
-    *, production: bytes, verification: bytes, acquisition: bytes | None = None
+    inputs: LaunchInputs,
+    *,
+    actor: ProductionActor,
+    production: bytes,
+    verification: bytes,
+    acquisition: bytes | None = None,
 ) -> EquivalenceVerdict:
-    """Compare a verification configuration file with its production counterpart.
+    """Compare the registered verification configuration with its production counterpart.
 
-    Equivalent when both parse, both name the same code commit and tree, the verification
-    entry is the production entry's own, and the origin set matches: the acquisition
-    verify file must carry the acquisition file's origin set; the build verify file --
-    whose production counterpart carries no origin -- must carry the **acquisition**
-    configuration's set, which is why ``acquisition`` is supplied for a build pair.
-    Nothing here reads a secret name into the verdict.
+    Every file is first bound to **its own registered target** (digest, commit, entry,
+    family): the production file to the actor's production target, the verification
+    file to its verification target, and -- for a build pair -- the acquisition file to
+    the acquisition production target, because the build verification image carries the
+    acquisition origin set and the production build file carries none. Then the two
+    registered task-definition revisions are compared field by field: roles, cpu,
+    memory, network mode, platform, user, read-only root and the ``/work`` tmpfs must
+    agree; family, revision, command and image digest differ by design. Then the
+    configurations: the same code commit; the verification origin set equal to the
+    acquisition set. **Anything else refuses**; a missing registered target or its
+    task-definition evidence is ``EVIDENCE_MISSING``. Nothing here reads a secret name
+    or a build configuration into the verdict, and the verdict is never runtime proof.
     """
-    try:
-        prod, _ = parse_compiled_configuration(production)
-        verify, _ = parse_compiled_configuration(verification)
-    except CompiledConfigurationError:
-        return EquivalenceVerdict.UNREADABLE
-    if (
-        verify.entry not in VERIFICATION_ENTRIES
-        or ENTRY_ACTOR[verify.entry] is not ENTRY_ACTOR[prod.entry]
-    ):
-        return EquivalenceVerdict.ENTRY_MISMATCH
-    if prod.entry in VERIFICATION_ENTRIES:
-        return EquivalenceVerdict.ENTRY_MISMATCH
+    production_target = inputs.targets.get((actor, LaunchKind.PRODUCTION))
+    verification_target = inputs.targets.get((actor, LaunchKind.VERIFICATION))
+    acquisition_target = inputs.targets.get((ProductionActor.ACQUISITION, LaunchKind.PRODUCTION))
+    if production_target is None or verification_target is None:
+        return EquivalenceVerdict.EVIDENCE_MISSING
+    production_entry = (
+        TaskEntry.ACQUISITION if actor is ProductionActor.ACQUISITION else TaskEntry.BUILD
+    )
+    verification_entry = (
+        TaskEntry.ACQUISITION_VERIFY
+        if actor is ProductionActor.ACQUISITION
+        else TaskEntry.BUILD_VERIFY
+    )
+    prod = _bound_to_target(production, production_target, production_entry)
+    if isinstance(prod, EquivalenceVerdict):
+        return prod
+    verify = _bound_to_target(verification, verification_target, verification_entry)
+    if isinstance(verify, EquivalenceVerdict):
+        return verify
     if prod.compiled.code_commit != verify.compiled.code_commit:
         return EquivalenceVerdict.CODE_DIFFERS
-    if prod.entry is TaskEntry.ACQUISITION:
+    # The registered task definitions: shared fields equal, intentional differences only.
+    production_evidence = production_target.task_definition
+    verification_evidence = verification_target.task_definition
+    for name in TASK_DEFINITION_SHARED_FIELDS:
+        if getattr(production_evidence, name) != getattr(verification_evidence, name):
+            return EquivalenceVerdict.TASK_DEFINITION_DIFFERS
+    if (
+        verification_evidence.family != constants_for(actor).verification_task_family
+        or production_evidence.family != constants_for(actor).task_family
+        or verification_evidence.command != verification_entry.value
+        or production_evidence.command != production_entry.value
+    ):
+        return EquivalenceVerdict.TASK_DEFINITION_DIFFERS
+    # The origin set the verification image probes or checks is the acquisition's.
+    if actor is ProductionActor.ACQUISITION:
         origin = prod.origin_addresses
     else:
-        if acquisition is None:
-            return EquivalenceVerdict.ORIGIN_DIFFERS
-        try:
-            acquired, _ = parse_compiled_configuration(acquisition)
-        except CompiledConfigurationError:
-            return EquivalenceVerdict.UNREADABLE
-        if acquired.entry is not TaskEntry.ACQUISITION:
-            return EquivalenceVerdict.ENTRY_MISMATCH
+        if acquisition is None or acquisition_target is None:
+            return EquivalenceVerdict.EVIDENCE_MISSING
+        acquired = _bound_to_target(acquisition, acquisition_target, TaskEntry.ACQUISITION)
+        if isinstance(acquired, EquivalenceVerdict):
+            return acquired
+        if acquired.compiled.code_commit != prod.compiled.code_commit:
+            return EquivalenceVerdict.CODE_DIFFERS
         origin = acquired.origin_addresses
     if verify.origin_addresses != origin:
         return EquivalenceVerdict.ORIGIN_DIFFERS
@@ -707,29 +970,212 @@ def configuration_equivalence(
 
 
 # ---------------------------------------------------------------------------
+# The launch specification -- what an authorization binds
+# ---------------------------------------------------------------------------
+
+SPECIFICATION_CONTRACT_ID: Final = "kalpamani-launch-specification/v1"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LaunchSpecification:
+    """The canonical, reviewable statement of one launch: what an authorization binds.
+
+    Built by preparation from the admitted records and rebuilt identically at execution,
+    so the authorization's ``specification_digest`` binds exactly what will run:
+
+    - actor, kind, identity and entry;
+    - the **workload** -- the acquisition slice and its plan digest, or the selected
+      build runs with the ledger evidence each carried (identity, plan digest, outcome,
+      evidence, completion instant);
+    - the **target** -- revision ARN, image digest, configuration digest, code commit,
+      the generation-record reference and the task-definition evidence;
+    - the **placement** -- cluster, subnet, security groups, public-IP setting, task and
+      execution roles, platform version, binding key;
+    - the **gate evidence** -- the R-3 verification digest and whether it applies.
+
+    **Excluded on purpose**: the input's issue and expiry instants and the ledger's
+    spent-identity set. The digest is over what is authorized, not over when the input
+    was cut; a ledger that grows between preparation and execution changes the spent
+    block and nothing the owner authorized, while a change to a selected build run's
+    own evidence changes the workload and refuses.
+    """
+
+    actor: ProductionActor
+    kind: LaunchKind
+    identity: str
+    entry: TaskEntry
+    workload: dict[str, Any]
+    target: LaunchTarget
+    placement: dict[str, Any]
+    gate_evidence: dict[str, Any]
+
+    def document(self) -> dict[str, Any]:
+        """The canonical document."""
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": SPECIFICATION_CONTRACT_ID,
+            "actor": self.actor.value,
+            "kind": self.kind.value,
+            "identity": self.identity,
+            "entry": self.entry.value,
+            "workload": self.workload,
+            "target": self.target.document(),
+            "placement": dict(self.placement),
+            "gate_evidence": dict(self.gate_evidence),
+        }
+
+    @property
+    def digest(self) -> str:
+        """The SHA-256 of the canonical document -- the value an authorization names."""
+        return sha256_hex(canonical_bytes(self.document()))
+
+    def __repr__(self) -> str:
+        """Actor, kind and entry only."""
+        return (
+            f"LaunchSpecification(actor={self.actor.value!r}, kind={self.kind.value!r}, "
+            f"entry={self.entry.value!r})"
+        )
+
+
+def build_specification(
+    *,
+    ledger: OwnerLedger,
+    inputs: LaunchInputs,
+    actor: ProductionActor,
+    kind: LaunchKind,
+    identity: str,
+    slice_document: object | None,
+    run_identities: list[str] | None,
+) -> LaunchSpecification:
+    """The specification of one launch from the admitted records, or refuse.
+
+    The workload is validated the way the input will be: the slice through the accepted
+    parser with its plan digest computed by the accepted function; the build runs
+    through the same buildable-row rule the input materialization applies.
+    """
+    admitted = admit_identity(ledger, identity, kind=kind)
+    compiled, target = compile_launch(inputs, actor=actor, kind=kind)
+    if actor is ProductionActor.ACQUISITION:
+        if slice_document is None or run_identities is not None:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        try:
+            covered = parse_slice(slice_document)
+        except Exception:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
+        entry = (
+            TaskEntry.ACQUISITION if kind is LaunchKind.PRODUCTION else TaskEntry.ACQUISITION_VERIFY
+        )
+        workload: dict[str, Any] = {
+            "slice": covered.canonical(),
+            "plan_digest": plan_digest_for(
+                covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode)
+            ),
+        }
+    else:
+        if run_identities is None or slice_document is not None:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        if type(run_identities) is not list or not run_identities:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        if len(set(run_identities)) != len(run_identities):
+            raise _refuse(LaunchRecordDefect.IDENTITY_DUPLICATE)
+        runs: list[dict[str, Any]] = []
+        for run_identity in run_identities:
+            row = ledger.row(_identity(run_identity))
+            if row is None or not row.buildable:
+                raise _refuse(LaunchRecordDefect.ROW_NOT_BUILDABLE)
+            runs.append(
+                {
+                    "identity": row.identity,
+                    "plan_digest": row.plan_digest,
+                    "outcome": row.outcome,
+                    "evidence": row.evidence.value,
+                    "completed_at": row.completed_at.isoformat(),
+                }
+            )
+        entry = TaskEntry.BUILD if kind is LaunchKind.PRODUCTION else TaskEntry.BUILD_VERIFY
+        workload = {"runs": runs}
+    placement = {
+        "cluster_arn": compiled.cluster_arn,
+        "subnet_id": compiled.subnet_id,
+        "security_group_ids": list(compiled.security_group_ids),
+        "assign_public_ip": compiled.assign_public_ip,
+        "task_role_arn": compiled.task_role_arn,
+        "execution_role_arn": compiled.execution_role_arn,
+        "platform_version": compiled.platform_version,
+        "binding_key_arn": compiled.binding_key_arn,
+    }
+    # The R-3 digest applies to a production launch (stage b); a verification launch
+    # at stage a has none to name. Its presence is a reference to owner-held evidence,
+    # not proof that the verification occurred.
+    applicable = kind is LaunchKind.PRODUCTION
+    if applicable and inputs.r3_verification_digest is None:
+        raise _refuse(LaunchRecordDefect.FIELD_MISSING)
+    gate_evidence = {
+        "r3_verification_digest": inputs.r3_verification_digest if applicable else None,
+        "r3_applicable": applicable,
+        "generation_record_digest": target.generation_record_digest,
+    }
+    return LaunchSpecification(
+        actor=actor,
+        kind=kind,
+        identity=admitted,
+        entry=entry,
+        workload=workload,
+        target=target,
+        placement=placement,
+        gate_evidence=gate_evidence,
+    )
+
+
+# ---------------------------------------------------------------------------
 # The authorization record
 # ---------------------------------------------------------------------------
 
 _AUTHORIZATION_FIELDS: Final[frozenset[str]] = frozenset(
-    {"schema_version", "contract_id", "actor", "kind", "identity", "issued_at", "expires_at"}
+    {
+        "schema_version",
+        "contract_id",
+        "actor",
+        "kind",
+        "identity",
+        "specification_digest",
+        "issued_at",
+        "expires_at",
+    }
 )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LaunchAuthorizationRecord:
-    """The owner's written authorization for exactly one launch."""
+    """The owner's written authorization for exactly one launch of one specification."""
 
     actor: ProductionActor
     kind: LaunchKind
     identity: str
+    specification_digest: str
     issued_at: datetime
     expires_at: datetime
 
+    def valid_at(self, now: datetime) -> bool:
+        """Whether the authorization is in force at ``now``."""
+        return self.issued_at <= now < self.expires_at
+
 
 def parse_authorization(
-    raw: object, *, actor: ProductionActor, kind: LaunchKind, identity: str, now: datetime
+    raw: object,
+    *,
+    actor: ProductionActor,
+    kind: LaunchKind,
+    identity: str,
+    specification_digest: str,
+    now: datetime,
 ) -> LaunchAuthorizationRecord:
-    """The authorization for THIS actor, kind and identity, valid now -- or refuse."""
+    """The authorization for THIS actor, kind, identity and specification, valid now.
+
+    The specification digest is the one preparation produced from the admitted records
+    and execution recomputes; an authorization naming any other refuses
+    (``AUTHORIZATION_MISMATCH``) before a client is built.
+    """
     document = decode_record(
         raw, contract_id=AUTHORIZATION_CONTRACT_ID, fields=_AUTHORIZATION_FIELDS
     )
@@ -737,11 +1183,13 @@ def parse_authorization(
     kind_value = exact_str(document["kind"])
     issued_at = instant(document["issued_at"])
     expires_at = instant(document["expires_at"])
+    recorded_digest = hex_digest(document["specification_digest"])
     if (
         actor_value not in {m.value for m in ProductionActor}
         or kind_value not in {m.value for m in LaunchKind}
         or issued_at is None
         or expires_at is None
+        or recorded_digest is None
     ):
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
     recorded_identity = _identity(document["identity"])
@@ -749,19 +1197,22 @@ def parse_authorization(
         ProductionActor(actor_value) is not actor
         or LaunchKind(kind_value) is not kind
         or recorded_identity != identity
+        or recorded_digest != specification_digest
     ):
         raise _refuse(LaunchRecordDefect.AUTHORIZATION_MISMATCH)
     if expires_at <= issued_at or expires_at - issued_at > MAX_AUTHORIZATION_VALIDITY:
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
-    if not issued_at <= now < expires_at:
-        raise _refuse(LaunchRecordDefect.AUTHORIZATION_EXPIRED)
-    return LaunchAuthorizationRecord(
+    record = LaunchAuthorizationRecord(
         actor=actor,
         kind=kind,
         identity=recorded_identity,
+        specification_digest=recorded_digest,
         issued_at=issued_at,
         expires_at=expires_at,
     )
+    if not record.valid_at(now):
+        raise _refuse(LaunchRecordDefect.AUTHORIZATION_EXPIRED)
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +1287,9 @@ _LAUNCH_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
         "slice",
         "plan_digest",
         "launched_at",
+        "recorded_at",
+        "network_interface_id",
+        "subnet_id",
     }
 )
 
@@ -866,6 +1320,19 @@ class LaunchRecord:
     slice: Slice | None
     plan_digest: str | None
     launched_at: datetime
+    #: When the tool recorded the launch's terminal (or last observed) state.
+    recorded_at: datetime
+    #: The placement the launcher verified and the release named; ``None`` when no
+    #: release was written. The R-2 verdict binds the analysis source to this interface.
+    network_interface_id: str | None
+    subnet_id: str | None
+
+    def __post_init__(self) -> None:
+        """Interface and subnet come together, and the record is not earlier than the launch."""
+        if (self.network_interface_id is None) != (self.subnet_id is None):
+            raise ValueError("the verified interface and subnet are recorded together")
+        if self.recorded_at < self.launched_at:
+            raise ValueError("a launch is recorded no earlier than it was made")
 
     @property
     def actor(self) -> ProductionActor:
@@ -910,6 +1377,9 @@ class LaunchRecord:
             "slice": None if self.slice is None else self.slice.canonical(),
             "plan_digest": self.plan_digest,
             "launched_at": self.launched_at.isoformat(),
+            "recorded_at": self.recorded_at.isoformat(),
+            "network_interface_id": self.network_interface_id,
+            "subnet_id": self.subnet_id,
         }
 
     def __repr__(self) -> str:
@@ -939,24 +1409,42 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         raise _refuse(LaunchRecordDefect.IDENTITY_KIND_MISMATCH)
     task_arn = exact_str(document["task_arn"])
     launched_at = instant(document["launched_at"])
+    recorded_at = instant(document["recorded_at"])
     input_digest_value = hex_digest(document["input_digest"])
+    interface = document["network_interface_id"]
+    subnet = document["subnet_id"]
+    definition = exact_str(document["task_definition_arn"])
+    image = exact_str(document["image_digest"])
+    configuration = exact_str(document["configuration_digest"])
+    commit = exact_str(document["code_commit"])
     if (
         task_arn is None
         or TASK_ARN_RE.fullmatch(task_arn) is None
         or launched_at is None
+        or recorded_at is None
+        or recorded_at < launched_at
         or input_digest_value is None
+        or definition is None
+        or TASK_DEFINITION_ARN_RE.fullmatch(definition) is None
+        or image is None
+        or IMAGE_DIGEST_RE.fullmatch(image) is None
+        or configuration is None
+        or CONFIGURATION_DIGEST_RE.fullmatch(configuration) is None
+        or commit is None
+        or CODE_COMMIT_RE.fullmatch(commit) is None
+        or (interface is None) != (subnet is None)
+        or (
+            interface is not None
+            and (
+                type(interface) is not str
+                or NETWORK_INTERFACE_ID_RE.fullmatch(interface) is None
+                or type(subnet) is not str
+                or SUBNET_ID_RE.fullmatch(subnet) is None
+            )
+        )
     ):
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
-    target = _target(
-        {
-            "task_definition_arn": document["task_definition_arn"],
-            "image_digest": document["image_digest"],
-            "configuration_digest": document["configuration_digest"],
-            "code_commit": document["code_commit"],
-        }
-    )
-    assert target is not None
-    family = TASK_DEFINITION_ARN_RE.fullmatch(target.task_definition_arn)
+    family = TASK_DEFINITION_ARN_RE.fullmatch(definition)
     assert family is not None
     if family.group(2) != entry_family(entry):
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
@@ -977,14 +1465,17 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         kind=kind,
         identity=identity,
         task_arn=task_arn,
-        task_definition_arn=target.task_definition_arn,
-        image_digest=target.image_digest,
-        configuration_digest=target.configuration_digest,
-        code_commit=target.code_commit,
+        task_definition_arn=definition,
+        image_digest=image,
+        configuration_digest=configuration,
+        code_commit=commit,
         input_digest=input_digest_value,
         slice=covered,
         plan_digest=plan_digest,
         launched_at=launched_at,
+        recorded_at=recorded_at,
+        network_interface_id=interface,
+        subnet_id=subnet,
     )
 
 
@@ -1111,6 +1602,9 @@ __all__ = [
     "MAX_AUTHORIZATION_VALIDITY",
     "MAX_RECORD_BYTES",
     "RECORD_SCHEMA_VERSION",
+    "SPECIFICATION_CONTRACT_ID",
+    "TASK_DEFINITION_INTENTIONAL_DIFFERENCES",
+    "TASK_DEFINITION_SHARED_FIELDS",
     "VERIFICATION_IDENTITY_PREFIX",
     "EquivalenceVerdict",
     "LaunchAuthorizationRecord",
@@ -1119,12 +1613,15 @@ __all__ = [
     "LaunchRecord",
     "LaunchRecordDefect",
     "LaunchRecordError",
+    "LaunchSpecification",
     "LaunchTarget",
     "LedgerEvidence",
     "OwnerLedger",
     "OwnerLedgerRow",
+    "TaskDefinitionEvidence",
     "admit_identity",
     "append_row",
+    "build_specification",
     "compile_launch",
     "complete_ledger_row",
     "configuration_equivalence",

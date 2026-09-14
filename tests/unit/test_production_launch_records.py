@@ -11,6 +11,7 @@ code can support and no more; completion needs a receipt bound to the launch rec
 from __future__ import annotations
 
 import dataclasses
+import json
 from datetime import timedelta
 from typing import Any, Final
 
@@ -21,11 +22,15 @@ from fixtures.production_entry import ORIGIN_ADDRESSES, AcquisitionHarness, Veri
 from fixtures.production_launch import (
     ACQ,
     BLD,
+    GENERATION_RECORD_DIGESTS,
+    R3_DIGEST,
     authorization_document,
     launch_inputs_document,
     ledger_document,
     ledger_row,
+    specification_digest_for,
     target_document,
+    task_definition_document,
 )
 from fixtures.production_runtime import (
     BUILD_ID,
@@ -33,10 +38,12 @@ from fixtures.production_runtime import (
     COMMIT,
     CONFIGURATION_DIGEST,
     IMAGE_DIGEST,
+    INTERFACE_ID,
     NOW,
     OTHER_RUN_ID,
     PLAN_DIGEST,
     RUN_ID,
+    SUBNET_ID,
     TASK_ARN,
     TREE,
     compiled_task,
@@ -46,7 +53,10 @@ from fixtures.production_runtime import (
     verification_revision_arn,
 )
 from kalpamani.data.production.sharadar import launch_records as lr
-from kalpamani.data.production.sharadar.compiled import build_compiled_configuration
+from kalpamani.data.production.sharadar.compiled import (
+    build_compiled_configuration,
+    configuration_digest_of,
+)
 from kalpamani.data.production.sharadar.entry import TaskEntry, TaskOutcome
 from kalpamani.data.production.sharadar.inputs import (
     InputError,
@@ -351,6 +361,52 @@ class TestLaunchInputs:
             assert target.code_commit == COMMIT
         assert "LaunchInputs()" == repr(inputs)
 
+    def test_task_definition_evidence_is_bound_to_its_target(self) -> None:
+        mutate: Any
+        for mutate in (
+            lambda td: td.__setitem__("revision", 99),
+            lambda td: td.__setitem__("family", "kalpamani-research-build"),
+            lambda td: td.__setitem__("image_digest", "sha256:" + "00" * 32),
+            lambda td: td.__setitem__("command", "kalpamani-research-build"),
+            lambda td: td.__setitem__(
+                "task_role_arn", task_definition_document(BLD)["task_role_arn"]
+            ),
+        ):
+            document = launch_inputs_document()
+            mutate(document["actors"]["acquisition"]["production"]["task_definition"])
+            with _refuses(lr.LaunchRecordDefect.ACTOR_MISMATCH):
+                lr.parse_launch_inputs(encode(document))
+        for mutate in (
+            lambda td: td.__setitem__("user", "root"),
+            lambda td: td.__setitem__("network_mode", "bridge"),
+            lambda td: td.__setitem__("readonly_root_filesystem", "true"),
+            lambda td: td.pop("work_tmpfs"),
+            lambda td: td.__setitem__("cpu", 0),
+        ):
+            document = launch_inputs_document()
+            mutate(document["actors"]["acquisition"]["production"]["task_definition"])
+            with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+                lr.parse_launch_inputs(encode(document))
+        document = launch_inputs_document()
+        document["actors"]["acquisition"]["production"].pop("task_definition")
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_launch_inputs(encode(document))
+        document = launch_inputs_document()
+        document["actors"]["acquisition"]["production"]["generation_record_digest"] = "x"
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_launch_inputs(encode(document))
+        inputs = lr.parse_launch_inputs(encode(launch_inputs_document()))
+        target = inputs.targets[(ACQ, lr.LaunchKind.PRODUCTION)]
+        assert target.family == "kalpamani-production-acquire" and target.revision == 7
+        assert target.generation_record_digest == GENERATION_RECORD_DIGESTS[(ACQ, False)]
+        assert inputs.r3_verification_digest == R3_DIGEST
+        assert (
+            lr.parse_launch_inputs(
+                encode(launch_inputs_document(r3_verification_digest=None))
+            ).r3_verification_digest
+            is None
+        )
+
     def test_a_missing_verification_target_refuses_only_the_verification_launch(self) -> None:
         inputs = lr.parse_launch_inputs(encode(launch_inputs_document(verification=False)))
         lr.compile_launch(inputs, actor=ACQ, kind=lr.LaunchKind.PRODUCTION)
@@ -411,89 +467,225 @@ def _compiled(entry: TaskEntry, **overrides: Any) -> bytes:
     return build_compiled_configuration(**fields_)
 
 
+def _inputs_registering(**files: bytes) -> lr.LaunchInputs:
+    """Launch inputs whose targets register the digests of the supplied files."""
+    document = launch_inputs_document()
+    for key, raw in files.items():
+        actor, field = key.split("_", 1)
+        document["actors"][actor][field]["configuration_digest"] = configuration_digest_of(raw)
+    return lr.parse_launch_inputs(encode(document))
+
+
+ACQ_PROD: Final = _compiled(TaskEntry.ACQUISITION)
+ACQ_VERIFY: Final = _compiled(TaskEntry.ACQUISITION_VERIFY)
+BLD_PROD: Final = _compiled(TaskEntry.BUILD)
+BLD_VERIFY: Final = _compiled(TaskEntry.BUILD_VERIFY)
+
+
+def _registered() -> lr.LaunchInputs:
+    return _inputs_registering(
+        acquisition_production=ACQ_PROD,
+        acquisition_verification=ACQ_VERIFY,
+        build_production=BLD_PROD,
+        build_verification=BLD_VERIFY,
+    )
+
+
 class TestEquivalence:
-    def test_the_acquisition_pair_is_equivalent_on_the_same_commit_and_origin_set(self) -> None:
+    def test_the_registered_acquisition_pair_is_equivalent(self) -> None:
         verdict = lr.configuration_equivalence(
-            production=_compiled(TaskEntry.ACQUISITION),
-            verification=_compiled(TaskEntry.ACQUISITION_VERIFY),
+            _registered(), actor=ACQ, production=ACQ_PROD, verification=ACQ_VERIFY
         )
         assert verdict is lr.EquivalenceVerdict.EQUIVALENT
 
-    def test_the_build_pair_needs_the_acquisition_origin_set(self) -> None:
-        production = _compiled(TaskEntry.BUILD)
-        verification = _compiled(TaskEntry.BUILD_VERIFY)
+    def test_the_build_pair_needs_the_registered_acquisition_file(self) -> None:
+        inputs = _registered()
         assert (
-            lr.configuration_equivalence(production=production, verification=verification)
-            is lr.EquivalenceVerdict.ORIGIN_DIFFERS
+            lr.configuration_equivalence(
+                inputs, actor=BLD, production=BLD_PROD, verification=BLD_VERIFY
+            )
+            is lr.EquivalenceVerdict.EVIDENCE_MISSING
         )
         assert (
             lr.configuration_equivalence(
-                production=production,
-                verification=verification,
-                acquisition=_compiled(TaskEntry.ACQUISITION),
+                inputs,
+                actor=BLD,
+                production=BLD_PROD,
+                verification=BLD_VERIFY,
+                acquisition=ACQ_PROD,
             )
             is lr.EquivalenceVerdict.EQUIVALENT
         )
+        # An acquisition file that is valid but not the registered acquisition target.
+        unrelated = _compiled(TaskEntry.ACQUISITION, origin_addresses=["198.51.100.1"])
         assert (
             lr.configuration_equivalence(
-                production=production,
-                verification=verification,
-                acquisition=_compiled(TaskEntry.ACQUISITION, origin_addresses=["198.51.100.1"]),
+                inputs,
+                actor=BLD,
+                production=BLD_PROD,
+                verification=BLD_VERIFY,
+                acquisition=unrelated,
             )
-            is lr.EquivalenceVerdict.ORIGIN_DIFFERS
+            is lr.EquivalenceVerdict.TARGET_MISMATCH
         )
         # The "acquisition" file must be the acquisition entry's.
         assert (
             lr.configuration_equivalence(
-                production=production, verification=verification, acquisition=production
+                inputs,
+                actor=BLD,
+                production=BLD_PROD,
+                verification=BLD_VERIFY,
+                acquisition=BLD_PROD,
             )
             is lr.EquivalenceVerdict.ENTRY_MISMATCH
         )
 
-    def test_every_other_verdict(self) -> None:
-        production = _compiled(TaskEntry.ACQUISITION)
-        assert (
-            lr.configuration_equivalence(
-                production=production,
-                verification=_compiled(TaskEntry.ACQUISITION_VERIFY, code_commit="ab" * 20),
-            )
-            is lr.EquivalenceVerdict.CODE_DIFFERS
+    def test_an_unrelated_but_valid_production_file_is_refused_against_its_target(self) -> None:
+        """PR #104 review finding 3: the production file was never bound to its target."""
+        inputs = _registered()
+        unrelated_set = ["198.51.100.20", "198.51.100.21"]
+        unrelated_production = _compiled(TaskEntry.ACQUISITION, origin_addresses=unrelated_set)
+        matching_verification = _compiled(
+            TaskEntry.ACQUISITION_VERIFY, origin_addresses=unrelated_set
+        )
+        # Registering only the verification side (the substitution the review described).
+        inputs_with_verify = _inputs_registering(
+            acquisition_production=ACQ_PROD,
+            acquisition_verification=matching_verification,
+            build_production=BLD_PROD,
+            build_verification=BLD_VERIFY,
         )
         assert (
             lr.configuration_equivalence(
-                production=production,
-                verification=_compiled(
-                    TaskEntry.ACQUISITION_VERIFY, origin_addresses=["192.0.2.10"]
+                inputs_with_verify,
+                actor=ACQ,
+                production=unrelated_production,
+                verification=matching_verification,
+            )
+            is lr.EquivalenceVerdict.TARGET_MISMATCH
+        )
+        # And a verification file the record did not register.
+        assert (
+            lr.configuration_equivalence(
+                inputs, actor=ACQ, production=ACQ_PROD, verification=matching_verification
+            )
+            is lr.EquivalenceVerdict.TARGET_MISMATCH
+        )
+
+    def test_a_changed_task_revision_or_deployment_declaration_refuses(self) -> None:
+        document = launch_inputs_document()
+        document["actors"]["acquisition"]["production"]["configuration_digest"] = (
+            configuration_digest_of(ACQ_PROD)
+        )
+        document["actors"]["acquisition"]["verification"]["configuration_digest"] = (
+            configuration_digest_of(ACQ_VERIFY)
+        )
+        # A different registered revision for the verification family: the ARN and the
+        # evidence move together, and the file still binds -- the pair still compares.
+        moved = json.loads(json.dumps(document))
+        moved["actors"]["acquisition"]["verification"]["task_definition_arn"] = (
+            verification_revision_arn(ACQ, 8)
+        )
+        moved["actors"]["acquisition"]["verification"]["task_definition"]["revision"] = 8
+        assert (
+            lr.configuration_equivalence(
+                lr.parse_launch_inputs(encode(moved)),
+                actor=ACQ,
+                production=ACQ_PROD,
+                verification=ACQ_VERIFY,
+            )
+            is lr.EquivalenceVerdict.EQUIVALENT
+        )
+        # A deployment declaration that differs on a shared field refuses.
+        for field, value in (
+            ("cpu", 2048),
+            ("memory", 4096),
+            ("readonly_root_filesystem", False),
+            ("work_tmpfs", False),
+        ):
+            changed = json.loads(json.dumps(document))
+            changed["actors"]["acquisition"]["verification"]["task_definition"][field] = value
+            assert (
+                lr.configuration_equivalence(
+                    lr.parse_launch_inputs(encode(changed)),
+                    actor=ACQ,
+                    production=ACQ_PROD,
+                    verification=ACQ_VERIFY,
+                )
+                is lr.EquivalenceVerdict.TASK_DEFINITION_DIFFERS
+            ), field
+        # A missing verification target is missing evidence, not equivalence.
+        assert (
+            lr.configuration_equivalence(
+                lr.parse_launch_inputs(encode(launch_inputs_document(verification=False))),
+                actor=ACQ,
+                production=ACQ_PROD,
+                verification=ACQ_VERIFY,
+            )
+            is lr.EquivalenceVerdict.EVIDENCE_MISSING
+        )
+
+    def test_every_other_verdict(self) -> None:
+        inputs = _registered()
+        other_commit = _compiled(TaskEntry.ACQUISITION_VERIFY, code_commit="ab" * 20)
+        assert (
+            lr.configuration_equivalence(
+                _inputs_registering(
+                    acquisition_production=ACQ_PROD,
+                    acquisition_verification=other_commit,
+                    build_production=BLD_PROD,
+                    build_verification=BLD_VERIFY,
                 ),
+                actor=ACQ,
+                production=ACQ_PROD,
+                verification=other_commit,
+            )
+            is lr.EquivalenceVerdict.TARGET_MISMATCH
+        )  # the registered target names COMMIT; the file names another
+        narrower = _compiled(TaskEntry.ACQUISITION_VERIFY, origin_addresses=["192.0.2.10"])
+        assert (
+            lr.configuration_equivalence(
+                _inputs_registering(
+                    acquisition_production=ACQ_PROD,
+                    acquisition_verification=narrower,
+                    build_production=BLD_PROD,
+                    build_verification=BLD_VERIFY,
+                ),
+                actor=ACQ,
+                production=ACQ_PROD,
+                verification=narrower,
             )
             is lr.EquivalenceVerdict.ORIGIN_DIFFERS
         )
         assert (
             lr.configuration_equivalence(
-                production=production, verification=_compiled(TaskEntry.BUILD_VERIFY)
+                inputs, actor=ACQ, production=ACQ_PROD, verification=BLD_VERIFY
             )
-            is lr.EquivalenceVerdict.ENTRY_MISMATCH
-        )
-        assert (
-            lr.configuration_equivalence(production=production, verification=production)
             is lr.EquivalenceVerdict.ENTRY_MISMATCH
         )
         assert (
             lr.configuration_equivalence(
-                production=_compiled(TaskEntry.ACQUISITION_VERIFY),
-                verification=_compiled(TaskEntry.ACQUISITION_VERIFY),
+                inputs, actor=ACQ, production=ACQ_VERIFY, verification=ACQ_VERIFY
             )
             is lr.EquivalenceVerdict.ENTRY_MISMATCH
         )
         assert (
-            lr.configuration_equivalence(production=b"{", verification=production)
+            lr.configuration_equivalence(
+                inputs, actor=ACQ, production=b"{", verification=ACQ_VERIFY
+            )
             is lr.EquivalenceVerdict.UNREADABLE
         )
+        assert set(lr.TASK_DEFINITION_SHARED_FIELDS) | set(
+            lr.TASK_DEFINITION_INTENTIONAL_DIFFERENCES
+        ) == set(task_definition_document(ACQ))
 
 
 # ---------------------------------------------------------------------------
 # Authorization
 # ---------------------------------------------------------------------------
+
+
+SPEC_DIGEST: Final = specification_digest_for(actor=ACQ, kind="production", identity=RUN_ID)
 
 
 class TestAuthorization:
@@ -502,6 +694,7 @@ class TestAuthorization:
             "actor": ACQ,
             "kind": lr.LaunchKind.PRODUCTION,
             "identity": RUN_ID,
+            "specification_digest": SPEC_DIGEST,
             "now": NOW,
         }
         fields_.update(overrides)
@@ -510,8 +703,11 @@ class TestAuthorization:
     def test_a_matching_valid_authorization_is_admitted(self) -> None:
         record = self._parse(authorization_document(actor=ACQ, kind="production", identity=RUN_ID))
         assert record.identity == RUN_ID and record.kind is lr.LaunchKind.PRODUCTION
+        assert record.specification_digest == SPEC_DIGEST and record.valid_at(NOW)
 
-    def test_the_authorization_is_for_one_actor_one_kind_one_identity(self) -> None:
+    def test_the_authorization_is_for_one_actor_one_kind_one_identity_one_specification(
+        self,
+    ) -> None:
         document = authorization_document(actor=ACQ, kind="production", identity=RUN_ID)
         with _refuses(lr.LaunchRecordDefect.AUTHORIZATION_MISMATCH):
             self._parse(document, actor=BLD)
@@ -519,6 +715,11 @@ class TestAuthorization:
             self._parse(document, kind=lr.LaunchKind.VERIFICATION)
         with _refuses(lr.LaunchRecordDefect.AUTHORIZATION_MISMATCH):
             self._parse(document, identity=OTHER_RUN_ID)
+        with _refuses(lr.LaunchRecordDefect.AUTHORIZATION_MISMATCH):
+            self._parse(document, specification_digest="cd" * 32)
+        with _refuses(lr.LaunchRecordDefect.FIELD_MISSING):
+            legacy = {k: v for k, v in document.items() if k != "specification_digest"}
+            self._parse(legacy)
 
     def test_an_expired_a_future_and_an_over_long_authorization_are_refused(self) -> None:
         document = authorization_document(actor=ACQ, kind="production", identity=RUN_ID)
@@ -535,6 +736,136 @@ class TestAuthorization:
                     expires_at=(NOW + timedelta(hours=30)).isoformat(),
                 )
             )
+
+
+class TestSpecification:
+    """PR #104 review finding 2: the authorization binds the whole launch, not four fields."""
+
+    def _digest(self, **overrides: Any) -> str:
+        return specification_digest_for(actor=ACQ, kind="production", identity=RUN_ID, **overrides)
+
+    def test_each_bound_category_changes_the_digest(self) -> None:
+        base = self._digest()
+        # A changed slice (the workload).
+        assert (
+            self._digest(
+                slice_doc=slice_document(
+                    windows={"actions": "2024-01-01/2024-12-31", "tickers": "SNAPSHOT"}
+                )
+            )
+            != base
+        )
+        # A changed registered target (image, configuration, commit, revision).
+        for field, value in (
+            ("image_digest", "sha256:" + "00" * 32),
+            ("configuration_digest", "c9" * 32),
+            ("generation_record_digest", "9a" * 32),
+        ):
+            document = launch_inputs_document()
+            document["actors"]["acquisition"]["production"][field] = value
+            if field == "image_digest":
+                document["actors"]["acquisition"]["production"]["task_definition"][
+                    "image_digest"
+                ] = value
+            assert self._digest(inputs=document) != base, field
+        document = launch_inputs_document()
+        document["actors"]["acquisition"]["production"]["task_definition_arn"] = revision_arn(
+            ACQ, 8
+        )
+        document["actors"]["acquisition"]["production"]["task_definition"]["revision"] = 8
+        assert self._digest(inputs=document) != base
+        # A changed placement.
+        document = launch_inputs_document()
+        document["actors"]["acquisition"]["subnet_id"] = "subnet-0fedcba9876543210"
+        assert self._digest(inputs=document) != base
+        document = launch_inputs_document()
+        document["platform_version"] = "1.3.0"
+        assert self._digest(inputs=document) != base
+        # A changed gate-evidence reference.
+        assert self._digest(inputs=launch_inputs_document(r3_verification_digest="b3" * 32)) != base
+        # A different identity or kind.
+        assert specification_digest_for(actor=ACQ, kind="production", identity=OTHER_RUN_ID) != base
+
+    def test_ledger_growth_and_input_instants_do_not_change_the_digest(self) -> None:
+        base = self._digest()
+        grown = ledger_document(
+            [
+                ledger_row(OTHER_RUN_ID),
+                ledger_row(VERIFY_ID, kind="verification", outcome="VERIFIED"),
+            ]
+        )
+        assert self._digest(ledger=grown) == base
+        # The materialized input carries issued_at/expires_at and the spent set; the
+        # specification carries neither, so two inputs cut at different instants from
+        # different ledgers are one authorized launch.
+        ledger = lr.parse_owner_ledger(encode(grown))
+        first = lr.materialize_acquisition_input(
+            ledger,
+            identity=RUN_ID,
+            kind=lr.LaunchKind.PRODUCTION,
+            slice_document=slice_document(),
+            now=NOW,
+        )
+        second = lr.materialize_acquisition_input(
+            ledger,
+            identity=RUN_ID,
+            kind=lr.LaunchKind.PRODUCTION,
+            slice_document=slice_document(),
+            now=NOW + timedelta(hours=1),
+        )
+        assert first != second
+
+    def test_a_build_specification_carries_the_selected_run_evidence(self) -> None:
+        base = specification_digest_for(actor=BLD, kind="production", identity=BUILD_ID)
+        # The same run identity with different ledger evidence is a different workload.
+        changed = ledger_document([ledger_row(RUN_ID, plan_digest="9e" * 32)])
+        assert (
+            specification_digest_for(
+                actor=BLD, kind="production", identity=BUILD_ID, ledger=changed
+            )
+            != base
+        )
+        # An unbuildable run refuses the specification.
+        with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
+            specification_digest_for(
+                actor=BLD,
+                kind="production",
+                identity=BUILD_ID,
+                ledger=ledger_document([ledger_row(RUN_ID, evidence="EXIT_CODE_ONLY")]),
+            )
+
+    def test_the_r3_reference_applies_to_production_and_not_to_verification(self) -> None:
+        with _refuses(lr.LaunchRecordDefect.FIELD_MISSING):
+            self._digest(inputs=launch_inputs_document(r3_verification_digest=None))
+        verification = specification_digest_for(
+            actor=ACQ,
+            kind="verification",
+            identity=VERIFY_ID,
+            inputs=launch_inputs_document(r3_verification_digest=None),
+        )
+        assert len(verification) == 64
+        ledger = lr.parse_owner_ledger(encode(ledger_document()))
+        inputs = lr.parse_launch_inputs(encode(launch_inputs_document()))
+        specification = lr.build_specification(
+            ledger=ledger,
+            inputs=inputs,
+            actor=ACQ,
+            kind=lr.LaunchKind.VERIFICATION,
+            identity=VERIFY_ID,
+            slice_document=slice_document(),
+            run_identities=None,
+        )
+        assert specification.gate_evidence == {
+            "r3_verification_digest": None,
+            "r3_applicable": False,
+            "generation_record_digest": GENERATION_RECORD_DIGESTS[(ACQ, True)],
+        }
+        assert specification.entry is TaskEntry.ACQUISITION_VERIFY
+        document = specification.document()
+        assert document["contract_id"] == lr.SPECIFICATION_CONTRACT_ID
+        assert "issued_at" not in json.dumps(document) and "spent" not in json.dumps(document)
+        for canary in CANARIES:
+            assert canary not in repr(specification)
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +943,9 @@ def _record(**overrides: Any) -> lr.LaunchRecord:
         "slice": parse_slice(slice_document()),
         "plan_digest": PLAN_DIGEST,
         "launched_at": NOW,
+        "recorded_at": NOW + timedelta(seconds=15),
+        "network_interface_id": INTERFACE_ID,
+        "subnet_id": SUBNET_ID,
     }
     fields_.update(overrides)
     return lr.LaunchRecord(**fields_)
@@ -638,6 +972,8 @@ class TestLaunchRecord:
             lambda d: d.__setitem__("slice", None),
             lambda d: d.__setitem__("plan_digest", None),
             lambda d: d.__setitem__("input_digest", "xyz"),
+            lambda d: d.__setitem__("network_interface_id", None),  # without its subnet
+            lambda d: d.__setitem__("recorded_at", (NOW - timedelta(days=1)).isoformat()),
         ],
     )
     def test_a_record_that_contradicts_itself_is_refused(self, mutate: Any) -> None:

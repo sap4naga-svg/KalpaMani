@@ -427,6 +427,8 @@ class TaskReceipt:
                 f"probe_resolution={self.probe.resolution.value} "
                 f"probe_result={self.probe.result.value} probe_attempts={self.probe.attempts}"
             )
+            # The keyed digest of the selected destination (never the address), or none.
+            lines.append(f"probe_destination={self.probe.destination_digest or 'none'}")
             # The task observes; it never concludes (proposed ADR-0045 s.4).
             lines.append("isolation_verdict=NOT_DECIDED_BY_THE_TASK")
         if self.schema_observation is not None:

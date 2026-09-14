@@ -162,6 +162,12 @@ class LaunchReport:
     task_started: bool
     task_exit_codes: tuple[int | None, ...]
     handle: LaunchHandle | None
+    #: The placement the launcher verified and the release named -- the task's network
+    #: interface and subnet -- present exactly when a release was written. Held for the
+    #: launch record (the R-2 verdict binds the analysis source to this interface); never
+    #: rendered.
+    network_interface_id: str | None = None
+    subnet_id: str | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers only; a handle exactly when a task started."""
@@ -177,6 +183,10 @@ class LaunchReport:
             raise ValueError("a handle is present exactly when a task started")
         if (self.outcome is LaunchOutcome.MISPLACED) != (self.incident is not None):
             raise ValueError("an incident is present exactly when the outcome is MISPLACED")
+        if (self.network_interface_id is None) != (self.subnet_id is None):
+            raise ValueError("the verified interface and subnet are recorded together")
+        if self.network_interface_id is not None and self.handle is None:
+            raise ValueError("a verified placement belongs to a started task")
 
     def __repr__(self) -> str:
         """Outcome and counts of failures. **Never a handle.**"""
@@ -316,6 +326,8 @@ def launch_authorized_run(
     cleanup: list[CleanupFailure] = []
     input_materialized = False
     release_written = False
+    released_interface: str | None = None
+    released_subnet: str | None = None
 
     def prove(path: IdentityPath) -> None:
         nonlocal identity_calls
@@ -489,6 +501,8 @@ def launch_authorized_run(
             stop_own_task(STOP_REASON_RELEASE_EXISTS)
             raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
         release_written = True
+        released_interface = verified_interface
+        released_subnet = verified_subnet
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
@@ -537,6 +551,8 @@ def launch_authorized_run(
         task_started=handle is not None,
         task_exit_codes=exit_codes,
         handle=handle,
+        network_interface_id=released_interface,
+        subnet_id=released_subnet,
     )
 
 

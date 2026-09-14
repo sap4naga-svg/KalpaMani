@@ -283,26 +283,22 @@ class TestVerifiedBootstrap:
 # ---------------------------------------------------------------------------
 
 
+BINDING_KEY: Final = "ab" * 32
+
+
 def _observation(result: pp.ProbeResult) -> pp.ProbeObservation:
     if result is pp.ProbeResult.NOT_ATTEMPTED:
         return pp.ProbeObservation(
             resolution=pp.ProbeResolution.UNRESOLVED, result=result, attempts=0
         )
     return pp.ProbeObservation(
-        resolution=pp.ProbeResolution.RESOLVED_IN_SET, result=result, attempts=1
+        resolution=pp.ProbeResolution.RESOLVED_IN_SET,
+        result=result,
+        attempts=1,
+        destination_digest=pp.destination_binding_digest(
+            BINDING_KEY, min(ORIGIN_ADDRESSES), pp.PROBE_PORT
+        ),
     )
-
-
-def _corroboration(**overrides: Any) -> pp.IsolationCorroboration:
-    fields_: dict[str, Any] = {
-        "kind": pp.CorroborationKind.REACHABILITY_ANALYSIS,
-        "network_path_found": False,
-        "blocking_components": frozenset({pp.BlockingComponent.ROUTE_TABLE}),
-        "source_interface_matches": True,
-        "destination_matches": True,
-    }
-    fields_.update(overrides)
-    return pp.IsolationCorroboration(**fields_)
 
 
 class TestProbe:
@@ -325,6 +321,21 @@ class TestProbe:
             assert min(ORIGIN_ADDRESSES) not in line
         verified = pr.collect_and_verify(receipt.render(), expectation=_expectation(harness))
         assert verified.probe == receipt.probe
+        # The selected destination is bound under the admitted input's digest: the tool
+        # recovers exactly the address the task selected, and nothing else matches.
+        assert receipt.evidence is not None
+        expected = pp.destination_binding_digest(
+            receipt.evidence.input_digest, min(ORIGIN_ADDRESSES), pp.PROBE_PORT
+        )
+        assert receipt.probe.destination_digest == expected
+        assert f"probe_destination={expected}" in receipt.render()
+        others = [
+            a
+            for a in ORIGIN_ADDRESSES
+            if pp.destination_binding_digest(receipt.evidence.input_digest, a, pp.PROBE_PORT)
+            == expected
+        ]
+        assert others == [min(ORIGIN_ADDRESSES)]
 
     def test_a_resolution_failure_makes_no_attempt_and_counts_none(self) -> None:
         probe = FakeProbe(pp.ProbeResult.CONNECTED)
@@ -375,45 +386,33 @@ class TestProbe:
             pp.parse_probe_observation({"resolution": "RESOLVED_IN_SET", "result": "TIMED_OUT"})
         with pytest.raises(ValueError):
             pp.parse_probe_observation(
-                {"resolution": "RESOLVED_IN_SET", "result": "TIMED_OUT", "attempts": "1"}
+                {
+                    "resolution": "RESOLVED_IN_SET",
+                    "result": "TIMED_OUT",
+                    "attempts": "1",
+                    "destination_digest": None,
+                }
             )
-
-    def test_connected_fails_whatever_the_corroboration_says(self) -> None:
-        observation = _observation(pp.ProbeResult.CONNECTED)
-        assert pp.isolation_verdict(observation, None) is pp.IsolationVerdict.FAILED
-        assert pp.isolation_verdict(observation, _corroboration()) is pp.IsolationVerdict.FAILED
-
-    @pytest.mark.parametrize(
-        "result",
-        [
-            pp.ProbeResult.TIMED_OUT,
-            pp.ProbeResult.CONNECTION_REFUSED,
-            pp.ProbeResult.CONNECTION_ERROR,
-        ],
-    )
-    def test_a_non_connection_alone_is_inconclusive(self, result: pp.ProbeResult) -> None:
-        verdict = pp.isolation_verdict(_observation(result), None)
-        assert verdict is pp.IsolationVerdict.INCONCLUSIVE
-
-    def test_an_unattempted_probe_is_inconclusive_even_with_corroboration(self) -> None:
-        observation = _observation(pp.ProbeResult.NOT_ATTEMPTED)
-        verdict = pp.isolation_verdict(observation, _corroboration())
-        assert verdict is pp.IsolationVerdict.INCONCLUSIVE
-
-    def test_verified_requires_a_matching_blocking_analysis(self) -> None:
-        observation = _observation(pp.ProbeResult.TIMED_OUT)
-        assert pp.isolation_verdict(observation, _corroboration()) is pp.IsolationVerdict.VERIFIED
-        overrides: dict[str, Any]
-        for overrides in (
-            {"network_path_found": True},
-            {"blocking_components": frozenset()},
-            {"source_interface_matches": False},
-            {"destination_matches": False},
-        ):
-            verdict = pp.isolation_verdict(observation, _corroboration(**overrides))
-            assert verdict is pp.IsolationVerdict.INCONCLUSIVE, overrides
+        # An attempt binds exactly one destination digest; no attempt binds none.
+        with pytest.raises(ValueError):
+            pp.ProbeObservation(
+                resolution=pp.ProbeResolution.RESOLVED_IN_SET,
+                result=pp.ProbeResult.TIMED_OUT,
+                attempts=1,
+            )
+        with pytest.raises(ValueError):
+            pp.ProbeObservation(
+                resolution=pp.ProbeResolution.UNRESOLVED,
+                result=pp.ProbeResult.NOT_ATTEMPTED,
+                attempts=0,
+                destination_digest="ab" * 32,
+            )
+        assert pp.parse_probe_observation(_observation(pp.ProbeResult.TIMED_OUT).document()) == (
+            _observation(pp.ProbeResult.TIMED_OUT)
+        )
 
     def test_the_corroboration_kinds_are_the_ones_the_verdict_decides(self) -> None:
+        # The verdict itself is held by test_production_isolation_verdict.py.
         assert set(pp.CorroborationKind) == {pp.CorroborationKind.REACHABILITY_ANALYSIS}
 
 
@@ -437,11 +436,16 @@ class TestReceiptEvidence:
         )
 
     def test_a_receipt_line_carries_the_probe_block_and_no_schema_block(self) -> None:
-        document = pr.receipt_document(VerificationHarness(entry=TaskEntry.BUILD_VERIFY).run())
+        receipt = VerificationHarness(entry=TaskEntry.BUILD_VERIFY).run()
+        document = pr.receipt_document(receipt)
+        assert receipt.evidence is not None
         assert document["probe"] == {
             "resolution": "RESOLVED_IN_SET",
             "result": "TIMED_OUT",
             "attempts": 1,
+            "destination_digest": pp.destination_binding_digest(
+                receipt.evidence.input_digest, min(ORIGIN_ADDRESSES), pp.PROBE_PORT
+            ),
         }
         assert document["schema_observation"] is None
         assert document["contract_id"] == "kalpamani-task-receipt/v2"

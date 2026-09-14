@@ -12,6 +12,7 @@ from datetime import timedelta
 from typing import Any
 
 from fixtures.production_runtime import (
+    BUILD_ID,
     CLUSTER_ARN,
     COMMIT,
     CONFIGURATION_DIGEST,
@@ -21,6 +22,8 @@ from fixtures.production_runtime import (
     NOW,
     PLAN_DIGEST,
     PLATFORM_VERSION,
+    REVISION,
+    RUN_ID,
     SECURITY_GROUPS,
     SUBNET_ID,
     FakeEc2,
@@ -39,11 +42,24 @@ from kalpamani.data.production.sharadar.launch_records import (
     LAUNCH_INPUTS_CONTRACT_ID,
     LEDGER_CONTRACT_ID,
     RECORD_SCHEMA_VERSION,
+    LaunchKind,
+    build_specification,
+    parse_launch_inputs,
+    parse_owner_ledger,
 )
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
 ACQ = ProductionActor.ACQUISITION
 BLD = ProductionActor.BUILD
+
+#: Synthetic evidence references: the R-3 record's digest and each target's generation record.
+R3_DIGEST = "a3" * 32
+GENERATION_RECORD_DIGESTS = {
+    (ACQ, False): "1a" * 32,
+    (ACQ, True): "1b" * 32,
+    (BLD, False): "2a" * 32,
+    (BLD, True): "2b" * 32,
+}
 
 
 def ledger_row(
@@ -82,16 +98,52 @@ def ledger_document(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     }
 
 
-def target_document(actor: ProductionActor, *, verification: bool = False) -> dict[str, Any]:
-    """One registered revision with its image-gate values."""
-    return {
+def task_definition_document(
+    actor: ProductionActor, *, verification: bool = False, **overrides: Any
+) -> dict[str, Any]:
+    """The owner's transcription of one registered revision (synthetic)."""
+    constants = constants_for(actor)
+    family = constants.verification_task_family if verification else constants.task_family
+    document: dict[str, Any] = {
+        "family": family,
+        "revision": REVISION,
+        "task_role_arn": task_role_arn(actor),
+        "execution_role_arn": EXECUTION_ROLE_ARN,
+        "cpu": 1024,
+        "memory": 2048,
+        "network_mode": "awsvpc",
+        "operating_system_family": "LINUX",
+        "cpu_architecture": "X86_64",
+        "user": "10001:10001",
+        "readonly_root_filesystem": True,
+        "work_tmpfs": True,
+        "command": family,
+        "image_digest": IMAGE_DIGEST,
+    }
+    document.update(overrides)
+    return document
+
+
+def target_document(
+    actor: ProductionActor,
+    *,
+    verification: bool = False,
+    configuration_digest: str = CONFIGURATION_DIGEST,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """One registered revision with its image-gate values and task-definition evidence."""
+    document: dict[str, Any] = {
         "task_definition_arn": (
             verification_revision_arn(actor) if verification else revision_arn(actor)
         ),
         "image_digest": IMAGE_DIGEST,
-        "configuration_digest": CONFIGURATION_DIGEST,
+        "configuration_digest": configuration_digest,
         "code_commit": COMMIT,
+        "generation_record_digest": GENERATION_RECORD_DIGESTS[(actor, verification)],
+        "task_definition": task_definition_document(actor, verification=verification),
     }
+    document.update(overrides)
+    return document
 
 
 def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> dict[str, Any]:
@@ -103,6 +155,7 @@ def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> di
         "execution_role_arn": EXECUTION_ROLE_ARN,
         "binding_key_arn": KEY_ARN,
         "platform_version": PLATFORM_VERSION,
+        "r3_verification_digest": R3_DIGEST,
         "actors": {
             actor.value: {
                 "task_role_arn": task_role_arn(actor),
@@ -120,16 +173,61 @@ def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> di
     return document
 
 
+def specification_digest_for(
+    *,
+    actor: ProductionActor,
+    kind: str,
+    identity: str,
+    ledger: dict[str, Any] | None = None,
+    inputs: dict[str, Any] | None = None,
+    slice_doc: dict[str, Any] | None = None,
+    run_identities: list[str] | None = None,
+) -> str:
+    """The specification digest the fixtures' records produce for one launch."""
+    from kalpamani.data.contracts.canonical import canonical_bytes
+
+    rows = [ledger_row(RUN_ID)] if actor is BLD else []
+    parsed_ledger = parse_owner_ledger(
+        canonical_bytes(ledger_document(rows) if ledger is None else ledger)
+    )
+    parsed_inputs = parse_launch_inputs(
+        canonical_bytes(launch_inputs_document() if inputs is None else inputs)
+    )
+    return build_specification(
+        ledger=parsed_ledger,
+        inputs=parsed_inputs,
+        actor=actor,
+        kind=LaunchKind(kind),
+        identity=identity,
+        slice_document=(slice_document() if slice_doc is None else slice_doc)
+        if actor is ACQ
+        else None,
+        run_identities=([RUN_ID] if run_identities is None else run_identities)
+        if actor is BLD
+        else None,
+    ).digest
+
+
 def authorization_document(
-    *, actor: ProductionActor, kind: str, identity: str, **overrides: Any
+    *,
+    actor: ProductionActor,
+    kind: str,
+    identity: str,
+    specification_digest: str | None = None,
+    **overrides: Any,
 ) -> dict[str, Any]:
-    """The owner's written authorization for one launch, valid around ``NOW``."""
+    """The owner's written authorization for one launch specification, valid around ``NOW``."""
     document: dict[str, Any] = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "contract_id": AUTHORIZATION_CONTRACT_ID,
         "actor": actor.value,
         "kind": kind,
         "identity": identity,
+        "specification_digest": (
+            specification_digest_for(actor=actor, kind=kind, identity=identity)
+            if specification_digest is None
+            else specification_digest
+        ),
         "issued_at": (NOW - timedelta(hours=1)).isoformat(),
         "expires_at": (NOW + timedelta(hours=3)).isoformat(),
     }
@@ -203,11 +301,16 @@ class FakeClients:
 __all__ = [
     "ACQ",
     "BLD",
+    "BUILD_ID",
+    "GENERATION_RECORD_DIGESTS",
+    "R3_DIGEST",
     "FakeClients",
     "FakeSts",
     "authorization_document",
     "launch_inputs_document",
     "ledger_document",
     "ledger_row",
+    "specification_digest_for",
     "target_document",
+    "task_definition_document",
 ]
