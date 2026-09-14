@@ -59,6 +59,7 @@ from kalpamani.data.production.sharadar.runner import (
     RunnerReport,
     run_task_bootstrap,
 )
+from kalpamani.data.production.sharadar.schema_observation import SchemaObservation
 from kalpamani.data.production.sharadar.silver import SilverError, normalize
 from kalpamani.data.production.sharadar.universe import build_universe
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor
@@ -131,6 +132,9 @@ class BuildReport:
     publication: PublicationResult | None
     counts: OperationCounts
     empty_reason: str | None
+    #: The Route B schema observation (proposed ADR-0045): present only on a
+    #: REFUSED_NORMALIZATION report for SCHEMA_UNSTABLE; evidence, never an accepted set.
+    schema_observation: SchemaObservation | None = None
 
     def __post_init__(self) -> None:
         """A report must describe one possible build."""
@@ -150,6 +154,12 @@ class BuildReport:
             and not self.publication_state_unknown
         ):
             raise ValueError("an uncertain manifest write is uncertain publication state")
+        if self.schema_observation is not None and (
+            self.status is not BuildStatus.REFUSED_NORMALIZATION or self.artifacts_written != 0
+        ):
+            raise ValueError(
+                "a schema observation accompanies a normalization refusal with no writes"
+            )
 
     def __repr__(self) -> str:
         """Status and counts only."""
@@ -224,7 +234,9 @@ def run_production_build(
             provider_requests=0,
         )
 
-    def refused(status: BuildStatus, defect: str) -> BuildReport:
+    def refused(
+        status: BuildStatus, defect: str, *, observation: SchemaObservation | None = None
+    ) -> BuildReport:
         return BuildReport(
             status=status,
             bootstrap=report,
@@ -237,6 +249,7 @@ def run_production_build(
             publication=None,
             counts=counts(),
             empty_reason=None,
+            schema_observation=observation,
         )
 
     # Stage 7a: verified inputs -- locators by name, exact reads, provenance cross-checks.
@@ -252,7 +265,9 @@ def run_production_build(
     try:
         silver = normalize(inputs, schemas=configuration.schemas)
     except SilverError as error:
-        return refused(BuildStatus.REFUSED_NORMALIZATION, error.defect.value)
+        return refused(
+            BuildStatus.REFUSED_NORMALIZATION, error.defect.value, observation=error.observation
+        )
     resolved = resolve(silver, evidence=configuration.evidence, calendar=configuration.calendar)
     universe = build_universe(
         resolved,

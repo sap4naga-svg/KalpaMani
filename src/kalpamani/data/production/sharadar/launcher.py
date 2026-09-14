@@ -162,6 +162,15 @@ class LaunchReport:
     task_started: bool
     task_exit_codes: tuple[int | None, ...]
     handle: LaunchHandle | None
+    #: The placement the launcher verified and the release named -- the task's network
+    #: interface, its subnet and the security groups ``DescribeNetworkInterfaces``
+    #: reported on it (equal to the compiled set, or the task was misplaced) -- present
+    #: exactly when a release was written. Held for the launch record (the R-2 verdict
+    #: binds the analysis source to this interface and its components to these groups);
+    #: never rendered.
+    network_interface_id: str | None = None
+    subnet_id: str | None = None
+    security_group_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers only; a handle exactly when a task started."""
@@ -177,6 +186,19 @@ class LaunchReport:
             raise ValueError("a handle is present exactly when a task started")
         if (self.outcome is LaunchOutcome.MISPLACED) != (self.incident is not None):
             raise ValueError("an incident is present exactly when the outcome is MISPLACED")
+        present = {
+            self.network_interface_id is None,
+            self.subnet_id is None,
+            self.security_group_ids is None,
+        }
+        if len(present) != 1:
+            raise ValueError("the verified interface, subnet and groups are recorded together")
+        if self.security_group_ids is not None and (
+            type(self.security_group_ids) is not tuple or not self.security_group_ids
+        ):
+            raise ValueError("the verified security groups are a non-empty tuple")
+        if self.network_interface_id is not None and self.handle is None:
+            raise ValueError("a verified placement belongs to a started task")
 
     def __repr__(self) -> str:
         """Outcome and counts of failures. **Never a handle.**"""
@@ -249,26 +271,34 @@ class _AdapterCounts:
 
 def _placement_incident(
     compiled: CompiledLaunch, task: TaskDescription, adapters: LaunchAdapters
-) -> PlacementIncident | None:
-    """The first mismatch placement verification finds, or ``None`` when it passes."""
+) -> tuple[PlacementIncident | None, tuple[str, ...] | None]:
+    """The first mismatch placement verification finds, or ``None`` and the observed groups.
+
+    The groups are the ones ``DescribeNetworkInterfaces`` reported on the task's
+    interface, in the compiled order -- equal as a set to the compiled groups, or the
+    task is misplaced -- so the launch record can carry what was observed.
+    """
     if task.task_definition_arn != compiled.task_definition_arn:
-        return PlacementIncident.REVISION_MISMATCH
+        return PlacementIncident.REVISION_MISMATCH, None
     attachment = task.attachment
     if attachment is None or attachment.network_interface_id is None:
-        return PlacementIncident.INTERFACE_UNRESOLVED
+        return PlacementIncident.INTERFACE_UNRESOLVED, None
     if attachment.subnet_id != compiled.subnet_id:
-        return PlacementIncident.SUBNET_MISMATCH
+        return PlacementIncident.SUBNET_MISMATCH, None
     try:
         interface = adapters.ec2.describe_interface(attachment.network_interface_id)
     except ComputeError:
-        return PlacementIncident.INTERFACE_UNRESOLVED
+        return PlacementIncident.INTERFACE_UNRESOLVED, None
     if interface.subnet_id != compiled.subnet_id:
-        return PlacementIncident.SUBNET_MISMATCH
+        return PlacementIncident.SUBNET_MISMATCH, None
     if interface.security_group_ids != frozenset(compiled.security_group_ids):
-        return PlacementIncident.SECURITY_GROUP_MISMATCH
+        return PlacementIncident.SECURITY_GROUP_MISMATCH, None
     if interface.public_ip_present is not compiled.assign_public_ip:
-        return PlacementIncident.PUBLIC_IP_MISMATCH
-    return None
+        return PlacementIncident.PUBLIC_IP_MISMATCH, None
+    observed = tuple(
+        group for group in compiled.security_group_ids if group in interface.security_group_ids
+    )
+    return None, observed
 
 
 def _image_incident(compiled: CompiledLaunch, task: TaskDescription) -> PlacementIncident | None:
@@ -316,6 +346,9 @@ def launch_authorized_run(
     cleanup: list[CleanupFailure] = []
     input_materialized = False
     release_written = False
+    released_interface: str | None = None
+    released_subnet: str | None = None
+    released_groups: tuple[str, ...] | None = None
 
     def prove(path: IdentityPath) -> None:
         nonlocal identity_calls
@@ -420,7 +453,7 @@ def launch_authorized_run(
             # Stopped before an interface was ever attached: nothing to verify.
             exit_codes = task.exit_codes
             raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED)
-        found = _placement_incident(compiled, task, adapters)
+        found, observed_groups = _placement_incident(compiled, task, adapters)
         if found is not None:
             # Misplaced: stop this task, write no release, record the incident. The
             # stop is issued even if the task already reached RUNNING or STOPPED.
@@ -432,6 +465,7 @@ def launch_authorized_run(
         # later description reports.
         verified_interface = task.attachment.network_interface_id
         verified_subnet = task.attachment.subnet_id
+        assert observed_groups is not None
         # Step 1b: the image, once ECS has pulled it and reports its digest. Bounded
         # by the same ceiling as placement; an unresolved digest at the ceiling is a
         # refusal to release, and a digest other than the registered one is misplaced.
@@ -489,6 +523,9 @@ def launch_authorized_run(
             stop_own_task(STOP_REASON_RELEASE_EXISTS)
             raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
         release_written = True
+        released_interface = verified_interface
+        released_subnet = verified_subnet
+        released_groups = observed_groups
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
@@ -537,6 +574,9 @@ def launch_authorized_run(
         task_started=handle is not None,
         task_exit_codes=exit_codes,
         handle=handle,
+        network_interface_id=released_interface,
+        subnet_id=released_subnet,
+        security_group_ids=released_groups,
     )
 
 

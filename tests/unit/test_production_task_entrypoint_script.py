@@ -86,7 +86,7 @@ def test_no_environment_read_or_construction_happens_at_module_level() -> None:
         assert "os.environ" not in text and "client(" not in text and "urlopen" not in text
 
 
-def test_the_two_entry_names_are_the_task_definitions_command_tokens() -> None:
+def test_the_four_entry_names_are_the_task_definitions_command_tokens() -> None:
     compute = (
         REPO_ROOT / "infra" / "aws" / "research-data-plane" / "production_compute.tf"
     ).read_text(encoding="utf-8")
@@ -394,12 +394,21 @@ def _compiled_bytes(entry: TaskEntry) -> bytes:
             secret_name="synthetic/production/sharadar",  # noqa: S106 - a name, not a value
             origin_addresses=sorted(ORIGIN_ADDRESSES),
         )
+    if entry is TaskEntry.BUILD:
+        return build_compiled_configuration(
+            entry=entry,
+            code_commit=COMMIT,
+            code_tree=TREE,
+            generated_at=NOW,
+            build_configuration=configuration(),
+        )
+    # A verification entry (proposed ADR-0045): the origin set, and nothing else.
     return build_compiled_configuration(
         entry=entry,
         code_commit=COMMIT,
         code_tree=TREE,
         generated_at=NOW,
-        build_configuration=configuration(),
+        origin_addresses=sorted(ORIGIN_ADDRESSES),
     )
 
 
@@ -528,8 +537,9 @@ def test_the_working_root_is_the_task_definitions_tmpfs() -> None:
         encoding="utf-8"
     )
     assert entrypoint.TASK_WORKING_ROOT == "/work"
-    assert compute.count('containerPath = "/work"') == 2
-    assert compute.count("readonlyRootFilesystem = true") == 2
+    # Two production containers and two verification containers (proposed ADR-0045).
+    assert compute.count('containerPath = "/work"') == 4
+    assert compute.count("readonlyRootFilesystem = true") == 4
     assert "dir=TASK_WORKING_ROOT" in EXECUTABLE and "mkdtemp(" in EXECUTABLE
     assert EXECUTABLE.count("mkdtemp(") == 1
 

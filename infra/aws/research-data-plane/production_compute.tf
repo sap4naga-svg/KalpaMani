@@ -31,6 +31,13 @@ locals {
 
   production_acquire_family = "kalpamani-production-acquire"
   production_build_family   = "kalpamani-research-build"
+  # Proposed ADR-0045 (not accepted): the verification families. The same actor, the
+  # same task role, the same execution role, the same placement the launch tool
+  # sends, the same read-only root and /work tmpfs -- a different image whose entry
+  # composes the accepted bootstrap and stops at the release barrier (VERIFIED_BOOTSTRAP,
+  # exit 18), constructing no secrets client, no transport and no S3 client.
+  production_acquire_verify_family = "kalpamani-production-acquire-verify"
+  production_build_verify_family   = "kalpamani-research-build-verify"
 
   # Fargate task size. 1 vCPU / 2 GiB covers 48 sequential provider requests and
   # a bounded build; raising it is a configuration change, not an ADR change.
@@ -92,6 +99,64 @@ locals {
   }
 }
 
+# The verification containers (proposed ADR-0045): the production container's shape
+# with a different name, image and command; declared only with their own digest below.
+locals {
+  production_acquire_verify_container = {
+    name      = "acquire-verify"
+    image     = "${local.production_image_repository}@${lookup(var.production_image_digests, "acquisition_verify", "sha256:unset")}"
+    essential = true
+    command   = ["kalpamani-production-acquire-verify"]
+    cpu       = 1024
+    memory    = 2048
+    user      = "10001:10001"
+    linuxParameters = {
+      initProcessEnabled = true
+      tmpfs = [{
+        containerPath = "/work"
+        size          = 512
+        mountOptions  = ["rw", "noexec", "nosuid"]
+      }]
+    }
+    readonlyRootFilesystem = true
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.research.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "production-acquire-verify"
+      }
+    }
+  }
+
+  production_build_verify_container = {
+    name      = "build-verify"
+    image     = "${local.production_image_repository}@${lookup(var.production_image_digests, "build_verify", "sha256:unset")}"
+    essential = true
+    command   = ["kalpamani-research-build-verify"]
+    cpu       = 1024
+    memory    = 2048
+    user      = "10001:10001"
+    linuxParameters = {
+      initProcessEnabled = true
+      tmpfs = [{
+        containerPath = "/work"
+        size          = 1024
+        mountOptions  = ["rw", "noexec", "nosuid"]
+      }]
+    }
+    readonlyRootFilesystem = true
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.research.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "production-build-verify"
+      }
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "production_acquire" {
   count = local.production_count_a
 
@@ -135,5 +200,55 @@ resource "aws_ecs_task_definition" "production_build" {
 
   tags = {
     Purpose = "production-build"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Verification families (proposed ADR-0045; declared only with their own digest)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecs_task_definition" "production_acquire_verify" {
+  count = local.production_acquire_verify_count
+
+  family                   = local.production_acquire_verify_family
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = local.production_task_cpu
+  memory                   = local.production_task_memory
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.production_acquire_task[0].arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([local.production_acquire_verify_container])
+
+  tags = {
+    Purpose = "production-acquisition-verification"
+  }
+}
+
+resource "aws_ecs_task_definition" "production_build_verify" {
+  count = local.production_build_verify_count
+
+  family                   = local.production_build_verify_family
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = local.production_task_cpu
+  memory                   = local.production_task_memory
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.production_build_task[0].arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([local.production_build_verify_container])
+
+  tags = {
+    Purpose = "production-build-verification"
   }
 }

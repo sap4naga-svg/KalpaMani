@@ -2,8 +2,8 @@
 #
 # KalpaMani production task images (ADR-0036 s.2.9, ADR-0043, ADR-0044 s.2/s.6).
 #
-# One Dockerfile, two build targets -- `acquire` and `build` -- each producing ONE
-# actor's image. An image carries the code, the accepted SDK pins, ONE entry executable
+# One Dockerfile, four build targets -- `acquire`, `build`, and the proposed ADR-0045
+# verification targets `acquire-verify`, `build-verify` -- each producing ONE image. An image carries the code, the accepted SDK pins, ONE entry executable
 # named exactly as the task definition's `command` token, and ONE compiled configuration
 # file generated at the image gate (docs/operations/production-image-build.md).
 #
@@ -183,3 +183,71 @@ if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
 CHECK
 USER 10001:10001
 CMD ["kalpamani-research-build"]
+
+# --- Verification targets (proposed ADR-0045; not accepted). The same base, the same
+# checks, ONE verification entry executable, and a compiled configuration compiled for
+# that verification entry (origin address set only: no secret name, no build
+# configuration). A verification image stops at the release barrier by construction.
+FROM base AS acquire-verify
+ARG CONFIGURATION_DIGEST
+COPY --chmod=0555 docker/production/entry/kalpamani-production-acquire-verify /usr/local/bin/kalpamani-production-acquire-verify
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-production-acquire-verify python - <<'CHECK'
+import hashlib, json, os, pathlib, stat, sys
+def refuse(reason):  # a closed, value-free reason; never a digest, a commit or a field
+    print("image check refused: " + reason)
+    sys.exit(1)
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+if hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]:
+    refuse("the compiled configuration does not hash to CONFIGURATION_DIGEST")
+document = json.loads(raw)
+if document.get("entry") != os.environ["EXPECTED_ENTRY"]:
+    refuse("the compiled configuration was compiled for another entry")
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+if document.get("code_commit") != commit:
+    refuse("the compiled configuration names another code commit than KALPAMANI_COMMIT")
+mode = lambda path: stat.S_IMODE(os.stat(path).st_mode)
+if mode("/etc/kalpamani") & 0o055 != 0o055:
+    refuse("the configuration directory is not traversable by the runtime user")
+if mode("/etc/kalpamani/compiled-configuration.json") & 0o044 != 0o044:
+    refuse("the compiled configuration is not readable by the runtime user")
+entry = pathlib.Path("/usr/local/bin/" + os.environ["EXPECTED_ENTRY"])
+if mode(entry) & 0o055 != 0o055:
+    refuse("the entry executable is not executable by the runtime user")
+if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
+    refuse("the entry executable's shebang is not a POSIX one")
+CHECK
+USER 10001:10001
+CMD ["kalpamani-production-acquire-verify"]
+
+FROM base AS build-verify
+ARG CONFIGURATION_DIGEST
+COPY --chmod=0555 docker/production/entry/kalpamani-research-build-verify /usr/local/bin/kalpamani-research-build-verify
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-research-build-verify python - <<'CHECK'
+import hashlib, json, os, pathlib, stat, sys
+def refuse(reason):  # a closed, value-free reason; never a digest, a commit or a field
+    print("image check refused: " + reason)
+    sys.exit(1)
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+if hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]:
+    refuse("the compiled configuration does not hash to CONFIGURATION_DIGEST")
+document = json.loads(raw)
+if document.get("entry") != os.environ["EXPECTED_ENTRY"]:
+    refuse("the compiled configuration was compiled for another entry")
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+if document.get("code_commit") != commit:
+    refuse("the compiled configuration names another code commit than KALPAMANI_COMMIT")
+mode = lambda path: stat.S_IMODE(os.stat(path).st_mode)
+if mode("/etc/kalpamani") & 0o055 != 0o055:
+    refuse("the configuration directory is not traversable by the runtime user")
+if mode("/etc/kalpamani/compiled-configuration.json") & 0o044 != 0o044:
+    refuse("the compiled configuration is not readable by the runtime user")
+entry = pathlib.Path("/usr/local/bin/" + os.environ["EXPECTED_ENTRY"])
+if mode(entry) & 0o055 != 0o055:
+    refuse("the entry executable is not executable by the runtime user")
+if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
+    refuse("the entry executable's shebang is not a POSIX one")
+CHECK
+USER 10001:10001
+CMD ["kalpamani-research-build-verify"]

@@ -140,6 +140,12 @@ class TestSelectionAndVocabulary:
         assert [o for o, code in EXIT_STATUS.items() if code == 0] == [TaskOutcome.COMPLETED]
         assert len(set(EXIT_STATUS.values())) == len(EXIT_STATUS)
         for outcome, sentence in TASK_SENTENCES.items():
+            if outcome is TaskOutcome.VERIFIED_BOOTSTRAP:
+                # The one non-production sentence (proposed ADR-0045): a verification
+                # task stopped at the barrier, and it neither completed nor refused.
+                assert sentence.startswith("verification task ")
+                assert "no processing" in sentence and EXIT_STATUS[outcome] == 18
+                continue
             assert sentence.startswith("production task ")
             if outcome is not TaskOutcome.COMPLETED:
                 assert "refused" in sentence or "halted" in sentence or "failed" in sentence

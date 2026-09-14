@@ -68,14 +68,16 @@ def repository(tmp_path: Path) -> Path:
 
 
 def _inputs(tmp_path: Path, entry: TaskEntry, **overrides: Any) -> Path:
-    document: dict[str, Any] = (
-        {
+    if entry is TaskEntry.ACQUISITION:
+        document: dict[str, Any] = {
             "secret_name": "synthetic/production/sharadar",
             "origin_addresses": sorted(ORIGIN_ADDRESSES),
         }
-        if entry is TaskEntry.ACQUISITION
-        else {"build_configuration": configuration().document()}
-    )
+    elif entry is TaskEntry.BUILD:
+        document = {"build_configuration": configuration().document()}
+    else:
+        # A verification entry (proposed ADR-0045) compiles the origin set and nothing else.
+        document = {"origin_addresses": sorted(ORIGIN_ADDRESSES)}
     document.update(overrides)
     path = tmp_path / "inputs.json"
     path.write_text(json.dumps(document), encoding="utf-8")
@@ -198,7 +200,7 @@ def test_the_cli_takes_exactly_four_required_options() -> None:
     assert names == {"entry", "inputs", "generated_at", "output"}
 
 
-def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
+def test_the_packaging_files_wire_the_four_entries_and_nothing_else() -> None:
     dockerfile = (REPO_ROOT / "docker" / "production" / "Dockerfile").read_text(encoding="utf-8")
     assert "ARG BASE_IMAGE_DIGEST\nFROM python:3.11-slim@${BASE_IMAGE_DIGEST}" in dockerfile
     assert "ARG KALPAMANI_COMMIT" in dockerfile and "sha256:" not in dockerfile.replace(
@@ -217,8 +219,11 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
     compute = (REPO_ROOT / "infra/aws/research-data-plane/production_compute.tf").read_text(
         encoding="utf-8"
     )
-    assert compute.count('user      = "10001:10001"') == 2
-    assert dockerfile.count("USER 10001:10001") == 2 and "USER kalpamani" not in dockerfile
+    # Two production task definitions and, under the proposed ADR-0045 declaration, two
+    # verification ones; the Dockerfile has one target per entry.
+    assert compute.count('user      = "10001:10001"') == 4
+    assert dockerfile.count("USER 10001:10001") == len(TaskEntry)
+    assert "USER kalpamani" not in dockerfile
     assert "groupadd --system --gid 10001 kalpamani" in dockerfile
     assert "useradd --system --uid 10001 --gid 10001" in dockerfile
     # The configuration directory is created traversable before the 0444 file is copied
@@ -229,8 +234,10 @@ def test_the_packaging_files_wire_the_two_entries_and_nothing_else() -> None:
     assert "pip install --no-deps --no-build-isolation ." in dockerfile
     assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
     assert "BUILD_BACKEND" in dockerfile
-    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 2
-    assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 2
+    # Four targets (proposed ADR-0045): every one traverses its configuration directory
+    # and holds its entry executable to a POSIX shebang.
+    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 4
+    assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 4
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert ignore[0].startswith("#") and "*" in ignore
     admitted = [line[1:] for line in ignore if line.startswith("!")]

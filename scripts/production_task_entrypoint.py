@@ -4,9 +4,18 @@ One process per task, selected by exactly one closed argument -- the task defini
 ``command`` token -- and nothing else:
 
 ```text
-kalpamani-production-acquire     the acquisition actor's entry
-kalpamani-research-build         the build actor's entry
+kalpamani-production-acquire         the acquisition actor's entry
+kalpamani-research-build             the build actor's entry
+kalpamani-production-acquire-verify  the acquisition actor's VERIFICATION entry (proposed ADR-0045)
+kalpamani-research-build-verify      the build actor's VERIFICATION entry (proposed ADR-0045)
 ```
+
+A verification entry composes the accepted bootstrap and stops at the release barrier
+(``VERIFIED_BOOTSTRAP``, exit 18): its factories build no Secrets Manager client, no
+transport and no S3 client, so it performs no secret retrieval, no provider request and
+no data-plane operation. The build verification entry makes one bounded provider-origin
+probe -- a TCP connect with no bytes sent -- and records the observation; it decides no
+isolation verdict.
 
 **An ordinary import does nothing observable.** No environment lookup, no client
 construction, no socket, no file read. Every ``kalpamani`` import and every SDK import
@@ -227,6 +236,32 @@ def _client(service: Any, clients: _IsolatedClients) -> Any:
     return clients.client(service)
 
 
+class _SocketProbe:
+    """The build verification entry's probe adapter: one bounded TCP connect, no bytes.
+
+    Constructed only for the build verification entry, after every compiled check and
+    the credential-environment check; a plain ``socket`` connect with the compiled
+    timeout, closed at once, classified into the closed result vocabulary. Nothing is
+    sent on a connection that opens.
+    """
+
+    def connect(self, address: str, port: int, timeout_seconds: float) -> Any:
+        """Attempt one connection; return the closed observed result; send nothing."""
+        import socket
+
+        from kalpamani.data.production.sharadar.probe import ProbeResult
+
+        try:
+            with socket.create_connection((address, port), timeout=timeout_seconds):
+                return ProbeResult.CONNECTED
+        except TimeoutError:
+            return ProbeResult.TIMED_OUT
+        except ConnectionRefusedError:
+            return ProbeResult.CONNECTION_REFUSED
+        except OSError:
+            return ProbeResult.CONNECTION_ERROR
+
+
 def _transport() -> Any:
     """The accepted origin-pinned transport at the production response ceiling."""
     from kalpamani.data.ingest.sharadar.transport import UrllibTransport
@@ -284,7 +319,7 @@ def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> An
     import time
     from datetime import UTC, datetime
 
-    from kalpamani.data.production.sharadar.entry import TaskEntry
+    from kalpamani.data.production.sharadar.entry import VERIFICATION_ENTRIES, TaskEntry
     from kalpamani.data.production.sharadar.task_clients import TaskService
 
     def now() -> datetime:
@@ -293,6 +328,22 @@ def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> An
     if clients is None:
         clients = _IsolatedClients(os.environ)
 
+    if entry in VERIFICATION_ENTRIES:
+        from kalpamani.data.production.sharadar.verification_entry import VerificationFactories
+
+        return VerificationFactories(
+            environment_names=_environment_names,
+            environment=_environment,
+            metadata_fetch=_metadata_fetch,
+            ssm=lambda: _client(TaskService.SSM, clients),
+            sts=lambda: _client(TaskService.STS, clients),
+            resolve_origin=_resolve_origin,
+            probe=_SocketProbe() if entry is TaskEntry.BUILD_VERIFY else None,
+            now=now,
+            monotonic=time.monotonic,
+            sleep=time.sleep,
+            cleanup=_working_directory_cleanup(working_directory),
+        )
     if entry is TaskEntry.ACQUISITION:
         from kalpamani.data.production.sharadar.acquisition_entry import AcquisitionFactories
 

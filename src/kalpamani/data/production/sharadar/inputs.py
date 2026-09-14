@@ -81,8 +81,11 @@ MAX_RESPONSE_BYTES: Final = 256 * 1024 * 1024
 #: complete locator, and a build that read one would be reading a subset nobody
 #: chose.
 LEDGER_OUTCOME_COMPLETED: Final = "COMPLETED"
+#: A verification launch's row (proposed ADR-0045): the identity was consumed by a
+#: verification task that reserved nothing, and may never be launched for production.
+LEDGER_OUTCOME_VERIFIED: Final = "VERIFIED"
 LEDGER_OUTCOMES: Final[frozenset[str]] = frozenset(
-    {LEDGER_OUTCOME_COMPLETED, "MISPLACED", "REFUSED", "HALTED"}
+    {LEDGER_OUTCOME_COMPLETED, LEDGER_OUTCOME_VERIFIED, "MISPLACED", "REFUSED", "HALTED"}
 )
 
 _ACQUISITION_FIELDS: Final[frozenset[str]] = frozenset(
@@ -568,6 +571,7 @@ __all__ = [
     "INPUT_SCHEMA_VERSION",
     "LEDGER_OUTCOMES",
     "LEDGER_OUTCOME_COMPLETED",
+    "LEDGER_OUTCOME_VERIFIED",
     "MAX_BUILD_RUNS",
     "MAX_INPUT_VALIDITY",
     "MAX_RESPONSE_BYTES",

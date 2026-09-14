@@ -2328,18 +2328,21 @@ def test_the_entry_point_holds_no_module_level_mutable_state() -> None:
 
 
 def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
-    """Five authorized construction sites, each named, and nothing else.
+    """Six authorized construction sites, each named, and nothing else.
 
-    Narrowed rather than relaxed, four times now. The earliest rule was 'this
+    Narrowed rather than relaxed, five times now. The earliest rule was 'this
     entry point and nowhere else', correct while it was the only operator surface;
     then two; the empirical qualification package adds its two operator entry
-    points; and the production task image entrypoint accepted with ADR-0043 is the
+    points; the production task image entrypoint accepted with ADR-0043 is the
     fifth, constructing a client only after a closed entry is selected, a compiled
-    configuration exists and the credential environment is a task's. Every one is
-    named here, so a **sixth** arriving anywhere under ``src/``, ``scripts/`` or
-    ``tests/`` still fails.
+    configuration exists and the credential environment is a task's; and the
+    owner-side launch tool proposed with ADR-0045 is the sixth, constructing its
+    four workstation clients only inside the authorized branch, after the flag,
+    every record and the authorization are admitted. Every one is named here, so a
+    **seventh** arriving anywhere under ``src/``, ``scripts/`` or ``tests/`` still
+    fails.
 
-    **All five are in ``scripts/``, and that is the property that matters.** No
+    **All six are in ``scripts/``, and that is the property that matters.** No
     module under ``src/`` constructs a client, which is checked separately and is
     what keeps the data platform free of ambient credential discovery.
     """
@@ -2352,6 +2355,7 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         SCRIPTS / "sharadar_empirical_qualification.py",
         SCRIPTS / "sharadar_qualification_assessment.py",
         SCRIPTS / "production_task_entrypoint.py",
+        SCRIPTS / "production_launch.py",
         Path(__file__).resolve(),
         SCRIPTS / "phase3_docs_audit.py",
         # Asserts the absence of a client in those entry points, so it necessarily

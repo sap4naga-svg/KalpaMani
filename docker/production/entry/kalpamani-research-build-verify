@@ -1,0 +1,6 @@
+#!/bin/sh
+# The build actor's VERIFICATION entry executable (proposed ADR-0045): the verification
+# task definition's `command` token. Exactly one closed argument reaches the runner; anything
+# appended by a command override makes the runner refuse (REFUSED_ENTRY, exit 2). The runner
+# composes the accepted bootstrap and stops at the release barrier: no processing.
+exec /usr/local/bin/python3 /opt/kalpamani/scripts/production_task_entrypoint.py kalpamani-research-build-verify "$@"
