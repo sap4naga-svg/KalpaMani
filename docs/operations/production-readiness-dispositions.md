@@ -278,13 +278,20 @@ authorized specification (and so into the authorization's digest), applied by th
 changed step with no retry in any mode, recorded with the launcher's own terminal observation, and
 passed by the matrix only on the expected, receipt-verified, bound refusal — **an unexpected success
 is FAILED, and a refused verification row is never a successful bootstrap and never buildable**.
-ADR-0036 §3's R-4 … R-9 are expanded into 98 traced subcells: 58 executable at runtime under a human
-or launcher profile by one tool that records the attempt before the operation, stops an unexpected
-launch at once and binds every record to the environment binding, the production declarations and
-the registration; 6 evidenced by the R-1 bootstrap launch; **34 BLOCKED with their exact dependency
-— the task roles on a task-side permission probe entry that does not exist, the deletion role on its
-missing execution path — and a human role never stands in for a task role**. Cleanup runs under the
-control principal and is confirmed or reported as residue. **Empty, partial, simulated or blocked
+ADR-0036 §3's R-4 … R-9 are expanded into 98 traced subcells: 56 executable at runtime under a human
+or launcher profile by one tool — one prepared statement binding the exact target, the targets
+document and the bound prerequisite records, one owner authorization naming it and consumed durably
+beside the ledger before the operation, the attempt recorded before the operation and joined to its
+result by identity, every returned task of an unexpected launch stopped at once with termination
+confirmed only by the cleanup's `DescribeTasks`, a possibly committed write or launch recorded and
+settled by the cleanup and never retried, every record bound to the environment binding, the
+production declarations and the registration; 6 evidenced by the R-1 bootstrap launch; **36 BLOCKED
+with their exact dependency — the task roles on a task-side permission probe entry that does not
+exist, the deletion role on its missing execution path, the two `ExecuteCommand` subcells on a
+running task of the actor — and a human role never stands in for a task role**. Cleanup runs under
+the control principal by exact identity, defers an object a prepared dependent still needs, and is
+confirmed or reported as residue; a negative cell's missing evidence after an interrupted completion
+is recovered offline from the re-verified receipt, never relaunched (PR #106 correction 1). **Empty, partial, simulated or blocked
 coverage never passes**, and the aggregate stays `INCOMPLETE` while any of it remains. Acceptance
 would authorize no execution and grant no permission.
 

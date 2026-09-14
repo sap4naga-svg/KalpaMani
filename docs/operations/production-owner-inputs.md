@@ -87,12 +87,14 @@ deferred owner decision is resolved by assumption.**
 | the R-3 record directory | `KALPAMANI_PRODUCTION_R3_RECORD_DIR`, under the private root | the R-3 tool |
 | the **permission targets** document (`kalpamani-permission-targets/v1`: the foundation task role ARN, the qualification secret ARN, the CONTROL bucket name — three values no accepted binding carries) | `KALPAMANI_PRODUCTION_PERMISSION_TARGETS_FILE`, under the private root | the permission tool (R-4's refused secret, R-4/R-5's refused bucket, R-9) |
 | one authorization record per cell naming its prepared specification digest — the negative cells' digests cover their release mode | `--authorization` per execution | the cell runner, the launch tool |
+| one authorization per permission subcell (`kalpamani-permission-authorization/v1`) naming the prepared statement's digest — consumed by its one execution | `--authorization` per `--execute-subcell` | the permission tool |
 
 ### D.2 Decisions or permissions required before cloud verification (recorded, not granted, not resolved)
 
 | Decision or permission | For | Recorded in |
 |---|---|---|
 | a **task-side permission probe entry** (a third verification entry, a task-definition family, a compiled-configuration field, a launcher resource) | the 32 task-role subcells of R-4 and R-5 — until then `BLOCKED`; a human role is never a substitute | ADR-0047 §5 |
+| a **running task of the actor** to execute into (during an authorized R-1 launch, a later decision of the verification entries) | the 2 R-6 `ExecuteCommand` subcells — until then `BLOCKED` | ADR-0047 §5 |
 | an **execution path for the deletion role** (a deletion task definition, or a runbook step under a separately authorized principal) | the 2 R-8 subcells — until then `BLOCKED` | ADR-0047 §5; ADR-0007 |
 | the reading of ADR-0036 R-4's *"deleted by the deletion role afterwards"* as cleanup by the control principal | the R-4 / R-5 synthetic objects | ADR-0047 §6.3 — decided by its acceptance |
 | `ec2:CreateNetworkInsightsPath`, `ec2:StartNetworkInsightsAnalysis`, `ec2:DescribeNetworkInsights*`, `ec2:DeleteNetworkInsights*` | the principal that corroborates R-2 | D-14; ADR-0045 §3 |
@@ -110,7 +112,7 @@ deferred owner decision is resolved by assumption.**
 | a `VERIFIED` ledger row with `RECEIPT_VERIFIED` evidence per bootstrap cell, its reservation and launch record bound to the prepared specification and to the inputs now registered | one authorized launch per cell, the owner's receipt lines; a later change to the registered target or placement makes the row `HISTORICAL` (ADR-0045 §7) | `R1-*-BOOTSTRAP` PASSED; the verdict cell; R-6's evidenced positives |
 | a `REFUSED` ledger row with `RECEIPT_VERIFIED` evidence per negative cell, its launch record carrying the mode and the observed exit code, and its negative-evidence record | one authorized negative launch per cell (four in all), the owner's receipt lines | `R1-*-NO-RELEASE`, `R1-*-RELEASE-MISMATCH` PASSED |
 | the isolation verdict record | the build bootstrap cell PASSED and one transcribed analysis (D-16); an `INCONCLUSIVE` verdict is re-evaluated for the same launch — no relaunch | `R2-BLD-ISOLATION` |
-| one permission record per executable subcell (58), each under its principal, and one cleanup record confirming every created key absent | one authorized invocation per subcell and one authorized cleanup, after the R-3 cell and (for R-4/R-5 reads) the creating subcells | `R6-LAUNCHERS`, `R7-QUALIFICATION`, `R9-FOUNDATION-TASK` PASSED; R-4 and R-5's human subcells (the cells stay `BLOCKED` on D.2) |
+| one prepared statement and one consumed authorization per executable subcell (56), one permission record per subcell under its principal, and one cleanup record settling every created or possibly created object and every started or possibly started task by attempt identity | one authorized invocation per subcell and one authorized cleanup, after the R-3 cell and (for R-4/R-5 reads) the creating subcells | `R6-LAUNCHERS`, `R7-QUALIFICATION`, `R9-FOUNDATION-TASK` PASSED; R-4 and R-5's human subcells (the cells stay `BLOCKED` on D.2) |
 | Route B observation receipts, the first production Bronze, the first manifest | S10a–S10c | later gates, unchanged |
 
 **What the coverage cycle closed, and what it left.** The withheld-release launch mode and the negative

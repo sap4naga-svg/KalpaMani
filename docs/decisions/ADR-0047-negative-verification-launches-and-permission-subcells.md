@@ -101,6 +101,22 @@ processing and never a buildable acquisition**: its row is `REFUSED`, its identi
 identity no build workload can select, and the positive bootstrap cell is `UNBOUND` if its prepared
 specification carries a negative mode.
 
+### 2.4 Recovering the evidence of a completed row
+
+The row's completion (`--complete-row`, a ledger write) and the evidence write are two durable
+writes; an interruption between them leaves the row `REFUSED` / `RECEIPT_VERIFIED` and the cell
+`UNBOUND` with no evidence record, and completion cannot be repeated on a completed row. The cell
+runner's `--recover-negative-evidence <cell> --launch-record --receipt-lines` records the missing
+evidence **offline**: the reservation, the launch record and the receipt are re-verified through the
+launch tool's own reader (the shared reservation-to-record rule and the receipt-to-record rule,
+unchanged), the row must already be complete for the prepared identity, the record must be this
+cell's prepared launch under its release mode, and the receipt's outcome must be the terminal state
+the launcher itself observed — two pieces of evidence for one launch that disagree are a
+contradiction and refuse. The evidence document is recomputed from the verified receipt; an existing
+record equal to it (`recorded_at` aside) means nothing is written and the mode succeeds again; one
+that differs refuses (`EXIT_REFUSED_EVIDENCE_CONFLICT`) and is never overwritten, reconciled away or
+superseded. **No launch, no new identity, no ledger change, no binding check weakened.**
+
 ## 3. Decision — the R-4 .. R-9 permission subcells
 
 ### 3.1 Expansion, traced
@@ -118,7 +134,7 @@ exact dependency.
 |---|---|---|---|---|
 | R-4 acquisition (`R4-ACQUISITION`) | 34 | 17 (the acquisition human profile) | — | 17 (the acquisition task role) |
 | R-5 build (`R5-BUILD`) | 30 | 15 (the build human profile) | — | 15 (the build task role) |
-| R-6 launchers (`R6-LAUNCHERS`) | 18 | 12 (the two launcher profiles: the six refusals each) | 6 (own revision, `DescribeTasks`, `DescribeNetworkInterfaces` — the R-1 bootstrap launch performs and records exactly these) | — |
+| R-6 launchers (`R6-LAUNCHERS`) | 18 | 10 (the two launcher profiles: five refusals each) | 6 (own revision, `DescribeTasks`, `DescribeNetworkInterfaces` — the R-1 bootstrap launch performs and records exactly these) | 2 (`ExecuteCommand`: no running task of the actor to execute into) |
 | R-7 qualification (`R7-QUALIFICATION`) | 12 | 12 (the two qualification profiles) | — | — |
 | R-8 deletion (`R8-DELETION`) | 2 | — | — | 2 (no execution path) |
 | R-9 foundation task role (`R9-FOUNDATION-TASK`) | 2 | 2 (the two launcher profiles) | — | — |
@@ -127,19 +143,46 @@ exact dependency.
 executed by this tooling and could never pass a subcell; a subcell is decided at L3 by one real
 request or not at all. **A human role never stands in for a task role**: the task-role subcells
 exist as their own subcells, under their own principal, and are blocked (§5) — the human twin of the
-same operation is evidence for the human role alone.
+same operation is evidence for the human role alone. **A request against a target that does not exist
+is not a permission test**: R-6's `ExecuteCommand` subcells are blocked (§5) because no task of ours
+runs outside an authorized R-1 launch, and a refusal against a task ARN that names nothing would
+prove nothing about the policy. Every launching request carries the registered placement of its
+actor (FARGATE, the subnet, the security groups, the public-IP setting, the pinned platform version —
+the same request shape the accepted launcher sends), because a request that fails on its parameters
+before any policy is evaluated is not a permission test either.
 
 ### 3.2 One operation, one decision, one bounded reaction
 
+**Preparation states what will be executed.** `--prepare-subcell <id>` admits the bindings, the
+registration and the private targets document, resolves the subcell's exact target for one session
+stamp, binds every prerequisite object the operation reads to the exact record that created it, and
+writes a **statement** (`kalpamani-permission-statement/v1`: the subcell, the principal, the
+operation, the target class, the SHA-256 of the resolved target — bucket and key, name or ARN,
+cluster, definition, override role and placement — the stamp, the binding, the SHA-256 of the
+targets document, and the bound prerequisite records by digest). Its digest is what the owner's
+**authorization** names (`kalpamani-permission-authorization/v1`: one subcell, one statement digest,
+issued and expiring within 24 hours). No identity proof and no client: preparation performs
+nothing.
+
 The tool (`scripts/production_permission_cells.py`) executes **one subcell per authorized
-invocation**, in this order: automation refused; the flag; the subcell exists and is an L3 subcell; `AWS_PROFILE` pinned to the principal's own profile;
-the principal's identity proven (a production human or launcher through the accepted human bootstrap
-against its private binding — the launch tool's own proof; a qualification actor through the
-accepted ADR-0021 gate; the control principal through the foundation gate); the environment binding,
-the launch-inputs registration, the private targets document and, for the production secret, the
-acquisition configuration admitted; the binding digests computed; the **attempt record written
-before the operation**, naming the key it may create; the client built **only now** (one transport
-attempt, finite timeouts); the operation; the record.
+invocation**, in this order: automation refused; the flag; the subcell exists and is an L3 subcell;
+`AWS_PROFILE` pinned to the principal's own profile; the principal's identity proven (a production
+human or launcher through the accepted human bootstrap against its private binding — the launch
+tool's own proof; a qualification actor through the accepted ADR-0021 gate; the control principal
+through the foundation gate); the environment binding, the launch-inputs registration, the private
+targets document and, for the production secret, the acquisition configuration admitted; the binding
+digests computed; the authorization admitted for this subcell and valid now; the statement it names
+found under the current binding and **recomputed** from its own stamp against what is admitted now —
+a changed target, targets document, declaration, registration or prerequisite is not what the owner
+authorized and refuses; **the authorization consumed durably** (one exclusive file beside the
+canonical ledger, named by the authorization's digest — never under the records directory, never
+removed) **before anything is attempted**; the **attempt record written before the operation**,
+naming the authorization, the statement and the exact bucket and key it may create; the client built
+**only now** (one transport attempt, finite timeouts); the operation; the record, naming the attempt
+it answers. A second execution under the same authorization — repeated, after an interruption at any
+later point, from another records directory — finds the consumption and refuses; recovery of an
+interrupted attempt is the cleanup's, never a re-execution, and preserves the consumption. One
+execution needs one new preparation and one new authorization.
 
 The answer is classified through the accepted R-3 classifier and decided: `ALLOWED` matches only
 the operation's success class (`200`, or `204` for a delete); `DENIED` matches an access denial
@@ -148,19 +191,35 @@ network failure, an authentication failure, a missing bucket, a throttle or an a
 decides nothing — the record reads `UNDECIDED`, the subcell stays unexercised, and **nothing is
 retried**.
 
-**Unexpected success is a resource, not only an inversion.** A `DENIED` launch that returned a task
-ARN is stopped **at once** by the same principal — the one extra operation the budget allows — and
-the record carries the task id and whether the stop was acknowledged; a `DENIED` write that
-succeeded is recorded with the key it created, for the cleanup. Budget: **two operations per
-subcell** (the operation, plus one `StopTask` on an unexpected launch), and **two per created key**
-in the cleanup.
+**Unexpected success is a resource, not only an inversion.** A `DENIED` launch whose answer
+returned tasks is stopped **at once** by the same principal — one `StopTask` per returned task, every
+returned task accounted for up to a bound of four, whatever failure entries came beside them — and
+the record carries every task id and which stops were acknowledged; **an acknowledged stop is not a
+termination**, which only a later `DescribeTasks` in the cleanup confirms. A `DENIED` write that
+succeeded is recorded with the exact bucket and key it created, for the cleanup.
+
+**An open answer is a possibly committed write or launch.** A timeout, a network failure, a throttle
+or an ambiguous status after a creating write leaves the object *possibly created*, and after a
+launch leaves a task *possibly started*; both are recorded as such (the result stays `UNDECIDED`,
+never repeated) and the cleanup settles them — the object by the key the attempt named, the launch
+by listing the cluster for the `startedBy` tag every launching request of the session carries
+(`kalpamani-permission-<stamp>`). **No `RunTask` is ever retried.** Budget: **one operation plus one
+`StopTask` per returned task** per subcell, **two per object** and **one `ListTasks` plus one
+`DescribeTasks` and at most one `StopTask` per task** per launching attempt in the cleanup.
 
 ### 3.3 Targets
 
 Every synthetic S3 key is a real key shape of its namespace, built by the accepted key builders,
 carrying the session stamp in its run identity (`verification-<stamp>`) and the digest of a fixed
 64-byte synthetic marker as its content address — so it lies exactly where the policy statement under
-test applies and nowhere a production object could be. Launch targets are the registered
+test applies (`bronze/sharadar/<dataset>/production/`, `bronze/_production_claims/`,
+`bronze/sharadar/_indexes/`, `silver/`, `gold/`, `manifests/`, `qualification/`, and the CONTROL
+bucket) and nowhere a production object could be. **A subcell that reads or deletes an object a
+prerequisite subcell created takes the exact bucket and key that prerequisite's bound `MATCHED`
+record established** — never a key derived from its own stamp — and is prepared and executed only
+while that record exists under the current binding and no later cleanup has confirmed its object
+removed; the statement and the record both name the prerequisite record by digest, and the matrix
+holds the dependent to exactly that record. Launch targets are the registered
 verification revision (own) or deterministic derivations of it (the next revision number, a
 `-verification-other` family, a `-verification-other` cluster) that the exact-resource policies cannot
 name; the other actor's task role and the foundation task role are the two override targets. Three
@@ -171,20 +230,27 @@ never rendered.
 
 ### 3.4 Records, binding and derivation
 
-Three closed contracts (§6.2). Every record binds to the environment binding's digest, the digest
+Five closed contracts (§6.2). Every record binds to the environment binding's digest, the digest
 over the tracked production declarations (`production_*.tf` and `storage.tf`, each by name and
 bytes), the digest of the launch-inputs record the targets were resolved from, the partition and the
-region. The cell runner derives each subcell from the records: a matched record under the current
-binding whose identity was verified, whose prerequisite objects were established before it and whose
-created key is confirmed removed is `PASSED`; **an inversion under the current binding never
-disappears** when a later matched record arrives (a corrected declaration changes the binding, and
-then the old records are `HISTORICAL`); an attempt with no record after it is `INTERRUPTED` — never
-re-executed automatically, and its key is removed by the cleanup; an undecided answer is
-`UNDECIDED`; a record for another binding is `HISTORICAL`; malformed or unreadable evidence, an
-unverified identity or a missing prerequisite is `UNBOUND`; a created key not yet confirmed removed
-is `CLEANUP_UNRESOLVED`; a blocked subcell is `BLOCKED` with its dependency; a launcher positive is
-`AWAITING_R1` until its bootstrap cell passes; a subcell with no attempt and no record is
-`UNEXECUTED`. A cell is `PASSED` only when **every** subcell is; otherwise the first status by
+region. **Attempts, records and cleanup entries are joined by identity, never by their order in
+time**: a record names the digest of the attempt it answers, a cleanup entry names the attempt whose
+exact object (bucket and key) or launch (`startedBy` tag and tasks) it settled, and a later result
+never answers an earlier attempt. The cell runner derives each subcell from the records: a matched
+record under the current binding whose identity was verified, whose named prerequisite records are
+exactly the bound ones and whose every open object or launch is settled by a cleanup naming that
+attempt and recorded no earlier than the record is `PASSED`; **an inversion under the current
+binding never disappears** when a later matched record arrives (a corrected declaration changes the
+binding, and then the old records are `HISTORICAL`); an attempt no record names is `INTERRUPTED` —
+never re-executed automatically, its object settled by the cleanup and its authorization still
+consumed; an undecided answer is `UNDECIDED` and stays so after its possibly committed write is
+settled — **the original inconclusive result is preserved, and the cleanup changes no result**; a
+record for another binding is `HISTORICAL`; malformed or unreadable evidence, an unverified identity
+or a prerequisite that is not the exact bound record is `UNBOUND`; an object created or possibly
+created, or a task started or possibly started, not yet settled by a later cleanup naming the attempt
+is `CLEANUP_UNRESOLVED` — a `FAILED` launch reports whether its tasks' termination was confirmed; a
+blocked subcell is `BLOCKED` with its dependency; a launcher positive is `AWAITING_R1` until its
+bootstrap cell passes; a subcell with no attempt and no record is `UNEXECUTED`. A cell is `PASSED` only when **every** subcell is; otherwise the first status by
 precedence (`FAILED`, `UNBOUND`, `BLOCKED`, `INTERRUPTED`, `HISTORICAL`, `CLEANUP_UNRESOLVED`,
 `UNDECIDED`, `AWAITING_R1`, `UNEXECUTED`) decides, and the matrix prints every subcell beneath its
 cell. **Empty, partial, simulated or blocked coverage never passes**, and the
@@ -193,12 +259,17 @@ aggregate stays `INCOMPLETE` while R-4, R-5 and R-8 are blocked.
 ### 3.5 Cleanup
 
 `--cleanup` runs under the control principal (`kalpamani-foundation`, the R-3 control principal,
-whose identity policy already grants `s3:DeleteObject`) and removes every key the session's records
-and unanswered attempts name — including the objects the R-4 positive writes left for R-5 to read —
-confirming each absent with one `HeadObject` held to `404`; a key not confirmed, a refused delete or
-an exhausted budget (128 operations, 64 keys) is residue, recorded by its synthetic key, and every
-subcell that created it stays `CLEANUP_UNRESOLVED`. **Cleanup restores the buckets; it never changes
-what a subcell established.**
+whose identity policy already grants `s3:DeleteObject`) and settles, by exact identity, every object
+a record created or possibly created and every object an unanswered attempt named — confirming each
+absent with one `HeadObject` held to `404` — and every launch a record started or possibly started:
+one `ListTasks` by the attempt's `startedBy` tag, then per known or listed task one `DescribeTasks`
+held to `STOPPED` and, otherwise, one `StopTask` with the task recorded as residue. **An object the
+R-4 or R-5 positive writes left for a prepared, not yet recorded dependent subcell is deferred, not
+removed** — kept until that dependent check has run, then settled by the next pass. A key not
+confirmed absent, a task not confirmed stopped, a listing that did not answer, a refused delete or an
+exhausted budget (64 objects, 8 launches) is residue, recorded by its synthetic key or task id, and
+every subcell that created or started it stays `CLEANUP_UNRESOLVED`. **Cleanup restores the buckets
+and the cluster; it never changes what a subcell established, and it never launches.**
 
 ## 4. Traceability
 
@@ -213,6 +284,7 @@ prove them.
 | Mechanism | Needed for | What it would be | Status |
 |---|---|---|---|
 | a **task-side permission probe entry** | the 32 task-role subcells of R-4 and R-5 | one closed verification entry in the image (a third verification entry beside ADR-0045's two) that selects exactly one catalogued subcell from its compiled configuration, issues that one operation under the task role after the release barrier, and prints a receipt naming the subcell, the observed class and the outcome — the receipt then completes the subcell the way a refused receipt completes a negative cell | **not implemented; not authorized by this ADR** — a task-definition family, a compiled-configuration field and a launcher resource, each a later decision |
+| a **running task of the actor** | the 2 R-6 `ExecuteCommand` subcells | a task of ours runs only during an authorized R-1 launch; executing into it during that launch (and recording the refusal) is a later decision of the verification entries | **not implemented; not authorized by this ADR** |
 | an **execution path for the deletion role** | the 2 R-8 subcells | a deletion task definition, or a runbook step under a separately authorized principal (ADR-0007 holds that no human may assume the role and no deletion task definition exists) | **not implemented; the runbook step stays separately authorized** |
 | the **owner-held targets** | R-4's refused secret, R-4/R-5's refused bucket, R-9 | the private targets document (§3.3) | a value the owner supplies before cloud verification (owner inputs D.1) |
 
@@ -239,7 +311,8 @@ No permission is granted by this ADR: D-14 (analyzer), V-16 (`ecs:DescribeTaskDe
 |---|---|
 | `kalpamani-negative-launch-evidence/v1` | `verification_cells.py`: `NegativeLaunchEvidence`, `parse_negative_launch_evidence` |
 | `kalpamani-permission-targets/v1` | `permission_cells.py`: `PermissionTargets`, `parse_permission_targets` (private, never rendered) |
-| `kalpamani-permission-attempt/v1`, `kalpamani-permission-record/v1`, `kalpamani-permission-cleanup/v1` | `permission_cells.py`: `PermissionAttempt`, `PermissionRecord`, `PermissionCleanup` and their parsers |
+| `kalpamani-permission-statement/v1`, `kalpamani-permission-authorization/v1` | `permission_cells.py`: `PermissionStatement`, `PermissionAuthorization` and their parsers; the consumption beside the ledger is `LaunchStore.consume` |
+| `kalpamani-permission-attempt/v1`, `kalpamani-permission-record/v1`, `kalpamani-permission-cleanup/v1` | `permission_cells.py`: `PermissionAttempt` (the authorization, the statement, the exact bucket and key), `PermissionRecord` (the attempt it answers, the bound prerequisites, the created bucket and key, `possibly_created`, every started task, the acknowledged stops, the `startedBy` tag, `possibly_started`), `PermissionCleanup` (objects and launches by attempt, `deferred`, residue) and their parsers |
 
 ### 6.3 ADR-0036 §3, one wording
 
@@ -256,5 +329,30 @@ Acceptance of this ADR authorizes **no** launch, **no** negative launch, **no** 
 **no** cleanup, **no** run, **no** probe, **no** analysis, **no** Terraform plan or apply, **no** image
 build or publication, **no** IAM or bucket-policy change, and grants **no** permission. Each tool
 refuses by default; each authorized branch is opened by its own flag under its own written
-authorization; none has run against AWS. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT
+authorization — a permission subcell by an authorization naming its prepared statement, consumed by
+its one execution; none has run against AWS. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT
 COMPLETE, live trading stays HARD-DISABLED.**
+
+## 8. Corrections on review (PR #106, correction 1)
+
+Five source-review findings were reproduced on synthetic inputs against the reviewed head and
+corrected in the same pull request; the text above states the corrected design. (1) Authorization:
+no per-subcell authorization existed and nothing was consumed, so one flag executed repeatedly and a
+changed targets document changed nothing — now a prepared statement, an authorization naming it,
+recomputation at execution and durable consumption beside the ledger (§3.2). (2) Prerequisite
+identity: a dependent read resolved a key from its own stamp, prerequisites were checked only at
+derivation, and the cleanup removed objects a prepared dependent still needed — now the exact bound
+record's bucket and key, enforced at preparation and execution, deferred by the cleanup (§3.3, §3.5).
+(3) Ambiguous writes: a timed-out write recorded no key and was never cleaned, and attempts were
+joined to results by order — now possibly committed writes and launches are recorded and settled by
+attempt identity, a cleanup recorded before a record cannot settle it, residue and the original
+result are preserved (§3.2, §3.4). (4) ECS accounting: the adapter dropped task ARNs when failure
+entries came beside them, stopped only the first task, claimed *stopped* from an acknowledgement,
+sent no placement and no tag, and `ExecuteCommand` addressed a task that does not exist — now every
+returned task is accounted for and stopped, termination is confirmed only by `DescribeTasks` in the
+cleanup, ambiguous launches are listed by tag and never retried, the request carries the registered
+placement and the tag, and the two `ExecuteCommand` subcells are blocked (§3.1, §3.2, §5).
+(5) Negative-evidence recovery: an interruption between `--complete-row` and the evidence write left
+the cell `UNBOUND` with no path back — now `--recover-negative-evidence` (§2.4). The counts of §3.1
+moved from 58 / 6 / 34 to **56 / 6 / 36**; the task-role and deletion-role cases are retained as
+blocked.
