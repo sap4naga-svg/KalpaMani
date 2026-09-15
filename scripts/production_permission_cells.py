@@ -60,6 +60,7 @@ fake's. **Mocked results are not AWS verification.**
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -161,6 +162,11 @@ EXIT_COLLECTION_NOT_COLLECTED: Final = 25
 EXIT_REFUSED_DESTINATION: Final = 26
 EXIT_REFUSED_REHEARSAL_CLOSED: Final = 27
 EXIT_REFUSED_COLLECTION_RECORDS: Final = 28
+EXIT_REFUSED_CONTRADICTION_UNRESOLVED: Final = 29
+_SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
+#: The hand-read completion's acknowledgement of one recorded contradiction, by the
+#: collection record's digest; repeatable; never accepted with a collection.
+ACKNOWLEDGE_FLAG: Final = "--acknowledge-collection-contradiction"
 
 SENTENCES: Final[dict[str, str]] = {
     "planned": "permission subcell plan printed; nothing was performed",
@@ -242,6 +248,12 @@ SENTENCES: Final[dict[str, str]] = {
         "permission cells refused: the recorded collections of this launch are malformed, "
         "bound to another launch or stream, carry an unverifiable line, or contradict "
         "each other; nothing is chosen between them"
+    ),
+    "refused_contradiction_unresolved": (
+        "permission cells refused: a recorded collection of this launch found contradictory "
+        "receipts and no disposition names it; no collection resolves that -- the owner "
+        "reads the stream, completes from a hand-read receipt and acknowledges the record "
+        "by digest"
     ),
     "refused_destination": (
         "permission cells refused: the registration names no log destination for the probe "
@@ -1425,6 +1437,19 @@ def complete_subcell(
         or EXIT_STATUS.get(verified.outcome) != launch_record.observed_exit_code
     ):
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    dispositions: list[dict[str, Any]] = []
+    if receipt_text is None:
+        # A hand-read completion over a recorded, unresolved contradiction needs the
+        # owner's explicit acknowledgement of that record; it is then disposed, bound to
+        # this receipt, and the contradiction record stays exactly as written.
+        dispositions = _dispositions_for(
+            parsed,
+            records_dir=admitted.store._records_dir,
+            identity=launch.identity,
+            launch_record_sha256=pc.launch_record_digest(launch_record),
+            receipt_text=text,
+            now=now,
+        )
     statements = [
         s
         for s in evidence.statements.get(cell.subcell_id, ())
@@ -1508,6 +1533,8 @@ def complete_subcell(
                 raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
             if not (write_record or write_receipt or complete_row):
                 raise PermissionToolRefusalError("completion_recorded", EXIT_COMPLETION_RECORDED)
+            for disposition in dispositions:
+                admitted.store.write_record("collection-disposition", disposition, at=now())
             if complete_row:
                 try:
                     ledger = lr.complete_ledger_row(ledger, record=launch_record, receipt=verified)
@@ -1561,6 +1588,7 @@ def collect_receipt_for_subcell(
     """
     from kalpamani.data.production.sharadar.launch_store import StoreError
     from kalpamani.data.production.sharadar.receipt_collector import (
+        CollectionRecordDefect,
         CollectionRecordError,
         CollectorError,
         SdkLogsClient,
@@ -1622,17 +1650,22 @@ def collect_receipt_for_subcell(
     expectation = launch_record.expectation()
     try:
         admission = admit_collection_records(
-            (
-                path.read_bytes()
-                for path in sorted(admitted.store._records_dir.glob("receipt-collection-*.json"))
-            ),
+            _collection_payloads(admitted.store._records_dir),
             identity=launch.identity,
             launch_record_sha256=record_digest,
             destination=destination,
             task_id=launch_record.task_id,
             expectation=expectation,
         )
-    except (CollectionRecordError, OSError):
+    except CollectionRecordError as error:
+        if error.defect is CollectionRecordDefect.CONTRADICTION_UNRESOLVED:
+            raise PermissionToolRefusalError(
+                "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
+            ) from None
+        raise PermissionToolRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    except OSError:
         raise PermissionToolRefusalError(
             "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
         ) from None
@@ -1686,6 +1719,75 @@ def collect_receipt_for_subcell(
     if collected.receipt_line is None:
         raise PermissionToolRefusalError("collection_not_collected", EXIT_COLLECTION_NOT_COLLECTED)
     return collected.receipt_line
+
+
+def _collection_payloads(records_dir: Path) -> list[bytes]:
+    """Every collection record and disposition in the directory, as bytes."""
+    paths = [
+        *records_dir.glob("receipt-collection-*.json"),
+        *records_dir.glob("collection-disposition-*.json"),
+    ]
+    return [path.read_bytes() for path in sorted(paths)]
+
+
+def _dispositions_for(
+    parsed: argparse.Namespace,
+    *,
+    records_dir: Path,
+    identity: str,
+    launch_record_sha256: str,
+    receipt_text: str,
+    now: Callable[[], datetime],
+) -> list[dict[str, Any]]:
+    """The disposition documents a hand-read completion writes for the recorded
+    contradictions it acknowledges, or refuse.
+
+    Every unresolved contradiction record must be acknowledged by its digest, and every
+    acknowledged digest must name a recorded contradiction (unresolved or already
+    disposed, so the completion is repeatable); a malformed or misbound record refuses.
+    """
+    from kalpamani.data.contracts.canonical import sha256_hex
+    from kalpamani.data.production.sharadar.receipt_collector import (
+        CollectionDisposition,
+        CollectionRecordError,
+        ContradictionDisposition,
+        contradiction_status,
+    )
+    from kalpamani.data.production.sharadar.receipts import ReceiptError, collect_receipt_line
+
+    try:
+        status = contradiction_status(
+            _collection_payloads(records_dir),
+            identity=identity,
+            launch_record_sha256=launch_record_sha256,
+        )
+    except (CollectionRecordError, OSError):
+        raise PermissionToolRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    acknowledged = set(parsed.acknowledged_contradictions or ())
+    known = set(status.unresolved) | set(status.disposed)
+    if not set(status.unresolved) <= acknowledged or not acknowledged <= known:
+        raise PermissionToolRefusalError(
+            "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
+        )
+    if not status.unresolved:
+        return []
+    try:
+        line = collect_receipt_line(receipt_text.splitlines())
+    except ReceiptError:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
+    return [
+        CollectionDisposition(
+            identity=identity,
+            launch_record_sha256=launch_record_sha256,
+            contradiction_sha256=digest,
+            receipt_line_sha256=sha256_hex(line.encode("utf-8")),
+            disposition=ContradictionDisposition.HAND_READ_COMPLETION,
+            recorded_at=now(),
+        ).document()
+        for digest in status.unresolved
+    ]
 
 
 def _same_result(existing: pc.PermissionRecord, established: pc.PermissionRecord) -> bool:
@@ -2164,6 +2266,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--rehearse-deletion")
     parser.add_argument(COLLECT_FLAG, dest="collection_authorized", action="store_true")
     parser.add_argument("--receipt-lines", type=Path)
+    parser.add_argument(
+        ACKNOWLEDGE_FLAG, dest="acknowledged_contradictions", action="append", default=[]
+    )
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--check-record", type=Path)
@@ -2235,6 +2340,17 @@ def main(
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
     if modes > 1 or (parsed.receipt_lines is not None and parsed.complete_subcell is None):
+        print(SENTENCES["refused_arguments"])
+        return EXIT_REFUSED_ARGUMENTS
+    # An acknowledgement belongs to a hand-read completion only, and names a digest.
+    if parsed.acknowledged_contradictions and (
+        parsed.complete_subcell is None
+        or parsed.receipt_lines is None
+        or any(
+            not isinstance(d, str) or _SHA256_RE.fullmatch(d) is None
+            for d in parsed.acknowledged_contradictions
+        )
+    ):
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
     if parsed.check_record is not None:

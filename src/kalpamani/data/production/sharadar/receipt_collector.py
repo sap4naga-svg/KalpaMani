@@ -59,10 +59,17 @@ construction lives in the tools' authorized branches; this module imports no SDK
 is the one cache rule both tools apply -- every record about this launch is read, each is
 held to the launch record
 digest and to the derived destination, a kept line is re-verified against the expectation,
-two different kept lines are a contradiction that refuses, and a rejected, exhausted or
-contradictory attempt never blocks: the next collection reads the stream again and its
-record is written beside the earlier ones. Nothing is removed, and nothing is chosen by
-filename order.
+two different kept lines are a contradiction that refuses, and a rejected or exhausted
+attempt never blocks: the next collection reads the stream again and its record is written
+beside the earlier ones. **A recorded ``CONTRADICTORY_RECEIPTS`` is never superseded**: while
+it stands, no collection is made and no kept line is reused for that launch, whatever was
+recorded before or after it and in whatever order. The one way past it is explicit and
+evidence-bound -- the owner reads the stream, completes from a hand-read receipt while
+acknowledging the contradiction record by its digest, and the tool writes a **disposition**
+(:data:`DISPOSITION_CONTRACT_ID`) binding that digest, the launch record and the receipt it
+completed from; the contradiction record stays exactly as written. No rule here chooses
+between two lines, and no later collection resolves anything. Nothing is removed, and
+nothing is chosen by filename order.
 
 **Mocked results are not AWS verification.** Every page in this repository's tests is a fake's.
 """
@@ -115,6 +122,9 @@ COLLECT_CEILING_SECONDS: Final = 300.0
 LOGS_TOTAL_MAX_ATTEMPTS: Final = 1
 LOGS_RETRY_MODE: Final = "standard"
 COLLECTION_CONTRACT_ID: Final = "kalpamani-receipt-collection/v1"
+#: The disposition of one recorded contradiction: written by a hand-read completion that
+#: acknowledged it, never by a collection.
+DISPOSITION_CONTRACT_ID: Final = "kalpamani-collection-disposition/v1"
 #: The largest collection record the parser reads.
 MAX_COLLECTION_RECORD_BYTES: Final = 64 * 1024
 _LOG_STREAM_RE: Final = re.compile(r"production-[a-z-]+/[a-z-]+/[0-9a-f]{32}")
@@ -508,6 +518,10 @@ class CollectionRecordDefect(StrEnum):
     DESTINATION_MISMATCH = "DESTINATION_MISMATCH"
     RECEIPT_UNVERIFIABLE = "RECEIPT_UNVERIFIABLE"
     CONTRADICTORY_RECORDS = "CONTRADICTORY_RECORDS"
+    #: A CONTRADICTORY_RECEIPTS record about this launch has no disposition.
+    CONTRADICTION_UNRESOLVED = "CONTRADICTION_UNRESOLVED"
+    #: A disposition names a contradiction record that does not exist for this launch.
+    DISPOSITION_UNBOUND = "DISPOSITION_UNBOUND"
 
 
 class CollectionRecordError(ValueError):
@@ -679,6 +693,183 @@ def parse_collection_record(raw: object) -> CollectionRecord:
     )
 
 
+def collection_record_sha256(document: dict[str, Any]) -> str:
+    """The digest by which a disposition names one collection record (canonical bytes)."""
+    return sha256_hex(canonical_bytes(document))
+
+
+class ContradictionDisposition(StrEnum):
+    """How a recorded contradiction was disposed. Closed: one member, one route."""
+
+    HAND_READ_COMPLETION = "HAND_READ_COMPLETION"
+
+
+_DISPOSITION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "contract_id",
+        "identity",
+        "launch_record_sha256",
+        "contradiction_sha256",
+        "receipt_line_sha256",
+        "disposition",
+        "recorded_at",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CollectionDisposition:
+    """One disposition: the contradiction record it names (by digest), the launch it belongs
+    to, and the digest of the hand-read receipt line the owner completed from."""
+
+    identity: str
+    launch_record_sha256: str
+    contradiction_sha256: str
+    receipt_line_sha256: str
+    disposition: ContradictionDisposition
+    recorded_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "contract_id": DISPOSITION_CONTRACT_ID,
+            "identity": self.identity,
+            "launch_record_sha256": self.launch_record_sha256,
+            "contradiction_sha256": self.contradiction_sha256,
+            "receipt_line_sha256": self.receipt_line_sha256,
+            "disposition": self.disposition.value,
+            "recorded_at": self.recorded_at.isoformat(),
+        }
+
+    def __repr__(self) -> str:
+        return f"CollectionDisposition(disposition={self.disposition.value!r})"
+
+
+def is_collection_disposition(raw: object) -> bool:
+    return type(raw) is dict and raw.get("contract_id") == DISPOSITION_CONTRACT_ID
+
+
+def parse_collection_disposition(raw: object) -> CollectionDisposition:
+    """The one closed reading of a disposition record, or ``CollectionRecordError``."""
+    document: Any = raw
+    if isinstance(raw, bytes | bytearray):
+        try:
+            document = decode_document(bytes(raw), max_bytes=MAX_COLLECTION_RECORD_BYTES)
+        except Exception:
+            raise _refuse(CollectionRecordDefect.RECORD_MALFORMED) from None
+    if type(document) is not dict or set(document) != _DISPOSITION_FIELDS:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if document["contract_id"] != DISPOSITION_CONTRACT_ID:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    identity = exact_str(document["identity"])
+    digests = [exact_str(document[n]) for n in ("launch_record_sha256", "contradiction_sha256")]
+    digests.append(exact_str(document["receipt_line_sha256"]))
+    disposition_text = exact_str(document["disposition"])
+    if (
+        not identity
+        or any(d is None or _SHA256_RE.fullmatch(d) is None for d in digests)
+        or disposition_text is None
+        or disposition_text not in ContradictionDisposition.__members__.values()
+    ):
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    return CollectionDisposition(
+        identity=identity,
+        launch_record_sha256=digests[0] or "",
+        contradiction_sha256=digests[1] or "",
+        receipt_line_sha256=digests[2] or "",
+        disposition=ContradictionDisposition(disposition_text),
+        recorded_at=_instant(document["recorded_at"]),
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ContradictionStatus:
+    """The recorded contradictions of one launch: the digests still unresolved, and the
+    digests a disposition already names."""
+
+    unresolved: tuple[str, ...]
+    disposed: tuple[str, ...]
+
+    def __repr__(self) -> str:
+        return (
+            f"ContradictionStatus(unresolved={len(self.unresolved)}, disposed={len(self.disposed)})"
+        )
+
+
+def _read_records(
+    payloads: Iterable[bytes],
+    *,
+    identity: str,
+    launch_record_sha256: str,
+    destination: LogDestination | None,
+    task_id: str | None,
+) -> tuple[list[tuple[CollectionRecord, str]], list[CollectionDisposition]]:
+    """Every collection record and every disposition about this identity, each held to the
+    launch record digest (and, when a destination is given, to the derived stream)."""
+    stream = (
+        None if destination is None or task_id is None else log_stream_name(destination, task_id)
+    )
+    records: list[tuple[CollectionRecord, str]] = []
+    dispositions: list[CollectionDisposition] = []
+    for payload in payloads:
+        try:
+            document = decode_document(payload, max_bytes=MAX_COLLECTION_RECORD_BYTES)
+        except Exception:  # noqa: S112 - undecodable: not a record about this launch
+            continue
+        if type(document) is not dict or document.get("identity") != identity:
+            continue
+        if is_collection_disposition(document):
+            disposition = parse_collection_disposition(document)
+            if disposition.launch_record_sha256 != launch_record_sha256:
+                raise _refuse(CollectionRecordDefect.LAUNCH_MISMATCH)
+            dispositions.append(disposition)
+            continue
+        if not is_collection_record(document):
+            continue
+        record = parse_collection_record(document)
+        if record.launch_record_sha256 != launch_record_sha256:
+            raise _refuse(CollectionRecordDefect.LAUNCH_MISMATCH)
+        if stream is not None and (
+            record.log_group != destination.log_group or record.log_stream != stream  # type: ignore[union-attr]
+        ):
+            raise _refuse(CollectionRecordDefect.DESTINATION_MISMATCH)
+        records.append((record, collection_record_sha256(document)))
+    records.sort(key=lambda item: (item[0].started_at, item[0].finished_at))
+    return records, dispositions
+
+
+def _contradiction_status(
+    records: list[tuple[CollectionRecord, str]], dispositions: list[CollectionDisposition]
+) -> ContradictionStatus:
+    contradictions = {
+        digest
+        for record, digest in records
+        if record.outcome is CollectionOutcome.CONTRADICTORY_RECEIPTS
+    }
+    named = {d.contradiction_sha256 for d in dispositions}
+    if named - contradictions:
+        raise _refuse(CollectionRecordDefect.DISPOSITION_UNBOUND)
+    return ContradictionStatus(
+        unresolved=tuple(sorted(contradictions - named)),
+        disposed=tuple(sorted(contradictions & named)),
+    )
+
+
+def contradiction_status(
+    payloads: Iterable[bytes], *, identity: str, launch_record_sha256: str
+) -> ContradictionStatus:
+    """The hand-read completion's view: which recorded contradictions of this launch still
+    need the owner's acknowledgement, and which a disposition already names. Malformed or
+    misbound records refuse; a disposition naming no recorded contradiction refuses."""
+    records, dispositions = _read_records(
+        payloads,
+        identity=identity,
+        launch_record_sha256=launch_record_sha256,
+        destination=None,
+        task_id=None,
+    )
+    return _contradiction_status(records, dispositions)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CollectionAdmission:
     """What the records about one launch establish: the one verified line to reuse (or
@@ -705,36 +896,34 @@ def admit_collection_records(
     task_id: str,
     expectation: ReceiptExpectation,
 ) -> CollectionAdmission:
-    """The one cache-admission rule both tools apply over every ``receipt-collection`` file.
+    """The one cache-admission rule both tools apply over every ``receipt-collection`` and
+    ``collection-disposition`` file.
 
-    A payload that is not a collection record about this identity is not this launch's
-    evidence and is ignored (another launch's, or not a record). A record about this
-    identity must parse closed (``RECORD_MALFORMED``), name this launch record's digest
-    (``LAUNCH_MISMATCH``) and this launch's derived group and stream
-    (``DESTINATION_MISMATCH``); a kept line must verify against the expectation
+    A payload that is not a record about this identity is not this launch's evidence and
+    is ignored (another launch's, or not a record). A record about this identity must parse
+    closed (``RECORD_MALFORMED``), name this launch record's digest (``LAUNCH_MISMATCH``)
+    and this launch's derived group and stream (``DESTINATION_MISMATCH``); a disposition
+    must name a recorded contradiction (``DISPOSITION_UNBOUND``). **A recorded
+    ``CONTRADICTORY_RECEIPTS`` without a disposition refuses** (``CONTRADICTION_UNRESOLVED``)
+    -- no later collection, no earlier or later ``COLLECTED`` record and no ordering
+    supersedes it. Otherwise a kept line must verify against the expectation
     (``RECEIPT_UNVERIFIABLE``); two different kept lines are ``CONTRADICTORY_RECORDS``.
     Nothing is chosen by filename order: every record is read, and the reusable line is
-    the one line every ``COLLECTED`` record agrees on. Rejected, exhausted, incomplete and
-    contradictory attempts are history that never blocks a new collection.
+    the one line every ``COLLECTED`` record agrees on. Rejected, exhausted and incomplete
+    attempts are history that never blocks a new collection.
     """
-    stream = log_stream_name(destination, task_id)
-    records: list[CollectionRecord] = []
-    for payload in payloads:
-        try:
-            document = decode_document(payload, max_bytes=MAX_COLLECTION_RECORD_BYTES)
-        except Exception:  # noqa: S112 - undecodable: not a record about this launch
-            continue
-        if not is_collection_record(document) or document.get("identity") != identity:
-            continue
-        record = parse_collection_record(document)
-        if record.launch_record_sha256 != launch_record_sha256:
-            raise _refuse(CollectionRecordDefect.LAUNCH_MISMATCH)
-        if record.log_group != destination.log_group or record.log_stream != stream:
-            raise _refuse(CollectionRecordDefect.DESTINATION_MISMATCH)
-        records.append(record)
-    records.sort(key=lambda r: (r.started_at, r.finished_at))
+    records, dispositions = _read_records(
+        payloads,
+        identity=identity,
+        launch_record_sha256=launch_record_sha256,
+        destination=destination,
+        task_id=task_id,
+    )
+    status = _contradiction_status(records, dispositions)
+    if status.unresolved:
+        raise _refuse(CollectionRecordDefect.CONTRADICTION_UNRESOLVED)
     kept: dict[str, None] = {}
-    for record in records:
+    for record, _digest in records:
         if record.receipt_line is None:
             continue
         try:
@@ -745,7 +934,8 @@ def admit_collection_records(
     if len(kept) > 1:
         raise _refuse(CollectionRecordDefect.CONTRADICTORY_RECORDS)
     return CollectionAdmission(
-        reusable_line=next(iter(kept)) if kept else None, records=tuple(records)
+        reusable_line=next(iter(kept)) if kept else None,
+        records=tuple(record for record, _digest in records),
     )
 
 
@@ -816,6 +1006,7 @@ __all__ = [
     "COLLECT_MAX_REQUESTS",
     "COLLECT_POLL_SECONDS",
     "CONTAINER_OF_ENTRY",
+    "DISPOSITION_CONTRACT_ID",
     "LOGS_RETRY_MODE",
     "LOGS_TOTAL_MAX_ATTEMPTS",
     "LOG_GROUP_RE",
@@ -823,21 +1014,28 @@ __all__ = [
     "STREAM_PREFIX_OF_ENTRY",
     "CollectedReceipt",
     "CollectionAdmission",
+    "CollectionDisposition",
     "CollectionOutcome",
     "CollectionRecord",
     "CollectionRecordDefect",
     "CollectionRecordError",
     "CollectorDefect",
     "CollectorError",
+    "ContradictionDisposition",
+    "ContradictionStatus",
     "LogDestination",
     "LogPage",
     "LogsClient",
     "SdkLogsClient",
     "admit_collection_records",
     "collect_receipt",
+    "collection_record_sha256",
+    "contradiction_status",
     "destination_for",
+    "is_collection_disposition",
     "is_collection_record",
     "log_stream_name",
+    "parse_collection_disposition",
     "parse_collection_record",
     "parse_log_destination",
 ]
