@@ -2064,7 +2064,7 @@ def settlement_targets(
                     cluster_arn=probe.cluster_arn,
                     known_task_ids=probe.known_task_ids,
                 )
-    # Proposed ADR-0050 (correction 1): every unsettled deletion-rehearsal reservation
+    # ADR-0050 (correction 1): every unsettled deletion-rehearsal reservation
     # anchored beside the ledger -- discovered on its own cluster by its own tag, keyed by
     # the reservation's digest -- is settled by this same pass. Read from the store's
     # anchors, so a reservation made from any records directory is settled here.
@@ -2420,7 +2420,7 @@ def main(
         )
     )
     if rehearsal_mode or parsed.rehearsal_inputs is not None:
-        # The deletion rehearsal path (ADR-0049 s.3; proposed ADR-0050): implemented
+        # The deletion rehearsal path (ADR-0049 s.3; ADR-0050): implemented
         # offline, CLOSED until the governance decision (D-1) opens it. Refused before any
         # path or flag is read and before the rehearsal tool is imported.
         from kalpamani.data.production.sharadar.deletion_rehearsal import REHEARSAL_PATH_OPEN

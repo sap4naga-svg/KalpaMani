@@ -34,8 +34,9 @@ CLOSED and the two R-8 subcells BLOCKED on that merge, and they stay so; **accep
 read, no collection, no probe launch, no permission subcell, no rehearsal, no deletion, no cleanup, no
 run, no image, no Terraform plan or apply and no IAM change, and granted no permission** —
 `logs:GetLogEvents` stays recorded and not granted. D-1 has since been made concrete, for the owner's
-separate decision, by proposed ADR-0050, which declares the resources of §3.2 and the delta of §3.3
-**inert** behind a variable that is false by default and takes the decision no more than this text does.
+separate decision, by ADR-0050 (accepted on the merge of PR #109), which declares the resources of §3.2 and
+the delta of §3.3 **inert** behind a variable that is false by default and takes the decision no more than
+this text does.
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no log read, no S3 operation,
 no `RunTask`, no `ExecuteCommand`, no deletion, no container image built or pulled, no registry

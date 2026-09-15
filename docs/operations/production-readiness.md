@@ -821,7 +821,7 @@ execution.
 
 *§11.2 is history: ADR-0047's acceptance decided the release-mode field, the contracts and the cleanup
 wording; the two mechanisms are delivered (the probe entry, the held task) or designed and not opened
-(the deletion path) by ADR-0048, accepted on the merge of PR #107 — §12; the deletion decision is presented as ADR-0049 D-1 (accepted on the merge of PR #108) — §13, and made concrete by proposed ADR-0050 — §14.*
+(the deletion path) by ADR-0048, accepted on the merge of PR #107 — §12; the deletion decision is presented as ADR-0049 D-1 (accepted on the merge of PR #108) — §13, and made concrete by ADR-0050 (accepted on the merge of PR #109; D-1 still not taken) — §14.*
 
 ### 11.3 What remains — the refreshed owner checklist
 
@@ -991,7 +991,16 @@ bucket-policy transition (G-14), the control principal's ECS actions and the sto
 and `ExecuteCommand` evaluation-order limitations unchanged. **G2 OPEN · CONTROL DEFERRED · Phase 3
 NOT COMPLETE · live trading HARD-DISABLED.**
 
-## 14. The deletion-rehearsal readiness cycle — D-1 made concrete, the rehearsal integrated offline, the declaration inert; proposed ADR-0050
+## 14. The deletion-rehearsal readiness cycle — D-1 made concrete, the rehearsal integrated offline, the declaration inert; ADR-0050
+
+> **ADR-0050 has since been accepted.** PR #109 merged 2026-09-15T17:36:51Z (merge commit `5f5035fe…`,
+> approved head `4ea7e733…` after two review corrections, merge tree identical to the reviewed head
+> tree). The section below was written while the pull request was open and says "proposed" of those days,
+> which is not rewritten. What acceptance changed is exactly ADR-0050's own clause: the concrete D-1
+> statement, the offline integration (with corrections 1 and 2), the inert declaration and the owner
+> checklist are **accepted**; **D-1 stays undecided**, the path stays **CLOSED**, `deletion_rehearsal_open`
+> stays `false`, both R-8 subcells stay **BLOCKED**, and **no execution or permission followed from the
+> merge**.
 
 ### 14.1 Decision D-1, made concrete and not taken
 

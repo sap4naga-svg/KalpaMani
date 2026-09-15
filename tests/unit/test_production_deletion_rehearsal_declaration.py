@@ -1,4 +1,4 @@
-"""The proposed ADR-0050 declaration, parsed (`production_deletion_rehearsal.tf`): inert
+"""The ADR-0050 declaration, parsed (`production_deletion_rehearsal.tf`): inert
 under the committed defaults, gated three ways, the task as the actual deletion role, the
 deletion role's delta three reads and nothing else, the launcher with no S3 action, the
 one assignment behind stage b. A structural rule over the HCL, beside the mock-provider

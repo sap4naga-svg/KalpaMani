@@ -715,7 +715,7 @@ def _rule_bootstrap(model: Model) -> list[str]:
             "BuildHumanGeneratesTheInputDataKey",
             "AcquireLauncherGeneratesTheReleaseDataKey",
             "BuildLauncherGeneratesTheReleaseDataKey",
-            # Proposed ADR-0050: the deletion rehearsal's two statements, each a dynamic
+            # ADR-0050: the deletion rehearsal's two statements, each a dynamic
             # statement gated on `local.deletion_rehearsal_open` (false by default), so
             # the accepted key policy is exactly the seven above until D-1 is accepted.
             "DeletionRoleDecryptsTheRehearsalParameters",

@@ -106,7 +106,7 @@ class TestClosed:
         state = pc.derive_subcell(pc.subcell("R8-GET"), t.evidence(), r1_passed={})
         assert state.status is pc.SubcellStatus.BLOCKED
         # The resources the decision would declare are named exactly; they are DECLARED
-        # inert (proposed ADR-0050) in exactly one file, behind a variable whose default
+        # inert (ADR-0050) in exactly one file, behind a variable whose default
         # is false, and none exists.
         assert dr.REHEARSAL_FAMILY == "kalpamani-deletion-rehearsal"
         assert dr.REHEARSAL_LAUNCHER_PERMISSION_SET == "KalpaManiDeletionRehearse"

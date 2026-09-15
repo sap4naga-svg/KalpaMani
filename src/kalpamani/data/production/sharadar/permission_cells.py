@@ -225,7 +225,7 @@ DELETION_DEPENDENCY: Final = (
     "ADR-0048 s.4 designs a governed rehearsal path (a rehearsal family, a rehearsal "
     "launcher passing exactly that role to ECS, the role's two bootstrap parameters), "
     "ADR-0049 s.3 implements it offline and presents the decision to open it (D-1), "
-    "proposed ADR-0050 makes D-1 concrete and declares the resources inert, and whether "
+    "ADR-0050 makes D-1 concrete and declares the resources inert, and whether "
     "to open it is a governance decision taken only by that decision's acceptance -- "
     "not by this module"
 )

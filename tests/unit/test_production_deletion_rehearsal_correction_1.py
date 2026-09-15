@@ -1,4 +1,4 @@
-"""Correction 1 of PR #109 (proposed ADR-0050 s.8): the three review findings, each
+"""Correction 1 of PR #109 (ADR-0050 s.8): the three review findings, each
 reproduced on the reviewed head through the public tool and closed here.
 
 1. Reservations and unresolved-launch recovery are anchored beside the canonical ledger

@@ -276,7 +276,7 @@ request and implied none of this: no analyzer permission, no runtime verificatio
 **Disposition: implemented offline, accepted (PR #107 merged 2026-09-15T10:22:22Z, merge commit
 `c0566574c41bc31b7144fafe919078a213982143`); while the pull request was open it was proposed, which is
 how the paragraphs below read and are not rewritten; the deletion rehearsal path designed and not opened —
-since implemented offline and CLOSED by ADR-0049, accepted on the merge of PR #108 (F-13); D-1 made concrete by proposed ADR-0050 (F-14).**
+since implemented offline and CLOSED by ADR-0049, accepted on the merge of PR #108 (F-13); D-1 made concrete by ADR-0050, accepted on the merge of PR #109 and still not taken (F-14).**
 The 32 task-role subcells are executed by a **permission-probe task** of the actor's own family: the
 workstation prepares and authorizes the subcell exactly as before, consumes the authorization, writes
 the attempt, then launches the probe through the accepted launch sequence with the bound statement as
@@ -319,7 +319,7 @@ permission is unchanged.
 **Disposition: implemented offline, accepted (PR #108 merged 2026-09-15T13:53:41Z, merge commit
 `82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a`, approved head `9625e241db01b2996fbf9f63814ba3a916a3def7`); while the pull request was open it was
 proposed, which is how the paragraphs below read and are not rewritten; the rehearsal path CLOSED and its
-decision presented — decided in neither direction by the merge, and since made concrete by proposed ADR-0050 (F-14).**
+decision presented — decided in neither direction by the merge, and since made concrete by ADR-0050, accepted on the merge of PR #109 and still not taken (F-14).**
 The **receipt collector** reads a launch's receipt line from the stream derived from the bound launch
 record and the registered `log_destination` block of the task-definition evidence — never from a
 caller — under stated bounds (40 requests, 20,000 events, 300 s, each checked before a request; 16-page
@@ -417,10 +417,16 @@ provider-row guard (`tests/unit/test_sharadar_qualification_boundary.py`), the A
 tests, `ruff check`, `ruff format --check` and `mypy` on the touched test. The full suite and the images
 were **not** rerun: no source under `src/` or `scripts/` changed.
 
-## F-14 — the deletion rehearsal made concrete, integrated offline and declared inert, proposed ADR-0050
+## F-14 — the deletion rehearsal made concrete, integrated offline and declared inert, ADR-0050
 
-**Disposition: implemented offline, proposed; Decision D-1 made concrete and NOT TAKEN; the declaration
-inert; the path CLOSED.** Proposed ADR-0050 states D-1 as the exact consequence of what it merges: the
+> **ADR-0050 accepted on the merge of PR #109** (2026-09-15T17:36:51Z; merge commit `5f5035fe…`;
+> approved head `4ea7e733…`). The disposition below reads "proposed" of the days the pull request was
+> open and is not rewritten. Accepted: the concrete D-1 statement, the offline integration with its two
+> corrections, the inert declaration, the owner checklist. Unchanged by acceptance: **D-1 NOT TAKEN**, the
+> path CLOSED, `deletion_rehearsal_open` false, both R-8 subcells BLOCKED, no execution, no permission.
+
+**Disposition: implemented offline, accepted on the merge of PR #109; Decision D-1 made concrete and NOT
+TAKEN; the declaration inert; the path CLOSED.** Proposed ADR-0050 states D-1 as the exact consequence of what it merges: the
 resources and permissions (a rehearsal task definition whose task role is the actual deletion role; the
 role's delta of three exact parameter reads and a scoped decrypt with **no S3 change**; a runtime-binding
 parameter; the `KalpaManiDeletionRehearse` launcher with one exact `RunTask`, `PassRole` of exactly the
