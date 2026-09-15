@@ -1,4 +1,4 @@
-"""The deletion rehearsal path (ADR-0048 s.4; proposed ADR-0049 s.3): implemented offline over
+"""The deletion rehearsal path (ADR-0048 s.4; ADR-0049 s.3): implemented offline over
 the real evidence, store and engine with a fake acting as the deletion role, and CLOSED -- the
 catalogue keeps the two R-8 subcells BLOCKED, the tool refuses the rehearsal, and only these
 tests drive the engine. Every answer here is a fake's; nothing reaches AWS."""

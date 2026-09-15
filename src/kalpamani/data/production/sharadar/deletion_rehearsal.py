@@ -1,4 +1,5 @@
-"""The deletion rehearsal path: implemented offline, closed (ADR-0048 s.4; proposed ADR-0049 s.3).
+"""The deletion rehearsal path: implemented offline, closed (ADR-0048 s.4; ADR-0049 s.3;
+proposed ADR-0050 makes the decision concrete).
 
 ADR-0048 s.4 designed how the two R-8 subcells the catalogue keeps BLOCKED would be exercised
 **under the actual deletion role**: a rehearsal task family whose task role *is* the deletion
@@ -12,10 +13,12 @@ cleanup into a pass, a failure or an inconclusive result.
 
 **Implementation availability is not authority to execute.** :data:`REHEARSAL_PATH_OPEN` is
 ``False``: opening the path reverses a verified ADR-0007 property (no execution path exists
-for the deletion role) and is the governance decision proposed ADR-0049 D-1 presents to the
-owner. While it is ``False`` the catalogue keeps both subcells BLOCKED, the tools refuse the
-rehearsal, no rehearsal family, entry, launcher or role delta is declared, and the only
-callers of the engine are this repository's tests over fakes. **Nothing here broadens the
+for the deletion role) and is the governance decision ADR-0049 D-1 presents (made concrete
+by proposed ADR-0050) to the owner. While it is ``False`` the catalogue keeps both subcells
+BLOCKED, the tools refuse the rehearsal, the rehearsal family, entry, launcher and role delta
+are declared only INERT (proposed ADR-0050, behind a variable that is false by default), and
+the engine's callers are this repository's tests over fakes and the rehearsal task
+composition, itself reachable only from that closed path. **Nothing here broadens the
 deletion role's existing authority** (its S3 statements are unchanged by this module), and
 nothing here is a general deletion utility: the engine deletes exactly the one key the bound
 R-4 record names, under a consumed authorization naming that key, and refuses any other.

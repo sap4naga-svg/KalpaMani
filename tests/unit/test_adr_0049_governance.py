@@ -26,12 +26,20 @@ PROPOSED: Final = (
     "PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is"
 )
 HEX_64: Final = re.compile(r"\b[0-9a-f]{64}\b")
+MERGE_COMMIT: Final = "82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a"
+APPROVED_HEAD: Final = "9625e241db01b2996fbf9f63814ba3a916a3def7"
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
 
 
 def test_the_adr_exists_is_proposed_and_names_its_gates() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0049-*.md"))] == [ADR.name]
+    # The status line it was authored with is preserved as history; the post-merge note
+    # beside it records the acceptance with PR #108's merge evidence.
     assert "Status: " + PROPOSED in ADR_TEXT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #108 merged" in ADR_PLAIN and MERGE_COMMIT in ADR_TEXT and APPROVED_HEAD in ADR_TEXT
+    assert "ADR-0049 is therefore ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert "Acceptance decided Decision D-1 in neither direction" in ADR_PLAIN
     assert "Acceptance decides §3.8's Decision D-1 in neither direction" in ADR_PLAIN
     assert "Nothing was run to produce this decision" in ADR_PLAIN
     assert "## 5. Effectiveness and execution gates" in ADR_TEXT
@@ -82,6 +90,12 @@ def test_the_permission_is_recorded_and_not_granted() -> None:
     assert "KalpaManiDeletionRehearse" not in policies
     compute = (INFRA / "production_compute.tf").read_text(encoding="utf-8")
     assert dr.REHEARSAL_FAMILY not in compute
+    # Proposed ADR-0050 declares them in their own file, inert behind a variable that is
+    # false by default; the actor launchers' logs delta stays undeclared.
+    rehearsal = (INFRA / "production_deletion_rehearsal.tf").read_text(encoding="utf-8")
+    assert "KalpaManiDeletionRehearse" in rehearsal and "logs:GetLogEvents" in rehearsal
+    variables = (INFRA / "production_variables.tf").read_text(encoding="utf-8")
+    assert "default     = false" in variables.split('variable "deletion_rehearsal_open"')[1]
 
 
 def test_the_rehearsal_path_is_closed_and_the_decision_is_presented() -> None:
@@ -107,13 +121,15 @@ def test_the_rehearsal_path_is_closed_and_the_decision_is_presented() -> None:
         assert token in ADR_TEXT
 
 
-def test_the_status_register_carries_the_proposal() -> None:
+def test_the_status_register_carries_the_acceptance() -> None:
     for name in ("CLAUDE.md", "README.md"):
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert ADR.name in text
         assert "ADR-0049 receipt collection + deletion rehearsal (code):" in text
-        assert "ADR-0049 PROPOSED, NOT IN FORCE" in text
+        assert "ADR-0049 ACCEPTED / IN FORCE" in text
+        assert "ADR-0049 PROPOSED, NOT IN FORCE" not in text
         assert "ADR-0048 ACCEPTED / IN FORCE" in text
+        assert "PR #108 merged" in text and MERGE_COMMIT in text
     readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
         encoding="utf-8"
     )

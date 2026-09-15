@@ -75,7 +75,7 @@ from typing import Any, Final, Protocol
 
 #: The one flag that opens the authorized branch. Long on purpose.
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-launch"
-#: The flag that admits one bounded receipt collection (proposed ADR-0049 s.2): a logs read
+#: The flag that admits one bounded receipt collection (ADR-0049 s.2): a logs read
 #: under the actor's launcher profile, after that identity is proven, for one launch record.
 COLLECT_FLAG: Final = "--i-am-the-owner-authorizing-receipt-collection"
 
@@ -217,7 +217,7 @@ class LaunchArguments:
     #: ``None`` is the ordinary release; a negative mode names the R-1 cell it produces.
     release_mode: str | None = None
     #: ``--complete-row --collect-receipt``: the receipt read from the launch's own stream
-    #: (proposed ADR-0049 s.2) instead of a hand-read file; needs :data:`COLLECT_FLAG`.
+    #: (ADR-0049 s.2) instead of a hand-read file; needs :data:`COLLECT_FLAG`.
     collect_receipt: bool = False
     collection_authorized: bool = False
     #: ``--acknowledge-collection-contradiction <sha256>`` (repeatable): the hand-read
@@ -1015,7 +1015,7 @@ def collect_receipt_lines(
     root_source: Callable[[], Path] | None,
     security_of: Callable[[Path], Any] | None,
 ) -> str:
-    """The launch's receipt line from its own stream (proposed ADR-0049 s.2), or refuse.
+    """The launch's receipt line from its own stream (ADR-0049 s.2), or refuse.
 
     The launch record (bound to its reservation), the registered destination held to the
     record's entry, the launcher identity proven through the accepted human bootstrap, then

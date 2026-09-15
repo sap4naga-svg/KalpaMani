@@ -20,6 +20,23 @@ or apply, no IAM, permission-set or bucket-policy change; and **acceptance grant
 `logs:GetLogEvents` the collector needs is recorded in §2.6 as required and not granted, and the
 rehearsal's resources in §3.2 are named and not declared.
 
+**The condition above has since been satisfied.** **PR #108 merged** — merged **2026-09-15T13:53:41Z**,
+merge commit **`82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a`**, ordered parents
+**`c0566574c41bc31b7144fafe919078a213982143`** then **`9625e241db01b2996fbf9f63814ba3a916a3def7`** (the
+approved head, after three independently reviewed correction cycles recorded in §6), with a **merge tree
+identical to the reviewed pull-request head tree** (`df0451e43b0b21a1e7659b88cbc7abe82366119c`).
+ADR-0049 is therefore **ACCEPTED / IN FORCE** exactly as the clause above states — the bounded receipt
+collector with the corrections of §6, the narrow amendments of §4 and the offline implementation of the
+deletion rehearsal path (§3.1–§3.7) — effective together with the offline code merged beside it, and
+nothing else. While the pull request was open it was proposed and carried no authority — true then, and
+not rewritten. **Acceptance decided Decision D-1 in neither direction**: the rehearsal path stayed
+CLOSED and the two R-8 subcells BLOCKED on that merge, and they stay so; **acceptance authorized no log
+read, no collection, no probe launch, no permission subcell, no rehearsal, no deletion, no cleanup, no
+run, no image, no Terraform plan or apply and no IAM change, and granted no permission** —
+`logs:GetLogEvents` stays recorded and not granted. D-1 has since been made concrete, for the owner's
+separate decision, by proposed ADR-0050, which declares the resources of §3.2 and the delta of §3.3
+**inert** behind a variable that is false by default and takes the decision no more than this text does.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no log read, no S3 operation,
 no `RunTask`, no `ExecuteCommand`, no deletion, no container image built or pulled, no registry
 contacted, no credential retrieved, no provider request, no private input inspected. Every result beside

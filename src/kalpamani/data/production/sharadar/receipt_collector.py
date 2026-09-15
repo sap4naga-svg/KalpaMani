@@ -1,4 +1,4 @@
-"""The bounded receipt collector (proposed ADR-0049 s.2; the collection ADR-0044 s.4 deferred).
+"""The bounded receipt collector (ADR-0049 s.2; the collection ADR-0044 s.4 deferred).
 
 A task's receipt is one closed line on its log stream. Until now the owner hand-read it and
 handed it to the tools (``--receipt-lines``). The collector reads it **from the exact stream

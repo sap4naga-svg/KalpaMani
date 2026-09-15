@@ -821,7 +821,7 @@ execution.
 
 *§11.2 is history: ADR-0047's acceptance decided the release-mode field, the contracts and the cleanup
 wording; the two mechanisms are delivered (the probe entry, the held task) or designed and not opened
-(the deletion path) by ADR-0048, accepted on the merge of PR #107 — §12; the deletion decision is presented as proposed ADR-0049 D-1 — §13.*
+(the deletion path) by ADR-0048, accepted on the merge of PR #107 — §12; the deletion decision is presented as ADR-0049 D-1 (accepted on the merge of PR #108) — §13, and made concrete by proposed ADR-0050 — §14.*
 
 ### 11.3 What remains — the refreshed owner checklist
 
@@ -914,11 +914,13 @@ limitation is stated rather than resolved: whether ECS authorizes the caller bef
 task's `enableExecuteCommand` state is not established offline — if not, the held check reads
 `UNDECIDED`, never a verdict it did not obtain.
 
-## 13. The collection-and-rehearsal cycle — the receipt collector implemented offline; the deletion rehearsal implemented offline and CLOSED; proposed ADR-0049
+## 13. The collection-and-rehearsal cycle — the receipt collector implemented offline; the deletion rehearsal implemented offline and CLOSED; ADR-0049 (accepted on the merge of PR #108)
+
+*Written while PR #108 was open, when ADR-0049 was proposed; that is how the paragraphs below read and they are not rewritten. PR #108 merged 2026-09-15T13:53:41Z (merge commit `82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a`, approved head `9625e241db01b2996fbf9f63814ba3a916a3def7`, merge tree identical to the reviewed head tree), so ADR-0049 is ACCEPTED / IN FORCE; acceptance decided D-1 in neither direction, authorized no execution and granted no permission. §14 records the cycle that followed.*
 
 ### 13.1 Implemented offline (never run)
 
-- **The receipt collector** (`receipt_collector.py`, proposed ADR-0049 §2): the stream of one launch
+- **The receipt collector** (`receipt_collector.py`, ADR-0049 §2): the stream of one launch
   derived from the bound launch record's task id and the **registered** `log_destination` block of the
   task-definition evidence (one optional block; a registration without it refuses the collection; a
   block for another entry refuses; no caller-supplied stream is ever read); `GetLogEvents` from the head
@@ -955,7 +957,7 @@ task's `enableExecuteCommand` state is not established offline — if not, the h
   public paths and closed (`CONTRADICTION_UNRESOLVED`; explicit acknowledged disposition). Correction
   3 (ADR-0049 §6.5): a disposition naming receipt A not constraining recovery with receipt B —
   reproduced through both public paths at the interruption boundary and closed (`refused_receipt_binding`).
-- **The deletion rehearsal path** (`deletion_rehearsal.py`, proposed ADR-0049 §3; ADR-0048 §4's
+- **The deletion rehearsal path** (`deletion_rehearsal.py`, ADR-0049 §3; ADR-0048 §4's
   design): the target derived from the one bound, MATCHED R-4 human `PutObject` record whose key is the
   synthetic marker's content address and whose object no cleanup has settled — nothing else is ever a
   target; rehearsal statements (`kalpamani-deletion-rehearsal-statement/v1`) binding subcell,
@@ -975,7 +977,7 @@ task's `enableExecuteCommand` state is not established offline — if not, the h
 
 | | |
 |---|---|
-| **proposed** | ADR-0049 (PROPOSED — NOT IN FORCE while its pull request is open): the collector, the optional registered `log_destination` block, the rehearsal's offline implementation, the amendments of its §4 |
+| **proposed** | ADR-0049 (PROPOSED — NOT IN FORCE while its pull request was open; **since ACCEPTED / IN FORCE on the merge of PR #108**): the collector, the optional registered `log_destination` block, the rehearsal's offline implementation, the amendments of its §4 |
 | **blocked** | R8-DELETION's two subcells, on **Decision D-1** (ADR-0049 §3.8): open the rehearsal path — the smallest concrete decision, presented with its consequences (ADR-0007's verified inert property reversed by design; one family, one launcher, three parameters, two bootstrap permissions on the deletion role; one synthetic object deleted per authorization) and **taken by nobody here** |
 | **owner decisions and values required** | D-1 (above); the registered `log_destination` of every applied revision (`log_group` = `/kalpamani/<name_prefix>/research`, `stream_prefix`, `container` — transcribed from the applied task definition, like the rest of the evidence); every value D.1 already lists (all MISSING) |
 | **permissions required, explicitly not granted** | `logs:GetLogEvents` for each launcher permission set on exactly its own families' streams (`…:log-group:/kalpamani/<name_prefix>/research:log-stream:production-<container>/<container>/*`; no `FilterLogEvents`, no `DescribeLogStreams`); on D-1 only: `KalpaManiDeletionRehearse` and the deletion role's `ssm:GetParameter` / `kms:Decrypt` bootstrap delta; unchanged: the control principal's ECS actions, `ecs:DescribeTaskDefinition`, the Reachability Analyzer delta, the probe families' apply |
@@ -988,3 +990,66 @@ read; no rehearsal; no deletion; no image; no plan or apply; every owner value M
 bucket-policy transition (G-14), the control principal's ECS actions and the stopped-task-visibility
 and `ExecuteCommand` evaluation-order limitations unchanged. **G2 OPEN · CONTROL DEFERRED · Phase 3
 NOT COMPLETE · live trading HARD-DISABLED.**
+
+## 14. The deletion-rehearsal readiness cycle — D-1 made concrete, the rehearsal integrated offline, the declaration inert; proposed ADR-0050
+
+### 14.1 Decision D-1, made concrete and not taken
+
+ADR-0049 §3.8 presented D-1 in one paragraph; proposed
+[ADR-0050](../decisions/ADR-0050-deletion-rehearsal-decision-made-concrete-and-offline-integration.md) §2
+states it as the exact consequence of accepting the declaration and the integration below: the
+resources and permissions (§2.2), who launches and which role deletes (§2.3 — a human launcher
+holding `KalpaManiDeletionRehearse` **passes** the deletion role to ECS; **the deletion role deletes as
+the task**; no human ever assumes it), how the target is held to the one synthetic R-4 object (§2.4 —
+the statement, the input's recomputed digest, the task's bucket check and the engine's exact operations;
+**not IAM**, which cannot name one key for a delete), the exclusion of production and unrelated
+resources (§2.5), the operation limits (§2.6), every interruption's recorded outcome with no retry
+(§2.7), the control principal's cleanup as the only confirmation (§2.8), the residual risks (§2.9 —
+ADR-0007's verified inert property reversed by design; the role's bucket-wide delete authority bounded by
+the rehearsal image's code and its pinned digest), what acceptance enables versus what still needs its
+own authorization (§2.10), and the decision verbatim for the owner's signature (§2.11). **D-1 is not
+taken here or by ADR-0050's acceptance**; the path stays CLOSED and R-8 BLOCKED.
+
+### 14.2 Implemented offline (never run)
+
+- **The rehearsal task** (`deletion_rehearsal_task.py`): the composition the deletion role's task
+  definition would run — entry, credential environment, metadata, the rehearsal runtime binding
+  (`kalpamani-deletion-runtime-binding/v1`, kind `kalpamani-deletion-rehearsal-runtime`), the launcher's
+  input (`kalpamani-deletion-rehearsal-input/v1`, the whole statement, its digest recomputed), the target
+  held to the bound bucket, the identity (the deletion role's exact name in the bound account, this task's
+  session), the bounded release barrier (5 s / 60 reads / 300 s), then the engine over one client built
+  only after the release; one bound receipt line (`kalpamani-deletion-rehearsal-receipt/v1`), exit 50–59
+  disjoint from every other table.
+- **The launcher and the completion** (`deletion_rehearsal_launch.py`): the launch inputs held to the
+  rehearsal family, the deletion role and one account; a `RunTask` with no overrides; the sequence —
+  identity, durable consumption, reservation, create-only input, one never-retried `RunTask`, placement,
+  create-only release, observation, cleanup failures beside the outcome, the launch record; the record
+  rebuilt only from a verified `REHEARSED` receipt whose exit the launcher observed.
+- **The collector, reused** with an injected verifier; the rehearsal container a known destination.
+- **The owner tool's four modes** (`--prepare-rehearsal`, `--rehearse-deletion`,
+  `--collect-rehearsal-receipt`, `--complete-rehearsal`; `production_deletion_rehearsal_tool.py`), each
+  refused with exit 27 before any path, flag or client while `REHEARSAL_PATH_OPEN` is `False` — which it
+  is — and exercised end to end on fakes with the constant monkeypatched in tests only.
+- **The inert declaration** (`production_deletion_rehearsal.tf`, `production_variables.tf`,
+  `production_bindings.tf`): every rehearsal resource gated on stage a/b **and** `deletion_rehearsal_open`
+  (**false by default**) **and** a `deletion_rehearsal` image digest, the assignment on stage b too;
+  the closed default declares nothing and the key policy is exactly the accepted seven statements;
+  validated in a task-owned external copy under the pinned provider and the mock (`fmt`, `init
+  -backend=false`, `validate`, `terraform test`: 20 runs, five new) and held by a structural test over
+  the parsed HCL; `iam.tf` untouched; **no plan, no apply**.
+
+### 14.3 Owner inputs
+
+[`production-owner-checklist.md`](production-owner-checklist.md): one prioritized checklist in four
+groups (before local image preparation; before publication or infrastructure change; before verification
+launches and collection; before the first production acquisition and build), each item with its purpose,
+format, authoritative source, dependencies and whether an accepted value exists — **every private value
+MISSING**, none read or invented, values obtainable only after a runtime step marked so.
+
+### 14.4 What has not moved
+
+Counts stay 56 / 6 / 32 / 2 / 2; every executable subcell UNEXECUTED; no rehearsal; no deletion; no
+launch; no receipt collected; no log read; no image; no plan or apply; no variable set; no permission
+granted; every owner value MISSING; the bucket-policy transition (G-14), the control principal's ECS
+actions and the deferred `logs:GetLogEvents` delta for the actor launchers unchanged. **G2 OPEN · CONTROL
+DEFERRED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED.**

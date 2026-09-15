@@ -555,7 +555,7 @@ TASK_DEFINITION_INTENTIONAL_DIFFERENCES: Final[tuple[str, ...]] = (
     "image_digest",
 )
 _TASK_USER: Final = "10001:10001"
-#: The one optional key of the task-definition evidence (proposed ADR-0049): the registered
+#: The one optional key of the task-definition evidence (ADR-0049): the registered
 #: log destination the receipt collector derives a task's stream from. A registration made
 #: before the collector existed stays valid; the collector refuses until one is registered.
 _TASK_DEFINITION_OPTIONAL_FIELDS: Final[frozenset[str]] = frozenset({"log_destination"})
@@ -587,7 +587,7 @@ class TaskDefinitionEvidence:
     work_tmpfs: bool
     command: str
     image_digest: str
-    #: The registered log destination (proposed ADR-0049): the group and stream prefix the
+    #: The registered log destination (ADR-0049): the group and stream prefix the
     #: owner transcribed from the applied revision, and the container name; ``None`` for a
     #: registration made before the collector existed.
     log_destination: LogDestination | None = None

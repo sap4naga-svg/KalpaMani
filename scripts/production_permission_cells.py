@@ -92,7 +92,7 @@ from kalpamani.data.qualify.sharadar.runtime_binding import (  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-permission-subcell"
 CLEANUP_FLAG: Final = "--i-am-the-owner-authorizing-permission-cleanup"
-#: One bounded receipt collection from a probe launch's own log stream (proposed ADR-0049
+#: One bounded receipt collection from a probe launch's own log stream (ADR-0049
 #: s.2): a logs read under the actor's launcher profile after that identity is proven.
 COLLECT_FLAG: Final = "--i-am-the-owner-authorizing-receipt-collection"
 #: The consumption namespace beside the ledger (:meth:`LaunchStore.consume`).
@@ -1589,7 +1589,7 @@ def collect_receipt_for_subcell(
     modules: Mapping[str, object],
     seams: dict[str, Any],
 ) -> str:
-    """The probe launch's receipt line from its own stream (proposed ADR-0049 s.2), or refuse.
+    """The probe launch's receipt line from its own stream (ADR-0049 s.2), or refuse.
 
     Exactly one launched, incomplete attempt of the subcell under the current binding; the
     registered probe target's log destination held to the probe entry; the actor's
