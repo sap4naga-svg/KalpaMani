@@ -19,6 +19,21 @@ run, no image, no Terraform plan or apply, no IAM change; and **acceptance grant
 every probe exercises a permission the accepted declarations already state, and the deletion role's
 path is not opened by accepting this text.
 
+**The condition above has since been satisfied.** **PR #107 merged** — merged **2026-09-15T10:22:22Z**,
+merge commit **`c0566574c41bc31b7144fafe919078a213982143`**, ordered parents
+**`167f1564378cfb96759093b43fbde5443f6c56b6`** then **`86fe67b18cb6a213559b418d5312785972b675eb`** (the
+approved head, after one independently reviewed correction cycle recorded in §8), with a **merge tree
+identical to the reviewed pull-request head tree** (`458320e33dcff5a6c579947cdc31c7bc1bc96b4b`).
+ADR-0048 is therefore **ACCEPTED / IN FORCE** exactly as the clause above states — the permission-probe
+entry and its contracts, the held `ExecuteCommand` check with its precondition, the classification of
+every issuing service's denial, the narrow amendments of §6 and the corrections of §8, and the deletion
+rehearsal path **designed (§4) and not opened** — effective together with the offline code merged
+beside it, and nothing else. While the pull request was open it was proposed and carried no authority —
+true then, and not rewritten. **Acceptance authorized no probe launch, no permission subcell, no held
+task, no cleanup, no run, no image, no Terraform plan or apply and no IAM change, and granted no
+permission**; every tool still refuses by default, every executable subcell stays UNEXECUTED, and the
+two R-8 subcells stay BLOCKED until the separate decision proposed ADR-0049 D-1 presents is taken.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no `RunTask`,
 no `ExecuteCommand`, no container image built or pulled, no registry contacted, no credential
 retrieved, no provider request, no private input inspected. Every result beside this text is a counting

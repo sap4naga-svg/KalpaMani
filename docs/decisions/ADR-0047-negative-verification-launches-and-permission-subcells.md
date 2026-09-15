@@ -31,7 +31,7 @@ and nothing else. While the pull request was open it was proposed and carried no
 and not rewritten. **Acceptance authorized no launch, no negative launch, no permission subcell, no
 cleanup, no run, no probe, no Terraform plan or apply and no IAM change**; every tool still refuses by
 default and none has run against AWS. The mechanisms §5 names as required are decided by a later,
-separately proposed ADR-0048: the task-side probe entry and the `ExecuteCommand` mechanism are
+separately by ADR-0048 (accepted on the merge of PR #107): the task-side probe entry and the `ExecuteCommand` mechanism are
 delivered there (with one further subcell status, `AWAITING_RECEIPT`, for a launched probe whose
 receipt is not yet verified), and the deletion role's execution path is designed there and not opened.
 
@@ -368,7 +368,7 @@ prove them.
 No permission is granted by this ADR: D-14 (analyzer), V-16 (`ecs:DescribeTaskDefinition`),
 `logs:GetLogEvents` (the receipt collector) and G-14 stay recorded and not granted.
 
-*Since acceptance (proposed ADR-0048, not this ADR's decision): the task-side permission probe entry
+*Since acceptance (ADR-0048, accepted on the merge of PR #107 — not this ADR's decision): the task-side permission probe entry
 and the running task the `ExecuteCommand` subcells needed are delivered as the permission-probe entry
 and the held probe task; the deletion role's execution path is designed as a rehearsal path and stays a
 separate decision; the control principal's ECS actions, the owner attestation and the stopped-task

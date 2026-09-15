@@ -271,9 +271,12 @@ correction (a placement- or workload-only change to a valid launch record read `
 `f949dcb9…`) was reproduced with the real parsers and runner on synthetic files and is held the same way. ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
 request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
 
-## F-12 — the permission-probe tasks and the held ExecuteCommand check, proposed ADR-0048
+## F-12 — the permission-probe tasks and the held ExecuteCommand check, ADR-0048 (accepted on the merge of PR #107)
 
-**Disposition: implemented offline, proposed; the deletion rehearsal path designed and not opened.**
+**Disposition: implemented offline, accepted (PR #107 merged 2026-09-15T10:22:22Z, merge commit
+`c0566574c41bc31b7144fafe919078a213982143`); while the pull request was open it was proposed, which is
+how the paragraphs below read and are not rewritten; the deletion rehearsal path designed and not opened —
+since implemented offline and CLOSED by proposed ADR-0049 (F-13).**
 The 32 task-role subcells are executed by a **permission-probe task** of the actor's own family: the
 workstation prepares and authorizes the subcell exactly as before, consumes the authorization, writes
 the attempt, then launches the probe through the accepted launch sequence with the bound statement as
@@ -311,12 +314,41 @@ required gates on the corrected head are recorded in the export; **synthetic tes
 verification**, nothing has been run against AWS, the deletion path stays BLOCKED, and every deferred
 permission is unchanged.
 
+## F-13 — the receipt collector and the deletion rehearsal, proposed ADR-0049
+
+**Disposition: implemented offline, proposed; the rehearsal path CLOSED and its decision presented.**
+The **receipt collector** reads a launch's receipt line from the stream derived from the bound launch
+record and the registered `log_destination` block of the task-definition evidence — never from a
+caller — under stated bounds (16 pages per pass, 40 requests, 20,000 events, 15 s polls within 300 s,
+effective SDK retries zero), keeps the line and no other event in a collection record, and hands it to
+exactly the hand-read completion path (`--complete-row --collect-receipt`, `--collect-receipt
+<subcell>`; the receipt verifier, the reservation binding, the observed-exit rule, the receipt evidence
+and the ledger row unchanged), behind its own flag and the launcher identity. Pagination, repeated
+tokens, delayed delivery, bounded polling, missing / malformed / duplicate / contradictory receipts,
+wrong statement, attempt, registration and destination, denial, throttling, timeout, an interrupted
+completion after the collection record, and the preservation of an INVERTED reading are each tested
+through the real tools, store and runner; the SDK client's serialized request and its one-attempt
+behaviour at an intercepted transport. **An exhausted budget proves only that no receipt was obtained
+within it, and a successful read is not a successful verification.** `logs:GetLogEvents` for the
+launcher sets is **recorded and not granted**. The **deletion rehearsal** ADR-0048 §4 designed is
+implemented offline over the actual deletion-role execution model — target, statement, consumed
+authorization, sequence, engine, record, reading — and **CLOSED**: `REHEARSAL_PATH_OPEN` false, both
+R-8 subcells BLOCKED, the tool refusing, no resource declared, existing deletion authority unchanged, no
+generic deletion utility. **Decision D-1 (open the path) is presented with its consequences and not
+taken.** ADR-0048's accepted state is synchronized in the same change. Nothing has run; acceptance
+would authorize no execution and grant no permission.
+
+**Validation performed for the collection-and-rehearsal cycle.** The full suite, `ruff check`,
+`ruff format --check`, `mypy` and the docs audit on the final head, every one on synthetic temporary
+files, counting fakes and an intercepted transport with invented credentials. No log read, no AWS call,
+no image, no Terraform plan or apply, no private input.
+
 ## F-11 — the negative R-1 launches and the R-4 … R-9 subcells, ADR-0047 (accepted on the merge of PR #106)
 
 **Disposition: implemented offline, accepted (PR #106 merged 2026-09-15T00:26:19Z, merge commit
 `167f1564378cfb96759093b43fbde5443f6c56b6`); while the pull request was open it was proposed, which is
 how the paragraph below reads and is not rewritten.** The 36 BLOCKED subcells it names are, since, 34
-executable offline by proposed ADR-0048's mechanisms (F-12) and 2 still BLOCKED on the deletion path. The two negative modes are bound into the
+executable offline by ADR-0048's mechanisms (F-12, accepted on the merge of PR #107) and 2 still BLOCKED on the deletion path. The two negative modes are bound into the
 authorized specification (and so into the authorization's digest), applied by the launcher in one
 changed step with no retry in any mode, recorded with the launcher's own terminal observation, and
 passed by the matrix only on the expected, receipt-verified, bound refusal — **an unexpected success

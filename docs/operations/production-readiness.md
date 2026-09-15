@@ -821,7 +821,7 @@ execution.
 
 *§11.2 is history: ADR-0047's acceptance decided the release-mode field, the contracts and the cleanup
 wording; the two mechanisms are delivered (the probe entry, the held task) or designed and not opened
-(the deletion path) by proposed ADR-0048 — §12.*
+(the deletion path) by ADR-0048, accepted on the merge of PR #107 — §12; the deletion decision is presented as proposed ADR-0049 D-1 — §13.*
 
 ### 11.3 What remains — the refreshed owner checklist
 
@@ -829,7 +829,9 @@ wording; the two mechanisms are delivered (the probe entry, the held task) or de
 packaging, the decisions or permissions required before cloud verification, and the evidence
 obtainable only after the relevant runtime step.
 
-## 12. The mechanisms cycle — permission-probe tasks and the held ExecuteCommand check implemented offline; proposed ADR-0048
+## 12. The mechanisms cycle — permission-probe tasks and the held ExecuteCommand check implemented offline; ADR-0048 (accepted on the merge of PR #107)
+
+*ADR-0048 is ACCEPTED / IN FORCE: PR #107 merged 2026-09-15T10:22:22Z, merge commit `c0566574c41bc31b7144fafe919078a213982143`, approved head `86fe67b18cb6a213559b418d5312785972b675eb`, base `167f1564378cfb96759093b43fbde5443f6c56b6`, merge tree identical to the reviewed head tree. While the pull request was open it was proposed, which is how §12.1–§12.3 read and is not rewritten. Acceptance authorized no execution and granted no permission; nothing below has run.*
 
 ### 12.1 Implemented offline (never run)
 
@@ -861,7 +863,7 @@ obtainable only after the relevant runtime step.
   an external copy under the pinned provider (`init`, `validate`, 15 mock-provider runs) — declared,
   not planned, not applied.
 
-### 12.1a Correction cycle 1 (review of the pull request; ADR-0048 §8; the ADR stays PROPOSED)
+### 12.1a Correction cycle 1 (review of the pull request; ADR-0048 §8; the ADR stayed PROPOSED until the merge)
 
 Three defects the review found in 12.1 were reproduced through the real tool, launcher, store and
 runner on synthetic files, then corrected:
@@ -911,3 +913,60 @@ receipt collector (ADR-0044 §5) and the G-14 transition stay deferred and were 
 limitation is stated rather than resolved: whether ECS authorizes the caller before validating a
 task's `enableExecuteCommand` state is not established offline — if not, the held check reads
 `UNDECIDED`, never a verdict it did not obtain.
+
+## 13. The collection-and-rehearsal cycle — the receipt collector implemented offline; the deletion rehearsal implemented offline and CLOSED; proposed ADR-0049
+
+### 13.1 Implemented offline (never run)
+
+- **The receipt collector** (`receipt_collector.py`, proposed ADR-0049 §2): the stream of one launch
+  derived from the bound launch record's task id and the **registered** `log_destination` block of the
+  task-definition evidence (one optional block; a registration without it refuses the collection; a
+  block for another entry refuses; no caller-supplied stream is ever read); `GetLogEvents` from the head
+  with the forward token, ended by the repeated token, polled for delayed delivery — **16 pages per
+  pass, 40 requests, 20,000 events, 15 s polls within 300 s; effective SDK retries zero** (one attempt in
+  total, finite timeouts, the workstation client configuration); closed outcomes that are never receipt
+  verdicts (`COLLECTED`, `NO_RECEIPT_WITHIN_BUDGET`, `STREAM_NOT_FOUND_WITHIN_BUDGET`,
+  `CONTRADICTORY_RECEIPTS`, `DENIED`, `THROTTLED`, `FAILED`); a collection record
+  (`kalpamani-receipt-collection/v1`) keeping the receipt line and no other event; the line handed to
+  **exactly the hand-read completion** — `production_launch.py --complete-row --collect-receipt` and
+  `production_permission_cells.py --collect-receipt <subcell>`, each behind
+  `--i-am-the-owner-authorizing-receipt-collection` and the actor's launcher identity, the logs client
+  built only there. A recorded `COLLECTED` line is reused (no second read); a completion interrupted
+  after the collection record repairs itself; a FAILED or INCONCLUSIVE subcell keeps its reading.
+  **An exhausted budget proves only that no receipt was obtained within it; a successful read is not
+  a successful verification.** The SDK client's serialized `GetLogEvents` (`Logs_20140328.GetLogEvents`,
+  `startFromHead`, `nextToken`) and its one-attempt behaviour on a throttle, a 5xx and a denial are
+  asserted at an intercepted transport with invented credentials.
+- **The deletion rehearsal path** (`deletion_rehearsal.py`, proposed ADR-0049 §3; ADR-0048 §4's
+  design): the target derived from the one bound, MATCHED R-4 human `PutObject` record whose key is the
+  synthetic marker's content address and whose object no cleanup has settled — nothing else is ever a
+  target; rehearsal statements (`kalpamani-deletion-rehearsal-statement/v1`) binding subcell,
+  principal (`DELETION_ROLE`), operation, expectation, exact target, sequence position, stamp and
+  binding; the owner's authorization consumed durably (`deletion_rehearsal_authorization`) before any
+  operation; the sequence `R8-GET` (a denial passes; a body fails) then `R8-LIST-AND-DELETE` (one list,
+  then — only if allowed — one delete of the exact key; 200 then 204 pass **only with** the control
+  principal's later verified confirmation of absence; a denial fails; an ambiguous delete is
+  `possibly_deleted` and decides nothing; residue is reported); records
+  (`kalpamani-deletion-rehearsal-record/v1`) of classes and counts; the reading (`PASSED`, `FAILED`,
+  `INCONCLUSIVE`, `CLEANUP_UNRESOLVED`, `RESIDUE`). **CLOSED**: `REHEARSAL_PATH_OPEN` is `False`, the
+  catalogue keeps both R-8 subcells BLOCKED with the dependency naming ADR-0049 D-1, the tool refuses
+  `--rehearse-deletion` before any path or flag, no family / entry / launcher / parameter / role delta
+  is declared, and the engine's only callers are the tests over a fake acting as the deletion role.
+
+### 13.2 Proposed, blocked, and the decisions and permissions the owner holds
+
+| | |
+|---|---|
+| **proposed** | ADR-0049 (PROPOSED — NOT IN FORCE while its pull request is open): the collector, the optional registered `log_destination` block, the rehearsal's offline implementation, the amendments of its §4 |
+| **blocked** | R8-DELETION's two subcells, on **Decision D-1** (ADR-0049 §3.8): open the rehearsal path — the smallest concrete decision, presented with its consequences (ADR-0007's verified inert property reversed by design; one family, one launcher, three parameters, two bootstrap permissions on the deletion role; one synthetic object deleted per authorization) and **taken by nobody here** |
+| **owner decisions and values required** | D-1 (above); the registered `log_destination` of every applied revision (`log_group` = `/kalpamani/<name_prefix>/research`, `stream_prefix`, `container` — transcribed from the applied task definition, like the rest of the evidence); every value D.1 already lists (all MISSING) |
+| **permissions required, explicitly not granted** | `logs:GetLogEvents` for each launcher permission set on exactly its own families' streams (`…:log-group:/kalpamani/<name_prefix>/research:log-stream:production-<container>/<container>/*`; no `FilterLogEvents`, no `DescribeLogStreams`); on D-1 only: `KalpaManiDeletionRehearse` and the deletion role's `ssm:GetParameter` / `kms:Decrypt` bootstrap delta; unchanged: the control principal's ECS actions, `ecs:DescribeTaskDefinition`, the Reachability Analyzer delta, the probe families' apply |
+| **exact next runtime prerequisites** | before any collection: the `logs:GetLogEvents` delta declared, validated externally, applied under its own authorization; the `log_destination` registered; a launch record with an observed terminal exit; one collection authorization per launch. Before any rehearsal: D-1 taken; the rehearsal resources declared and applied; the rehearsal entry built into the image under the image gate; the deletion runtime binding materialized; the R-4 human `PutObject` subcell PASSED under the binding in force; one authorization per R-8 subcell; the control principal's cleanup afterwards |
+
+### 13.3 What has not moved
+
+Counts stay 56 / 6 / 32 / 2 / 2; every executable subcell UNEXECUTED; no receipt collected; no log
+read; no rehearsal; no deletion; no image; no plan or apply; every owner value MISSING; the
+bucket-policy transition (G-14), the control principal's ECS actions and the stopped-task-visibility
+and `ExecuteCommand` evaluation-order limitations unchanged. **G2 OPEN · CONTROL DEFERRED · Phase 3
+NOT COMPLETE · live trading HARD-DISABLED.**
