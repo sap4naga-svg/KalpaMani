@@ -1,4 +1,4 @@
-"""Correction 2 of PR #109 (proposed ADR-0050 s.8.4): a ``StopTask`` acknowledgement is not a
+"""Correction 2 of PR #109 (ADR-0050 s.8.4): a ``StopTask`` acknowledgement is not a
 termination.
 
 Reproduced on the correction-1 head through the public tool: on the MISPLACED and the

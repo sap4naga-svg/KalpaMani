@@ -22,6 +22,26 @@ Terraform plan or apply, no IAM, permission-set, key-policy or bucket-policy cha
 grants no permission** — every permission named here is declared behind a variable that is false, and
 none is applied.
 
+**The condition above has since been satisfied.** **PR #109 merged** — merged **2026-09-15T17:36:51Z**,
+merge commit **`5f5035fecef53126058e2aa56a5b82c4d036af00`**, ordered parents **`82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a`** then
+**`4ea7e73383585a22543a2cee1284a746f4d4a492`** (the approved head, after the two review corrections recorded in §8), with a
+**merge tree identical to the reviewed pull-request head tree** (`3269a33473338805e8ba483e8d9065ce840caa2f`). ADR-0050 is therefore
+**ACCEPTED / IN FORCE** exactly as the clause above states — the concrete statement of Decision D-1 (§2)
+presented for the owner's separate acceptance, the offline integration of the deletion rehearsal path (§3,
+with the corrections of §8) exercised only on fakes, the inert declaration of the rehearsal resources (§4)
+closed by default, and the owner checklist (§5) — effective together with the offline code and the inert
+declaration merged beside it, and nothing else. While the pull request was open it was proposed and
+carried no authority — true then, and not rewritten. **Acceptance decided Decision D-1 in neither
+direction**: D-1 is still taken only by the owner's own explicit written acceptance of §2.11, and on that
+merge and since the deletion rehearsal path stays **CLOSED** (`REHEARSAL_PATH_OPEN` is `False`), the two
+R-8 subcells stay **BLOCKED**, the declaration stays **inert** (`deletion_rehearsal_open` is `false`;
+merging set no variable). **Acceptance authorized no execution and granted no permission** — no rehearsal,
+no deletion, no launch, no log read, no collection, no image build or publication, no Terraform plan or
+apply, no IAM, permission-set, key-policy or bucket-policy change, no profile materialization; every owner
+value stays MISSING. The merge evidence (pre-merge verification with every merge requirement recorded as
+absent, the one `--match-head-commit` merge, the post-merge parent, tree and empty-diff checks) is in the
+owner's evidence export, outside this repository.
+
 **Corrections 1 and 2 (§8) are part of this proposal.** After review of the pull request, three
 findings (correction 1) and then one more (correction 2 — a `StopTask` acknowledgement is not a
 termination) were reproduced through the public tool on synthetic files and fakes and corrected in the

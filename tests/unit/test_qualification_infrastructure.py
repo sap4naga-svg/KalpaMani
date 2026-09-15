@@ -1294,7 +1294,7 @@ class TestTheSecretBindingIsIsolated:
             "allowed_account_ids",
             "aws_region",
             "bucket_suffix",
-            # Proposed ADR-0050 (production_variables.tf): the D-1 declaration gate,
+            # ADR-0050 (production_variables.tf): the D-1 declaration gate,
             # false by default, so the qualification binding is unchanged by it.
             "deletion_rehearsal_open",
             "identity_center_instance_arn",

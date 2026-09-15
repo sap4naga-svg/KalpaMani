@@ -1,5 +1,5 @@
 """The deletion rehearsal's owner modes of ``production_permission_cells`` (ADR-0049 s.3;
-proposed ADR-0050): prepare a statement, launch the rehearsal task under the deletion
+ADR-0050): prepare a statement, launch the rehearsal task under the deletion
 role, collect its receipt, complete the record.
 
 Reached only through the permission tool's ``main``, and only once

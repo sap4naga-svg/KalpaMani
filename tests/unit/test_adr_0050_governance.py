@@ -33,11 +33,23 @@ PROPOSED: Final = (
     "PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is"
 )
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
+MERGE_COMMIT: Final = "5f5035fecef53126058e2aa56a5b82c4d036af00"
+APPROVED_HEAD: Final = "4ea7e73383585a22543a2cee1284a746f4d4a492"
 
 
-def test_the_adr_exists_is_proposed_and_takes_no_decision() -> None:
+def test_the_adr_exists_is_accepted_and_takes_no_decision() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0050-*.md"))] == [ADR.name]
+    # The conditional status clause is preserved as history; the post-merge note records the
+    # acceptance event exactly as the clause states it, and the decision stays the owner's.
     assert "Status: " + PROPOSED in ADR_TEXT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #109 merged" in ADR_PLAIN
+    assert MERGE_COMMIT in ADR_TEXT and APPROVED_HEAD in ADR_TEXT
+    assert (
+        "ADR-0050 is therefore ACCEPTED / IN FORCE exactly as the clause above states" in ADR_PLAIN
+    )
+    assert "Acceptance decided Decision D-1 in neither direction" in ADR_PLAIN
+    assert "Acceptance authorized no execution and granted no permission" in ADR_PLAIN
     assert "Acceptance decides D-1 in neither direction" in ADR_PLAIN
     assert "This ADR's acceptance does not take D-1" in ADR_PLAIN
     assert "Nothing was run to produce this decision" in ADR_PLAIN
@@ -201,22 +213,29 @@ def test_the_checklist_exists_marks_every_value_missing_and_takes_no_decision() 
     assert "MISSING" in text and "after S" in text
 
 
-def test_the_status_register_carries_the_proposal() -> None:
+def test_the_status_register_carries_the_acceptance_and_the_untaken_decision() -> None:
     for name in ("CLAUDE.md", "README.md"):
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert ADR.name in text
         assert "ADR-0050 deletion rehearsal readiness (code + declaration):" in text
-        assert "ADR-0050 PROPOSED, NOT IN FORCE" in text
+        assert "ADR-0050 ACCEPTED / IN FORCE" in text
+        assert "PR #109 merged 2026-09-15T17:36:51Z" in text and MERGE_COMMIT in text
+        assert "ADR-0050 PROPOSED, NOT IN FORCE" not in text
+        assert "proposed in an open, unmerged pull request" not in text
         assert "ADR-0049 ACCEPTED / IN FORCE" in text
         assert "NOT TAKEN" in text
+        assert "IAM cannot" not in text and "cannot name one key" not in text
     readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
         encoding="utf-8"
     )
     assert "## 14. The deletion-rehearsal readiness cycle" in readiness
+    assert "ADR-0050 has since been accepted" in readiness
     dispositions = (
         REPO_ROOT / "docs" / "operations" / "production-readiness-dispositions.md"
     ).read_text(encoding="utf-8")
     assert "## F-14 — the deletion rehearsal made concrete" in dispositions
+    assert "ADR-0050 accepted on the merge of PR #109" in dispositions
+    assert "NOT TAKEN" in dispositions
     assert "Correction 1 (PR #109 review; ADR-0050 §8)" in dispositions
     assert "Correction 2 (PR #109 review; ADR-0050 §8.4)" in dispositions
     assert "Correction 2 (§8.4)" in readiness
@@ -225,4 +244,13 @@ def test_the_status_register_carries_the_proposal() -> None:
     inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
         encoding="utf-8"
     )
-    assert "production-owner-checklist.md" in inputs and "proposed ADR-0050" in inputs
+    assert "production-owner-checklist.md" in inputs
+    assert "accepted on the merge of PR #109 with D-1 still not taken" in inputs
+    assert "proposed ADR-0050" not in inputs
+    operations = REPO_ROOT / "docs" / "operations"
+    worksheet = (operations / "production-owner-input-worksheet.md").read_text(encoding="utf-8")
+    assert "Every private value is MISSING" in worksheet and TWELVE_DIGITS.search(worksheet) is None
+    assert "Decision D-1" in worksheet and "NOT TAKEN" in worksheet
+    checklist = (operations / "production-owner-checklist.md").read_text(encoding="utf-8")
+    assert "production-owner-input-worksheet.md" in checklist
+    assert checklist.count("| 3.10 |") == 1 and "| 3.11 |" in checklist

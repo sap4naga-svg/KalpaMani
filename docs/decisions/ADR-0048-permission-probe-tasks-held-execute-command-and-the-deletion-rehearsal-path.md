@@ -33,7 +33,7 @@ true then, and not rewritten. **Acceptance authorized no probe launch, no permis
 task, no cleanup, no run, no image, no Terraform plan or apply and no IAM change, and granted no
 permission**; every tool still refuses by default, every executable subcell stays UNEXECUTED, and the
 two R-8 subcells stay BLOCKED until the separate decision ADR-0049 D-1 presents is taken (ADR-0049 accepted
-on the merge of PR #108; D-1 made concrete for the owner by proposed ADR-0050, and still not taken).
+on the merge of PR #108; D-1 made concrete for the owner by ADR-0050, accepted on the merge of PR #109, and still not taken).
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no `RunTask`,
 no `ExecuteCommand`, no container image built or pulled, no registry contacted, no credential

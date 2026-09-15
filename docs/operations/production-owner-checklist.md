@@ -1,8 +1,10 @@
 # Production owner checklist — one prioritized list, from the contracts
 
-*Prepared in the deletion-rehearsal readiness cycle (proposed ADR-0050); a companion to
+*Prepared in the deletion-rehearsal readiness cycle (ADR-0050, accepted on the merge of PR #109; D-1 not taken); a companion to
 [`production-owner-inputs.md`](production-owner-inputs.md) (§A–§D, which stays the full register) and
-[`production-readiness.md`](production-readiness.md) (the sequence S0–S10). Every item below is derived
+[`production-readiness.md`](production-readiness.md) (the sequence S0–S10); the per-item source, validation and
+private-placement detail is in [`production-owner-input-worksheet.md`](production-owner-input-worksheet.md).
+Every item below is derived
 from a tracked contract or declaration; none was read from a private input, and no value is invented.
 **Every private value is MISSING.** "Now" means the owner can supply it before any runtime step; "after
 S-n" means it exists only once that step has run, and cannot be supplied earlier.*
@@ -21,12 +23,12 @@ S-n" means it exists only once that step has run, and cannot be supplied earlier
 
 | # | Item | Purpose | Format | Source | Depends on | Accepted value? |
 |---|---|---|---|---|---|---|
-| 1.1 | the **release commit** on `main` (owner-inputs decision "D-1 release commit") | every image is built from the exact Git tree of one commit | 40 lowercase hex | `scripts/production_build_context.py`; ADR-0044 §3 | this pull request merged | MISSING — **now** |
+| 1.1 | the **release commit** on `main` (owner-inputs decision "D-1 release commit") | every image is built from the exact Git tree of one commit | 40 lowercase hex | `scripts/production_build_context.py`; ADR-0044 §3 | a reviewed commit on `main` (ADR-0050's merge `5f5035fe…`, or a later one) | MISSING — **now** |
 | 1.2 | the **production Sharadar secret's name** | the compiled acquisition configuration (`secret_identifier`) | a Secrets Manager name in the documented grammar; never an ARN, never the value | `compiled.py`; ADR-0044 §2 | the owner creates the secret (this repository creates none) | MISSING — **now** |
-| 1.3 | the **provider origin address set** | the compiled acquisition configuration (`origin_addresses`) and the security-group allowlist; kept equal | IPv4 literals / CIDR blocks; never `0.0.0.0/0` | `task_clients.compiled_origin_addresses`; `production_variables.tf` `production_provider_origin_cidrs` | resolved by the owner before each run window | MISSING — **now** (refreshed per window) |
+| 1.3 | the **provider origin address set** | the compiled acquisition configuration (`origin_addresses`) and the security-group allowlist; kept equal | IPv4 literals in the compiled configuration (`compiled_origin_addresses`); the equal set as IPv4 CIDR blocks in `terraform.tfvars`; never `0.0.0.0/0` | `task_clients.compiled_origin_addresses`; `production_variables.tf` `production_provider_origin_cidrs` | resolved by the owner before each run window | MISSING — **now** (refreshed per window) |
 | 1.4 | the **build configuration** document (`accepted_schemas` per Route A or B) | the compiled build configuration | `BuildConfiguration.document()`; example `docs/operations/examples/production/build-inputs*.synthetic.json` | ADR-0040 / ADR-0042; owner-inputs D-3, D-4, D-5, D-11 | the rule parameters, sessions, calendar source and the schema-digest route decided in writing | MISSING — decisions **now**; Route A digests only from the private report (owner-held) |
 | 1.5 | `BASE_IMAGE_DIGEST` — the linux/amd64 manifest digest of `python:3.11-slim` | the Dockerfile's required build argument | `sha256:<64 hex>` of the platform image, never the index | ADR-0044 §6; the build record | — | MISSING — **now** |
-| 1.6 | the **rehearsal image** decision (proposed ADR-0050 §2.1 item 1) | whether a `deletion_rehearsal` image is prepared beside the actor images | a written yes/no; the image's only entry is `kalpamani-deletion-rehearsal` | ADR-0050 §2; `production_deletion_rehearsal.tf` | **Decision D-1 (ADR-0049 §3.8 / ADR-0050 §2.11) accepted in writing** | MISSING — D-1 **not taken** |
+| 1.6 | the **rehearsal image** decision (ADR-0050 §2.1 item 1) | whether a `deletion_rehearsal` image is prepared beside the actor images | a written yes/no; the image's only entry is `kalpamani-deletion-rehearsal` | ADR-0050 §2; `production_deletion_rehearsal.tf` | **Decision D-1 (ADR-0049 §3.8 / ADR-0050 §2.11) accepted in writing** | MISSING — D-1 **not taken** |
 
 ## 2. Before publication or infrastructure change (S3–S6)
 
@@ -59,7 +61,7 @@ S-n" means it exists only once that step has run, and cannot be supplied earlier
 | 3.8 | per R-8 subcell: one **rehearsal statement** (`--prepare-rehearsal`, its printed digest) and one **authorization** naming it; `R8-GET` first, `R8-LIST-AND-DELETE` only after `R8-GET` is recorded PASS | `--rehearse-deletion`; consumed durably before any mutation | `kalpamani-deletion-rehearsal-statement/v1`; the same authorization contract | ADR-0050 §3.5; `production_deletion_rehearsal_tool.py` | **D-1 accepted (2.9) and `REHEARSAL_PATH_OPEN` set in a merged pull request**; 2.10; 3.7 | **after 2.9 and 3.7** |
 | 3.9 | per rehearsal launch: the **receipt line** (hand-read from `production-deletion-rehearsal/deletion-rehearsal/<task id>`, or collected under the rehearsal launcher) | `--complete-rehearsal --receipt-lines` / `--collect-rehearsal-receipt` | `kalpamani-deletion-rehearsal-receipt/v1` on the shared prefix | ADR-0050 §3.2; the collector | a rehearsal launch record with an observed exit | **after each rehearsal launch** |
 | 3.10 | per interrupted rehearsal launch (a reservation beside the ledger with no resolution): the **offline recovery** (`--recover-rehearsal-launch <subcell>`), then the control principal's verified cleanup that settles it | every launch is refused (exit 21) while a reservation is unsettled, whatever the records directory or authorization | no input — the reservation retains the specification and attribution | ADR-0050 §8.1 | the interrupted launch | **only after an interruption** |
-| 3.10 | the **R-2 reachability evidence** (`kalpamani-reachability-evidence/v1`, owner-inputs D-16), if a verdict other than `INCONCLUSIVE` is wanted | `--isolation-verdict` | the contract's fields, transcribed from one analysis | ADR-0045 §3 | 2.12; the build bootstrap cell PASSED | **after S9 (build)**, optional |
+| 3.11 | the **R-2 reachability evidence** (`kalpamani-reachability-evidence/v1`, owner-inputs D-16), if a verdict other than `INCONCLUSIVE` is wanted | `--isolation-verdict` | the contract's fields, transcribed from one analysis | ADR-0045 §3 | 2.12; the build bootstrap cell PASSED | **after S9 (build)**, optional |
 
 ## 4. Before the first production acquisition and build (S10)
 
@@ -75,11 +77,11 @@ S-n" means it exists only once that step has run, and cannot be supplied earlier
 
 - **Decided in writing and in force**: D-10 (ADR-0045), the reading of R-4's cleanup clause (ADR-0047 §6.3),
   the collector (ADR-0049), the permission-probe mechanisms (ADR-0048).
-- **Presented and not taken**: **Decision D-1** (ADR-0049 §3.8, made concrete by proposed ADR-0050 §2).
+- **Presented and not taken**: **Decision D-1** (ADR-0049 §3.8, made concrete by ADR-0050 §2 — accepted on the merge of PR #109, which took the decision no more than its text does).
 - **MISSING, suppliable now**: 1.1, 1.2, 1.3, 1.5, 2.1, 2.3, 2.8, 3.1 and the decisions of 1.4, 2.4, 2.12,
   3.6, 4.1.
 - **Obtainable only after a runtime step**: 2.2 (S3), 2.5 (S5), 2.6 (S4), 2.7 (S6), 2.10 (the rehearsal
-  apply), 3.2–3.5, 3.7–3.10, 4.2–4.5 — each after the step its row names.
+  apply), 3.2–3.5, 3.7–3.11, 4.2–4.5 — each after the step its row names.
 - **Recorded and not granted**: `logs:GetLogEvents` for the actor launcher sets (ADR-0049 §2.6), the
   control principal's ECS actions (ADR-0047 §5), the Reachability Analyzer delta (ADR-0045 §3), and —
   declared inert behind D-1 — every rehearsal permission (ADR-0050 §2.2).

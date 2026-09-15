@@ -1,5 +1,5 @@
 """The permission tool's rehearsal modes end to end, with the path monkeypatched OPEN for
-the test and nothing else (ADR-0049 s.3; proposed ADR-0050): prepare, authorize, launch
+the test and nothing else (ADR-0049 s.3; ADR-0050): prepare, authorize, launch
 over fakes, collect the receipt from a fake stream, complete, clean up, read. Every refusal
 the tool makes before a client exists is exercised the same way. The tracked constant stays
 False; only this process's copy is patched, and only inside these tests."""

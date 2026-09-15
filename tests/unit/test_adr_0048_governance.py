@@ -54,9 +54,10 @@ def test_the_adr_exists_is_accepted_and_names_its_gates() -> None:
         assert "ADR-0048 ACCEPTED / IN FORCE" in text
         assert "PR #107 merged 2026-09-15T10:22:22Z" in text
         assert "ADR-0048 PROPOSED, NOT IN FORCE" not in text
-        # ADR-0049 has since been accepted (PR #108) and ADR-0050 is the open proposal.
+        # ADR-0049 (PR #108) and ADR-0050 (PR #109) have since been accepted; D-1 stays not taken.
         assert "ADR-0049 ACCEPTED / IN FORCE" in text
-        assert "ADR-0050 PROPOSED, NOT IN FORCE" in text
+        assert "ADR-0050 ACCEPTED / IN FORCE" in text
+        assert "ADR-0050 PROPOSED, NOT IN FORCE" not in text
     assert "Nothing was run to produce this decision" in ADR_PLAIN
     assert "Mocked results are not AWS verification" in ADR_PLAIN
     assert "G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE" in ADR_PLAIN
@@ -188,7 +189,7 @@ def test_the_deletion_path_is_designed_and_not_opened() -> None:
         "ADR-0007",
     ):
         assert token in ADR_PLAIN, token
-    # Nothing of it exists as an actor; the declaration proposed ADR-0050 later added lives in
+    # Nothing of it exists as an actor; the declaration ADR-0050 later added lives in
     # exactly one file and is inert behind a variable that is false by default -- every
     # accepted production declaration is unchanged.
     assert not hasattr(ProductionActor, "DELETION")

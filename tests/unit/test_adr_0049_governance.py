@@ -90,7 +90,7 @@ def test_the_permission_is_recorded_and_not_granted() -> None:
     assert "KalpaManiDeletionRehearse" not in policies
     compute = (INFRA / "production_compute.tf").read_text(encoding="utf-8")
     assert dr.REHEARSAL_FAMILY not in compute
-    # Proposed ADR-0050 declares them in their own file, inert behind a variable that is
+    # ADR-0050 declares them in their own file, inert behind a variable that is
     # false by default; the actor launchers' logs delta stays undeclared.
     rehearsal = (INFRA / "production_deletion_rehearsal.tf").read_text(encoding="utf-8")
     assert "KalpaManiDeletionRehearse" in rehearsal and "logs:GetLogEvents" in rehearsal
