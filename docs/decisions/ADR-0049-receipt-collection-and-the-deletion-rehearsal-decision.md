@@ -154,8 +154,19 @@ unresolved contradiction must be acknowledged); the tool then writes one **dispo
 digest, the digest of the receipt line completed from, `HAND_READ_COMPLETION`, the instant) beside
 the untouched contradiction record, and only a disposed contradiction admits the launch again. No
 rule chooses between two lines, no collection resolves a contradiction, and a disposition naming no
-recorded contradiction refuses (`DISPOSITION_UNBOUND`). Unverifiable or mutually contradictory
-`COLLECTED` records likewise name a conflict no tool picks between. The
+recorded contradiction refuses (`DISPOSITION_UNBOUND`). **The disposition's `receipt_line_sha256`
+constrains recovery** (§6, correction 3): once a disposition names receipt A, the launch is bound to A
+in one shared status rule (`contradiction_status`, applied by the admission rule and by both hand-read
+completions before any log read or completion mutation) — a hand-read completion offering another
+line, even one decoding to the same document, is refused (`refused_receipt_binding`, exit 19 / 30); a
+kept `COLLECTED` line other than A is `RECEIPT_SUBSTITUTED`; two dispositions naming different
+receipts are `CONFLICTING_DISPOSITIONS` (a record refusal); and a collection reads nothing while a
+disposition binds a launch whose completion is not whole. An **interrupted resolution** (the
+disposition written, the completion not whole) is therefore repeatable only with A — with or without
+the acknowledgement, writing no second disposition — and a **completed resolution** is whole; the two
+are told apart by the completion's own evidence (the permission record, the receipt evidence, the
+ledger row), never by the disposition alone. Unverifiable or mutually contradictory `COLLECTED`
+records likewise name a conflict no tool picks between. The
 logs client is built **only inside the collection flag** (`--i-am-the-owner-authorizing-receipt-
 collection`, with `--complete-row --collect-receipt` in the launch tool and `--collect-receipt
 <subcell>` in the permission tool), after the record, its reservation, the registered destination and
@@ -337,3 +348,15 @@ moves.
    untouched contradiction record — and no automatic rule resolves anything. Exhausted and rejected
    attempts stay retryable as designed; the launch tool also refuses a collection for a row that is
    no longer provisional before any read.
+5. **Correction 3 — the disposition did not constrain recovery.** A hand-read completion with
+   receipt A and the acknowledgement, interrupted right after the disposition was written, could be
+   retried with a different otherwise-valid receipt B — through hand completion and through a
+   collection or cache reuse of B — the disposition naming A ignored. Now `contradiction_status`
+   carries the one receipt every disposition of the launch bound it to, and one shared rule refuses
+   before any read or mutation: another offered line (`refused_receipt_binding`), another kept line
+   (`RECEIPT_SUBSTITUTED`), dispositions naming different receipts (`CONFLICTING_DISPOSITIONS`), and
+   any collection while the bound completion is not whole. Recovery with A is repeatable at either
+   interruption boundary (inside the disposition write: nothing persisted, the acknowledged completion
+   runs again; after it: A finishes the completion, with or without the acknowledgement, writing no
+   second disposition); the original contradiction record stays byte-identical; no write was moved and
+   no new interruption window introduced.

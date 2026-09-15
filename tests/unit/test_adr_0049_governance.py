@@ -62,6 +62,9 @@ def test_the_collector_bounds_and_contract_match_the_text() -> None:
     assert "--acknowledge-collection-contradiction" in ADR_TEXT
     for disposition in rc.ContradictionDisposition:
         assert disposition.value in ADR_TEXT, disposition
+    # Correction 3: the disposition's receipt binding constrains recovery.
+    assert "constrains recovery" in ADR_PLAIN and "refused_receipt_binding" in ADR_TEXT
+    assert rc.contradiction_status.__name__ in ADR_TEXT
     assert rc.LOGS_TOTAL_MAX_ATTEMPTS == 1 and "total_max_attempts = 1" in ADR_PLAIN
     assert rc.COLLECTION_CONTRACT_ID == "kalpamani-receipt-collection/v1"
     assert rc.COLLECTION_CONTRACT_ID in ADR_TEXT

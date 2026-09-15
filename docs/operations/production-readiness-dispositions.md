@@ -328,8 +328,9 @@ defect and byte count, never text), keeps the verified line and no other event i
 record, admits recorded collections in both tools through one rule (bound to the launch and the
 destination; contradictions refuse whatever the filename order; a recorded `CONTRADICTORY_RECEIPTS` is
 never superseded by a later collection or a cache hit and is disposed only by a hand-read completion
-that acknowledges it by digest, recorded beside it; rejected and exhausted attempts never block the
-next read), and hands the line to exactly the hand-read completion path (`--complete-row --collect-receipt`, `--collect-receipt
+that acknowledges it by digest, recorded beside it, after which only that receipt completes the launch;
+rejected and exhausted attempts never block the next read), and hands the line to exactly the hand-read
+completion path (`--complete-row --collect-receipt`, `--collect-receipt
 <subcell>`; the receipt verifier, the reservation binding, the observed-exit rule, the receipt evidence
 and the ledger row unchanged), behind its own flag and the launcher identity. Pagination, repeated
 tokens, delayed delivery, bounded polling, missing / malformed / duplicate / contradictory receipts,
@@ -344,7 +345,13 @@ reproduced on the reviewed head through the real collector and both public paths
 controls beside each regression. Correction 2 (ADR-0049 §6.4): a recorded contradiction silently
 superseded by a later single-line collection or by a `COLLECTED` record beside it, in either order —
 reproduced through both public paths and closed by the `CONTRADICTION_UNRESOLVED` refusal and the
-explicit, evidence-bound disposition, with retry and repeatable-completion controls. `logs:GetLogEvents` for the
+explicit, evidence-bound disposition, with retry and repeatable-completion controls. Correction 3
+(ADR-0049 §6.5): a disposition naming receipt A, interrupted before the completion finished, did not
+constrain the retry — receipt B completed by hand and through collection or cache reuse; closed by one
+shared status rule that binds the launch to the disposition's receipt before any read or mutation
+(`refused_receipt_binding`, `RECEIPT_SUBSTITUTED`, `CONFLICTING_DISPOSITIONS`), with both interruption
+boundaries, same-receipt recovery, different-receipt refusal and ordinary-completion controls through
+both tools. `logs:GetLogEvents` for the
 launcher sets is **recorded and not granted**. The **deletion rehearsal** ADR-0048 §4 designed is
 implemented offline over the actual deletion-role execution model — target, statement, consumed
 authorization, sequence, engine, record, reading — and **CLOSED**: `REHEARSAL_PATH_OPEN` false, both
