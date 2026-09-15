@@ -52,6 +52,9 @@ from kalpamani.data.production.sharadar.permission_cells import (
 )
 from kalpamani.data.production.sharadar.permission_probe import SubcellOutcome
 from kalpamani.data.production.sharadar.r3_verification import Observation, ObservedClass
+from kalpamani.data.production.sharadar.receipt_collector import (
+    REHEARSAL_CONTAINER as _REHEARSAL_CONTAINER,
+)
 
 #: The governance decision that would open the path. ``False`` until that decision is
 #: accepted; flipping it is that decision's implementation and nothing else's.
@@ -61,9 +64,12 @@ REHEARSAL_DECISION: Final = "ADR-0049 D-1"
 #: declaration, when made, is held to these exact values; none exists today.
 REHEARSAL_FAMILY: Final = "kalpamani-deletion-rehearsal"
 REHEARSAL_ENTRY: Final = "kalpamani-deletion-rehearsal"
-REHEARSAL_CONTAINER: Final = "deletion-rehearsal"
+REHEARSAL_CONTAINER: Final = _REHEARSAL_CONTAINER
 REHEARSAL_STREAM_PREFIX: Final = "production-deletion-rehearsal"
 REHEARSAL_LAUNCHER_PERMISSION_SET: Final = "KalpaManiDeletionRehearse"
+#: The one named profile the rehearsal launcher is invoked under (routing input, not
+#: proof: the identity is proven by ``sts:GetCallerIdentity`` against the binding).
+REHEARSAL_LAUNCHER_PROFILE: Final = "kalpamani-deletion-rehearse"
 REHEARSAL_PARAMETER_PREFIX: Final = "/kalpamani/production/deletion/"
 REHEARSAL_BINDING_PARAMETER: Final = REHEARSAL_PARAMETER_PREFIX + "runtime-binding"
 REHEARSAL_INPUT_PARAMETER: Final = REHEARSAL_PARAMETER_PREFIX + "input"
@@ -538,6 +544,7 @@ __all__ = [
     "REHEARSAL_FAMILY",
     "REHEARSAL_INPUT_PARAMETER",
     "REHEARSAL_LAUNCHER_PERMISSION_SET",
+    "REHEARSAL_LAUNCHER_PROFILE",
     "REHEARSAL_OPERATION_BUDGET",
     "REHEARSAL_PARAMETER_PREFIX",
     "REHEARSAL_PATH_OPEN",

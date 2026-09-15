@@ -445,7 +445,7 @@ class TestCollection:
             rc.collect_receipt(
                 destination=DESTINATION,
                 task_id=TASK_ID,
-                expectation=None,  # type: ignore[arg-type]
+                expectation=None,
                 client=_Pages([_page(token="t")]),
                 now=FakeClock().now,
                 monotonic=FakeClock().monotonic,

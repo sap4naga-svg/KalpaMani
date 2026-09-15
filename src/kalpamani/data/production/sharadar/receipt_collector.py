@@ -117,6 +117,13 @@ CONTAINER_OF_ENTRY: Final[dict[TaskEntry, str]] = {
 STREAM_PREFIX_OF_ENTRY: Final[dict[TaskEntry, str]] = {
     entry: f"production-{container}" for entry, container in CONTAINER_OF_ENTRY.items()
 }
+#: The deletion rehearsal task's container (ADR-0049 s.3.2): not a production entry, and not
+#: an actor's; its destination is registered in the rehearsal launch inputs and held to
+#: this name by the same rule.
+REHEARSAL_CONTAINER: Final = "deletion-rehearsal"
+KNOWN_CONTAINERS: Final[frozenset[str]] = frozenset(CONTAINER_OF_ENTRY.values()) | {
+    REHEARSAL_CONTAINER
+}
 _TASK_ID_RE: Final = re.compile(r"[0-9a-f]{32}")
 
 COLLECT_MAX_PAGES: Final = 16
@@ -168,7 +175,7 @@ class LogDestination:
         if (
             type(self.log_group) is not str
             or LOG_GROUP_RE.fullmatch(self.log_group) is None
-            or self.container not in CONTAINER_OF_ENTRY.values()
+            or self.container not in KNOWN_CONTAINERS
             or self.stream_prefix != f"production-{self.container}"
         ):
             raise CollectorError(CollectorDefect.LOG_GROUP_MALFORMED)
@@ -351,11 +358,30 @@ class CollectedReceipt:
         return f"CollectedReceipt(outcome={self.outcome.value!r}, requests={self.requests})"
 
 
+ReceiptVerifier = Callable[[str], None]
+"""Decode one receipt line and verify it against what the launch already established;
+raise ``ReceiptError`` otherwise. The task receipt's verifier is the default; the deletion
+rehearsal supplies its own over the same collector and the same admission rule."""
+
+
+def task_receipt_verifier(expectation: ReceiptExpectation) -> ReceiptVerifier:
+    """The verifier for a production, verification or probe launch: the accepted task
+    receipt contract against the launch record's expectation."""
+    if type(expectation) is not ReceiptExpectation:
+        raise TypeError("expectation must be an exact ReceiptExpectation")
+
+    def verify(line: str) -> None:
+        verify_receipt(decode_receipt_line(line), expectation=expectation)
+
+    return verify
+
+
 def collect_receipt(
     *,
     destination: LogDestination,
     task_id: str,
-    expectation: ReceiptExpectation,
+    expectation: ReceiptExpectation | None = None,
+    verify: ReceiptVerifier | None = None,
     client: LogsClient,
     now: Callable[[], datetime],
     monotonic: Callable[[], float],
@@ -380,8 +406,9 @@ def collect_receipt(
     ends the scan before the end was observed establishes nothing (``SCAN_INCOMPLETE``
     when a line was seen, exhaustion otherwise).
     """
-    if type(expectation) is not ReceiptExpectation:
-        raise TypeError("expectation must be an exact ReceiptExpectation")
+    if (expectation is None) == (verify is None):
+        raise TypeError("exactly one of expectation and verify is required")
+    verifier = verify if verify is not None else task_receipt_verifier(expectation)  # type: ignore[arg-type]
     stream = log_stream_name(destination, task_id)
     started_at = now()
     started = monotonic()
@@ -483,7 +510,7 @@ def collect_receipt(
                 # The window is closed: the re-read after the poll delivered nothing new.
                 line = next(iter(seen))
                 try:
-                    verify_receipt(decode_receipt_line(line), expectation=expectation)
+                    verifier(line)
                 except ReceiptError as error:
                     return finish(
                         CollectionOutcome.RECEIPT_REJECTED,
@@ -930,7 +957,8 @@ def admit_collection_records(
     launch_record_sha256: str,
     destination: LogDestination,
     task_id: str,
-    expectation: ReceiptExpectation,
+    expectation: ReceiptExpectation | None = None,
+    verify: ReceiptVerifier | None = None,
 ) -> CollectionAdmission:
     """The one cache-admission rule both tools apply over every ``receipt-collection`` and
     ``collection-disposition`` file.
@@ -951,6 +979,9 @@ def admit_collection_records(
     the one line every ``COLLECTED`` record agrees on. Rejected, exhausted and incomplete
     attempts are history that never blocks a new collection.
     """
+    if (expectation is None) == (verify is None):
+        raise TypeError("exactly one of expectation and verify is required")
+    verifier = verify if verify is not None else task_receipt_verifier(expectation)  # type: ignore[arg-type]
     records, dispositions = _read_records(
         payloads,
         identity=identity,
@@ -966,7 +997,7 @@ def admit_collection_records(
         if record.receipt_line is None:
             continue
         try:
-            verify_receipt(decode_receipt_line(record.receipt_line), expectation=expectation)
+            verifier(record.receipt_line)
         except ReceiptError:
             raise _refuse(CollectionRecordDefect.RECEIPT_UNVERIFIABLE) from None
         kept.setdefault(record.receipt_line, None)
@@ -1047,10 +1078,12 @@ __all__ = [
     "COLLECT_POLL_SECONDS",
     "CONTAINER_OF_ENTRY",
     "DISPOSITION_CONTRACT_ID",
+    "KNOWN_CONTAINERS",
     "LOGS_RETRY_MODE",
     "LOGS_TOTAL_MAX_ATTEMPTS",
     "LOG_GROUP_RE",
     "MAX_COLLECTION_RECORD_BYTES",
+    "REHEARSAL_CONTAINER",
     "STREAM_PREFIX_OF_ENTRY",
     "CollectedReceipt",
     "CollectionAdmission",
@@ -1066,6 +1099,7 @@ __all__ = [
     "LogDestination",
     "LogPage",
     "LogsClient",
+    "ReceiptVerifier",
     "SdkLogsClient",
     "admit_collection_records",
     "collect_receipt",
@@ -1078,4 +1112,5 @@ __all__ = [
     "parse_collection_disposition",
     "parse_collection_record",
     "parse_log_destination",
+    "task_receipt_verifier",
 ]
