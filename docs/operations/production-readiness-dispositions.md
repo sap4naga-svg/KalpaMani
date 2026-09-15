@@ -276,7 +276,7 @@ request and implied none of this: no analyzer permission, no runtime verificatio
 **Disposition: implemented offline, accepted (PR #107 merged 2026-09-15T10:22:22Z, merge commit
 `c0566574c41bc31b7144fafe919078a213982143`); while the pull request was open it was proposed, which is
 how the paragraphs below read and are not rewritten; the deletion rehearsal path designed and not opened —
-since implemented offline and CLOSED by proposed ADR-0049 (F-13).**
+since implemented offline and CLOSED by ADR-0049, accepted on the merge of PR #108 (F-13); D-1 made concrete by proposed ADR-0050 (F-14).**
 The 32 task-role subcells are executed by a **permission-probe task** of the actor's own family: the
 workstation prepares and authorizes the subcell exactly as before, consumes the authorization, writes
 the attempt, then launches the probe through the accepted launch sequence with the bound statement as
@@ -314,9 +314,12 @@ required gates on the corrected head are recorded in the export; **synthetic tes
 verification**, nothing has been run against AWS, the deletion path stays BLOCKED, and every deferred
 permission is unchanged.
 
-## F-13 — the receipt collector and the deletion rehearsal, proposed ADR-0049
+## F-13 — the receipt collector and the deletion rehearsal, ADR-0049 (accepted on the merge of PR #108)
 
-**Disposition: implemented offline, proposed; the rehearsal path CLOSED and its decision presented.**
+**Disposition: implemented offline, accepted (PR #108 merged 2026-09-15T13:53:41Z, merge commit
+`82cae1ebfcc99dbbc53f67e534e4d78ffb914d4a`, approved head `9625e241db01b2996fbf9f63814ba3a916a3def7`); while the pull request was open it was
+proposed, which is how the paragraphs below read and are not rewritten; the rehearsal path CLOSED and its
+decision presented — decided in neither direction by the merge, and since made concrete by proposed ADR-0050 (F-14).**
 The **receipt collector** reads a launch's receipt line from the stream derived from the bound launch
 record and the registered `log_destination` block of the task-definition evidence — never from a
 caller — under stated bounds (40 requests, 20,000 events, 300 s, each checked before a request; 16-page
@@ -413,3 +416,63 @@ Focused only, as the changes are documentation and one synthetic example: the do
 provider-row guard (`tests/unit/test_sharadar_qualification_boundary.py`), the ADR-0043/0044 governance
 tests, `ruff check`, `ruff format --check` and `mypy` on the touched test. The full suite and the images
 were **not** rerun: no source under `src/` or `scripts/` changed.
+
+## F-14 — the deletion rehearsal made concrete, integrated offline and declared inert, proposed ADR-0050
+
+**Disposition: implemented offline, proposed; Decision D-1 made concrete and NOT TAKEN; the declaration
+inert; the path CLOSED.** Proposed ADR-0050 states D-1 as the exact consequence of what it merges: the
+resources and permissions (a rehearsal task definition whose task role is the actual deletion role; the
+role's delta of three exact parameter reads and a scoped decrypt with **no S3 change**; a runtime-binding
+parameter; the `KalpaManiDeletionRehearse` launcher with one exact `RunTask`, `PassRole` of exactly the
+deletion and execution roles, create-only input and release parameters, `GetLogEvents` on exactly the
+rehearsal streams and **no S3 action**; two gated key-policy statements; one assignment at stage b), the
+principals (a human launcher passes; the deletion role deletes as the task; no human ever assumes it), the
+target restriction (the statement, the input's recomputed digest, the task's bucket check, the engine's
+exact operations — not IAM), the limits, every interruption's recorded outcome with no retry, the control
+principal's cleanup as the only confirmation, the residual risks and the separate runtime authorizations
+— verbatim for the owner's signature. The **rehearsal task**, the **launcher and completion**, the
+**collector's reuse** and the **owner tool's four modes** exist as offline code exercised only on fakes,
+every mode refused with exit 27 while `REHEARSAL_PATH_OPEN` is `False` (it is); the **declaration** is
+inert behind `deletion_rehearsal_open` (false by default), stage a/b and an image digest, validated only
+in an external copy under the mock provider. The **owner checklist** lists every value, all MISSING.
+
+**Validation performed for the readiness cycle.** The full suite, `ruff check`, `ruff format --check`,
+`mypy` and the docs audit on the final head; the new suites through the real parsers, stores, tool and
+derivation on synthetic files and injected fakes — valid controls; wrong role, target, prerequisite,
+authorization and receipt; interrupted launch, operation, receipt collection and completion; ambiguous
+deletion and unsuccessful cleanup; conflicting and replayed evidence; the closed path refusing before any
+client; the declaration's defaults preserving the closed state — and Terraform `fmt`, `init
+-backend=false`, `validate` and `test` (20 runs) in a task-owned external copy. **Synthetic tests do not
+establish AWS verification**; no rehearsal, deletion, launch, log read, image, plan, apply or AWS call
+occurred; no permission was granted; D-1 stays the owner's.
+
+**Correction 1 (PR #109 review; ADR-0050 §8).** Three findings were reproduced through the public tool on
+synthetic files and fakes before any change, and corrected in the same open pull request, each with a
+regression control (`test_production_deletion_rehearsal_correction_1.py`): **(1)** the reservation and
+the unresolved-launch resolution are anchored beside the canonical ledger, the reservation retaining the
+whole compiled specification, so an ambiguous or interrupted launch blocks every launch — across records
+directories and new authorizations — until `--recover-rehearsal-launch` records its attribution offline
+and the control principal's verified cleanup settles it under the accepted rule (a listing that finds
+nothing settles nothing; `RunTask` is never retried); **(2)** one evidence-binding rule
+(`bind_rehearsal_result`) admits a completion and an R8 prerequisite only when the consumption, the
+reservation, the registered specification, the launch, the retained verified receipt and the result form
+one chain for the exact deletion target — missing, substituted or conflicting evidence qualifies
+nothing, and completion is repeatable from the retained receipt evidence; **(3)** the hand-read completion
+applies ADR-0049's contradiction and disposition rules — a recorded contradiction needs the
+acknowledgement, the disposition binds the receipt, and the binding survives an interruption. The
+after-correction reproduction reports every check NOT REPRODUCED; the ADR stays PROPOSED, D-1 not taken,
+the path CLOSED, the declaration inert, both R-8 subcells BLOCKED.
+
+**Correction 2 (PR #109 review; ADR-0050 §8.4).** Reproduced through the public tool on both the
+`MISPLACED` and the `STALE_RELEASE` paths: a successful `StopTask` acknowledgement, with no observation
+afterwards, resolved the reservation `STOPPED` and the next launch from another records directory
+consumed an authorization and issued `RunTask`. Corrected: after the acknowledged stop the launcher
+observes the exact task within the one observation bound; only an observed `STOPPED` settles; a task
+still running at the bound, or a failed observation, is `STOP_ACKNOWLEDGED` — unsettled, the task
+identity kept, every launch refused before consumption across records directories — until the control
+principal's verified cleanup describes that task `STOPPED` (a task still running there is residue and the
+block stands); a refused stop stays `STARTED_NOT_TERMINAL`. Controls in
+`test_production_deletion_rehearsal_correction_2.py` (acknowledged-but-running, failed and exhausted
+observation, refused stop, confirmed termination, the shared bound); the existing premature-settlement
+assertions now require the observed termination. ADR still PROPOSED; D-1 not taken; path CLOSED;
+declaration inert; both R-8 subcells BLOCKED.

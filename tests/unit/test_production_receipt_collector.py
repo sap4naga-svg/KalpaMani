@@ -1,4 +1,4 @@
-"""The bounded receipt collector (proposed ADR-0049 s.2): the destination derived from the
+"""The bounded receipt collector (ADR-0049 s.2): the destination derived from the
 bound launch and the registered evidence, the bounded read with every documented answer
 -- a complete scan and only a complete scan establishing one line, every limit held at
 the request boundary, the candidate verified before it is kept -- the closed collection
@@ -445,7 +445,7 @@ class TestCollection:
             rc.collect_receipt(
                 destination=DESTINATION,
                 task_id=TASK_ID,
-                expectation=None,  # type: ignore[arg-type]
+                expectation=None,
                 client=_Pages([_page(token="t")]),
                 now=FakeClock().now,
                 monotonic=FakeClock().monotonic,

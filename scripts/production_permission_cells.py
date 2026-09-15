@@ -92,7 +92,7 @@ from kalpamani.data.qualify.sharadar.runtime_binding import (  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-permission-subcell"
 CLEANUP_FLAG: Final = "--i-am-the-owner-authorizing-permission-cleanup"
-#: One bounded receipt collection from a probe launch's own log stream (proposed ADR-0049
+#: One bounded receipt collection from a probe launch's own log stream (ADR-0049
 #: s.2): a logs read under the actor's launcher profile after that identity is proven.
 COLLECT_FLAG: Final = "--i-am-the-owner-authorizing-receipt-collection"
 #: The consumption namespace beside the ledger (:meth:`LaunchStore.consume`).
@@ -1589,7 +1589,7 @@ def collect_receipt_for_subcell(
     modules: Mapping[str, object],
     seams: dict[str, Any],
 ) -> str:
-    """The probe launch's receipt line from its own stream (proposed ADR-0049 s.2), or refuse.
+    """The probe launch's receipt line from its own stream (ADR-0049 s.2), or refuse.
 
     Exactly one launched, incomplete attempt of the subcell under the current binding; the
     registered probe target's log destination held to the probe entry; the actor's
@@ -2064,6 +2064,14 @@ def settlement_targets(
                     cluster_arn=probe.cluster_arn,
                     known_task_ids=probe.known_task_ids,
                 )
+    # Proposed ADR-0050 (correction 1): every unsettled deletion-rehearsal reservation
+    # anchored beside the ledger -- discovered on its own cluster by its own tag, keyed by
+    # the reservation's digest -- is settled by this same pass. Read from the store's
+    # anchors, so a reservation made from any records directory is settled here.
+    import production_deletion_rehearsal_tool as rehearsal
+
+    for target in rehearsal.rehearsal_tasks_to_settle(admitted.store, evidence.cleanups):
+        tasks[target.attempt_sha256] = target
     return (
         tuple(objects[k] for k in sorted(objects)),
         tuple(tasks[k] for k in sorted(tasks)),
@@ -2302,6 +2310,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--recover-probe-launch")
     parser.add_argument("--collect-receipt")
     parser.add_argument("--rehearse-deletion")
+    parser.add_argument("--prepare-rehearsal")
+    parser.add_argument("--collect-rehearsal-receipt")
+    parser.add_argument("--complete-rehearsal")
+    parser.add_argument("--recover-rehearsal-launch")
+    parser.add_argument("--rehearsal-inputs", type=Path)
     parser.add_argument(COLLECT_FLAG, dest="collection_authorized", action="store_true")
     parser.add_argument("--receipt-lines", type=Path)
     parser.add_argument(
@@ -2317,6 +2330,50 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(AUTHORIZATION_FLAG, dest="authorized", action="store_true")
     parser.add_argument(CLEANUP_FLAG, dest="cleanup_authorized", action="store_true")
     return parser
+
+
+def _seams(
+    *,
+    now: Callable[[], datetime] | None,
+    client_factory: Callable[[str, str], pc.PermissionClient] | None,
+    caller_identity: Callable[[str], object] | None,
+    foundation_gate: Callable[[], str | None] | None,
+    qualification_gate: Callable[[str], str | None] | None,
+    expected_account: Callable[[], str | None] | None,
+    load_environment_binding: Callable[..., Any] | None,
+    read_private: Callable[[str], bytes] | None,
+    root_source: Callable[[], Path] | None,
+    security_of: Callable[[Path], Any] | None,
+    declaration_dir: Path,
+    launch_clients: Any | None,
+    monotonic: Callable[[], float] | None,
+    sleep: Callable[[float], None] | None,
+) -> dict[str, Any]:
+    """The injected seams, each the production one unless a test supplied its own."""
+    import time
+
+    return {
+        "now": (lambda: datetime.now(tz=UTC)) if now is None else now,
+        "client_factory": _client_factory if client_factory is None else client_factory,
+        "caller_identity": _caller_identity if caller_identity is None else caller_identity,
+        "foundation_gate": _foundation_gate if foundation_gate is None else foundation_gate,
+        "qualification_gate": (
+            _qualification_gate if qualification_gate is None else qualification_gate
+        ),
+        "expected_account": _expected_account if expected_account is None else expected_account,
+        "load_environment_binding": (
+            _load_environment_binding
+            if load_environment_binding is None
+            else load_environment_binding
+        ),
+        "read_private": _read_private if read_private is None else read_private,
+        "root_source": root_source,
+        "security_of": security_of,
+        "declaration_dir": declaration_dir,
+        "launch_clients": _launch_clients() if launch_clients is None else launch_clients,
+        "monotonic": time.monotonic if monotonic is None else monotonic,
+        "sleep": time.sleep if sleep is None else sleep,
+    }
 
 
 def main(
@@ -2341,7 +2398,6 @@ def main(
 ) -> int:
     """Plan (default), check a record, execute or complete one subcell, or run the cleanup."""
     import os
-    import time
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     for token in arguments:
@@ -2353,16 +2409,52 @@ def main(
     except SystemExit:
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
-    if parsed.rehearse_deletion is not None:
-        # The deletion rehearsal path (proposed ADR-0049 s.3): implemented offline, closed
-        # until the governance decision opens it. Refused before any path or flag is read.
+    rehearsal_mode = any(
+        m is not None
+        for m in (
+            parsed.rehearse_deletion,
+            parsed.prepare_rehearsal,
+            parsed.collect_rehearsal_receipt,
+            parsed.complete_rehearsal,
+            parsed.recover_rehearsal_launch,
+        )
+    )
+    if rehearsal_mode or parsed.rehearsal_inputs is not None:
+        # The deletion rehearsal path (ADR-0049 s.3; proposed ADR-0050): implemented
+        # offline, CLOSED until the governance decision (D-1) opens it. Refused before any
+        # path or flag is read and before the rehearsal tool is imported.
         from kalpamani.data.production.sharadar.deletion_rehearsal import REHEARSAL_PATH_OPEN
 
         if not REHEARSAL_PATH_OPEN:
             print(SENTENCES["refused_rehearsal_closed"])
             return EXIT_REFUSED_REHEARSAL_CLOSED
-        print(SENTENCES["refused_arguments"])
-        return EXIT_REFUSED_ARGUMENTS
+        if not rehearsal_mode:
+            print(SENTENCES["refused_arguments"])
+            return EXIT_REFUSED_ARGUMENTS
+        import production_deletion_rehearsal_tool as rehearsal
+
+        return rehearsal.run(
+            parsed,
+            env=dict(os.environ) if env is None else dict(env),
+            modules=modules,
+            seams=_seams(
+                now=now,
+                client_factory=client_factory,
+                caller_identity=caller_identity,
+                foundation_gate=foundation_gate,
+                qualification_gate=qualification_gate,
+                expected_account=expected_account,
+                load_environment_binding=load_environment_binding,
+                read_private=read_private,
+                root_source=root_source,
+                security_of=security_of,
+                declaration_dir=declaration_dir,
+                launch_clients=launch_clients,
+                monotonic=monotonic,
+                sleep=sleep,
+            ),
+            cells=sys.modules[__name__],
+        )
     modes = sum(
         (
             parsed.execute_subcell is not None,
@@ -2453,28 +2545,22 @@ def main(
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
     environment = dict(os.environ) if env is None else dict(env)
-    seams: dict[str, Any] = {
-        "now": (lambda: datetime.now(tz=UTC)) if now is None else now,
-        "client_factory": _client_factory if client_factory is None else client_factory,
-        "caller_identity": _caller_identity if caller_identity is None else caller_identity,
-        "foundation_gate": _foundation_gate if foundation_gate is None else foundation_gate,
-        "qualification_gate": (
-            _qualification_gate if qualification_gate is None else qualification_gate
-        ),
-        "expected_account": _expected_account if expected_account is None else expected_account,
-        "load_environment_binding": (
-            _load_environment_binding
-            if load_environment_binding is None
-            else load_environment_binding
-        ),
-        "read_private": _read_private if read_private is None else read_private,
-        "root_source": root_source,
-        "security_of": security_of,
-        "declaration_dir": declaration_dir,
-        "launch_clients": _launch_clients() if launch_clients is None else launch_clients,
-        "monotonic": time.monotonic if monotonic is None else monotonic,
-        "sleep": time.sleep if sleep is None else sleep,
-    }
+    seams = _seams(
+        now=now,
+        client_factory=client_factory,
+        caller_identity=caller_identity,
+        foundation_gate=foundation_gate,
+        qualification_gate=qualification_gate,
+        expected_account=expected_account,
+        load_environment_binding=load_environment_binding,
+        read_private=read_private,
+        root_source=root_source,
+        security_of=security_of,
+        declaration_dir=declaration_dir,
+        launch_clients=launch_clients,
+        monotonic=monotonic,
+        sleep=sleep,
+    )
     try:
         if parsed.prepare_subcell is not None:
             statement = prepare_subcell(

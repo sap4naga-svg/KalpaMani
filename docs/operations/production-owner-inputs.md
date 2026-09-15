@@ -102,9 +102,9 @@ deferred owner decision is resolved by assumption.**
 | the reading of ADR-0036 R-4's *"deleted by the deletion role afterwards"* as cleanup by the control principal | the R-4 / R-5 synthetic objects | ADR-0047 §6.3 — decided by its acceptance |
 | `ec2:CreateNetworkInsightsPath`, `ec2:StartNetworkInsightsAnalysis`, `ec2:DescribeNetworkInsights*`, `ec2:DeleteNetworkInsights*` | the principal that corroborates R-2 | D-14; ADR-0045 §3 |
 | `ecs:DescribeTaskDefinition` | live read-back of the task-definition evidence | V-16; ADR-0045 §6 |
-| `logs:GetLogEvents` for each **launcher permission set** on exactly its own families' streams (`…:log-group:/kalpamani/<name_prefix>/research:log-stream:production-<container>/<container>/*`; no `FilterLogEvents`, no `DescribeLogStreams`) — the receipt collector is implemented offline; until the delta is applied every collection answers `DENIED` after one request and receipts stay hand-read | `--complete-row --collect-receipt`, `--collect-receipt <subcell>` | proposed ADR-0049 §2.6 — recorded, not granted |
-| the registered **`log_destination`** of every applied revision (`log_group`, `stream_prefix`, `container`, transcribed from the applied task definition into the launch-inputs task-definition evidence) — without it the collector refuses | every collection | proposed ADR-0049 §2.1 — a value, MISSING |
-| **Decision D-1 — open the deletion rehearsal path** (the family, launcher and three parameters of ADR-0049 §3.2; the deletion role's `ssm:GetParameter` / `kms:Decrypt` bootstrap delta of §3.3; `REHEARSAL_PATH_OPEN` flipped; R-8 to an executable layer) — reverses ADR-0007's verified inert property | the 2 R-8 subcells — until then `BLOCKED`; the path is implemented offline and CLOSED | proposed ADR-0049 §3.8 — presented, not taken |
+| `logs:GetLogEvents` for each **launcher permission set** on exactly its own families' streams (`…:log-group:/kalpamani/<name_prefix>/research:log-stream:production-<container>/<container>/*`; no `FilterLogEvents`, no `DescribeLogStreams`) — the receipt collector is implemented offline; until the delta is applied every collection answers `DENIED` after one request and receipts stay hand-read | `--complete-row --collect-receipt`, `--collect-receipt <subcell>` | ADR-0049 §2.6 (accepted on the merge of PR #108) — recorded, not granted |
+| the registered **`log_destination`** of every applied revision (`log_group`, `stream_prefix`, `container`, transcribed from the applied task definition into the launch-inputs task-definition evidence) — without it the collector refuses | every collection | ADR-0049 §2.1 — a value, MISSING |
+| **Decision D-1 — open the deletion rehearsal path** (the family, launcher and three parameters of ADR-0049 §3.2; the deletion role's `ssm:GetParameter` / `kms:Decrypt` bootstrap delta of §3.3; `REHEARSAL_PATH_OPEN` flipped; R-8 to an executable layer) — reverses ADR-0007's verified inert property | the 2 R-8 subcells — until then `BLOCKED`; the path is implemented offline and CLOSED, the resources declared **inert** behind `deletion_rehearsal_open` (false) | ADR-0049 §3.8 — presented, not taken; made concrete, with the decision verbatim for signature, by proposed ADR-0050 §2 |
 | the G-14 bucket-policy transition procedure | a changed deployed policy | readiness §4.6, §6 — deferred |
 | stage a and stage b applies, the R-3 session, each launch, each permission subcell and the cleanup | every runtime step | each its own written authorization (readiness §3) |
 
@@ -125,7 +125,11 @@ R-1 cells, and the R-4 … R-9 orchestration, are no longer code gaps: both are 
 proposed by ADR-0047 and accepted on the merge of PR #106. Since the mechanisms cycle (ADR-0048,
 accepted on the merge of PR #107) the task-side permission probe entry and the held `ExecuteCommand`
 check exist as offline code (34 subcells executable, none executed). Since the collection-and-rehearsal
-cycle (proposed ADR-0049) the receipt collector exists as offline code behind its own flag and the
+cycle (ADR-0049, accepted on the merge of PR #108) the receipt collector exists as offline code behind its own flag and the
 un-granted `logs:GetLogEvents` delta, and the deletion role's execution path exists as offline code
-**CLOSED** behind Decision D-1 (D.2, blocking 2 subcells). Still absent: the G-14 transition procedure
+**CLOSED** behind Decision D-1 (D.2, blocking 2 subcells). Since the deletion-rehearsal readiness cycle
+(proposed ADR-0050) the rehearsal task, launcher, completion and the tool's four rehearsal modes exist as
+offline code (refused with exit 27 while the path is closed), the rehearsal resources are declared inert
+behind `deletion_rehearsal_open`, and the one prioritized checklist is
+[`production-owner-checklist.md`](production-owner-checklist.md). Still absent: the G-14 transition procedure
 (deferred).

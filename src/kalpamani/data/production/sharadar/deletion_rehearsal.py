@@ -1,4 +1,5 @@
-"""The deletion rehearsal path: implemented offline, closed (ADR-0048 s.4; proposed ADR-0049 s.3).
+"""The deletion rehearsal path: implemented offline, closed (ADR-0048 s.4; ADR-0049 s.3;
+proposed ADR-0050 makes the decision concrete).
 
 ADR-0048 s.4 designed how the two R-8 subcells the catalogue keeps BLOCKED would be exercised
 **under the actual deletion role**: a rehearsal task family whose task role *is* the deletion
@@ -12,10 +13,12 @@ cleanup into a pass, a failure or an inconclusive result.
 
 **Implementation availability is not authority to execute.** :data:`REHEARSAL_PATH_OPEN` is
 ``False``: opening the path reverses a verified ADR-0007 property (no execution path exists
-for the deletion role) and is the governance decision proposed ADR-0049 D-1 presents to the
-owner. While it is ``False`` the catalogue keeps both subcells BLOCKED, the tools refuse the
-rehearsal, no rehearsal family, entry, launcher or role delta is declared, and the only
-callers of the engine are this repository's tests over fakes. **Nothing here broadens the
+for the deletion role) and is the governance decision ADR-0049 D-1 presents (made concrete
+by proposed ADR-0050) to the owner. While it is ``False`` the catalogue keeps both subcells
+BLOCKED, the tools refuse the rehearsal, the rehearsal family, entry, launcher and role delta
+are declared only INERT (proposed ADR-0050, behind a variable that is false by default), and
+the engine's callers are this repository's tests over fakes and the rehearsal task
+composition, itself reachable only from that closed path. **Nothing here broadens the
 deletion role's existing authority** (its S3 statements are unchanged by this module), and
 nothing here is a general deletion utility: the engine deletes exactly the one key the bound
 R-4 record names, under a consumed authorization naming that key, and refuses any other.
@@ -52,6 +55,9 @@ from kalpamani.data.production.sharadar.permission_cells import (
 )
 from kalpamani.data.production.sharadar.permission_probe import SubcellOutcome
 from kalpamani.data.production.sharadar.r3_verification import Observation, ObservedClass
+from kalpamani.data.production.sharadar.receipt_collector import (
+    REHEARSAL_CONTAINER as _REHEARSAL_CONTAINER,
+)
 
 #: The governance decision that would open the path. ``False`` until that decision is
 #: accepted; flipping it is that decision's implementation and nothing else's.
@@ -61,9 +67,12 @@ REHEARSAL_DECISION: Final = "ADR-0049 D-1"
 #: declaration, when made, is held to these exact values; none exists today.
 REHEARSAL_FAMILY: Final = "kalpamani-deletion-rehearsal"
 REHEARSAL_ENTRY: Final = "kalpamani-deletion-rehearsal"
-REHEARSAL_CONTAINER: Final = "deletion-rehearsal"
+REHEARSAL_CONTAINER: Final = _REHEARSAL_CONTAINER
 REHEARSAL_STREAM_PREFIX: Final = "production-deletion-rehearsal"
 REHEARSAL_LAUNCHER_PERMISSION_SET: Final = "KalpaManiDeletionRehearse"
+#: The one named profile the rehearsal launcher is invoked under (routing input, not
+#: proof: the identity is proven by ``sts:GetCallerIdentity`` against the binding).
+REHEARSAL_LAUNCHER_PROFILE: Final = "kalpamani-deletion-rehearse"
 REHEARSAL_PARAMETER_PREFIX: Final = "/kalpamani/production/deletion/"
 REHEARSAL_BINDING_PARAMETER: Final = REHEARSAL_PARAMETER_PREFIX + "runtime-binding"
 REHEARSAL_INPUT_PARAMETER: Final = REHEARSAL_PARAMETER_PREFIX + "input"
@@ -538,6 +547,7 @@ __all__ = [
     "REHEARSAL_FAMILY",
     "REHEARSAL_INPUT_PARAMETER",
     "REHEARSAL_LAUNCHER_PERMISSION_SET",
+    "REHEARSAL_LAUNCHER_PROFILE",
     "REHEARSAL_OPERATION_BUDGET",
     "REHEARSAL_PARAMETER_PREFIX",
     "REHEARSAL_PATH_OPEN",

@@ -121,6 +121,75 @@ data "aws_iam_policy_document" "production_task_bindings_key" {
     }
   }
 
+  # Proposed ADR-0050 (production_deletion_rehearsal.tf): the deletion role decrypts
+  # exactly the three rehearsal parameters, and the rehearsal launcher generates the
+  # data keys of exactly the rehearsal input and release. Both statements exist only
+  # when the rehearsal is OPEN (D-1 accepted, stage a or b, image pinned); with the
+  # committed defaults the key policy is exactly the accepted one.
+  dynamic "statement" {
+    for_each = local.deletion_rehearsal_open ? [1] : []
+
+    content {
+      sid     = "DeletionRoleDecryptsTheRehearsalParameters"
+      effect  = "Allow"
+      actions = ["kms:Decrypt"]
+
+      principals {
+        type        = "AWS"
+        identifiers = [aws_iam_role.licensed_data_deletion.arn]
+      }
+
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = local.deletion_rehearsal_task_parameter_arns
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = [local.production_ssm_via_service]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.deletion_rehearsal_open ? [1] : []
+
+    content {
+      sid     = "DeletionRehearsalLauncherGeneratesTheInputAndReleaseDataKeys"
+      effect  = "Allow"
+      actions = ["kms:GenerateDataKey"]
+
+      principals {
+        type        = "AWS"
+        identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+      }
+
+      resources = ["*"]
+
+      condition {
+        test     = "ArnLike"
+        variable = "aws:PrincipalArn"
+        values   = ["${local.production_sso_role_path}${local.deletion_rehearsal_set}_*"]
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = local.deletion_rehearsal_launcher_parameter_arns
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = [local.production_ssm_via_service]
+      }
+    }
+  }
+
   statement {
     sid     = "AcquisitionHumanGeneratesTheInputDataKey"
     effect  = "Allow"

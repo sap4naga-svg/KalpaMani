@@ -54,7 +54,9 @@ def test_the_adr_exists_is_accepted_and_names_its_gates() -> None:
         assert "ADR-0048 ACCEPTED / IN FORCE" in text
         assert "PR #107 merged 2026-09-15T10:22:22Z" in text
         assert "ADR-0048 PROPOSED, NOT IN FORCE" not in text
-        assert "ADR-0049 PROPOSED, NOT IN FORCE" in text
+        # ADR-0049 has since been accepted (PR #108) and ADR-0050 is the open proposal.
+        assert "ADR-0049 ACCEPTED / IN FORCE" in text
+        assert "ADR-0050 PROPOSED, NOT IN FORCE" in text
     assert "Nothing was run to produce this decision" in ADR_PLAIN
     assert "Mocked results are not AWS verification" in ADR_PLAIN
     assert "G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE" in ADR_PLAIN
@@ -186,11 +188,19 @@ def test_the_deletion_path_is_designed_and_not_opened() -> None:
         "ADR-0007",
     ):
         assert token in ADR_PLAIN, token
-    # Nothing of it exists in code or declarations.
+    # Nothing of it exists as an actor; the declaration proposed ADR-0050 later added lives in
+    # exactly one file and is inert behind a variable that is false by default -- every
+    # accepted production declaration is unchanged.
     assert not hasattr(ProductionActor, "DELETION")
-    for path in INFRA.glob("*.tf"):
-        text = path.read_text(encoding="utf-8")
-        assert "deletion-rehearsal" not in text and "DeletionRehearse" not in text, path.name
+    naming = sorted(
+        path.name
+        for path in INFRA.glob("*.tf")
+        if "deletion-rehearsal" in path.read_text(encoding="utf-8")
+        or "DeletionRehearse" in path.read_text(encoding="utf-8")
+    )
+    assert naming == ["production_deletion_rehearsal.tf", "production_variables.tf"]
+    variables = (INFRA / "production_variables.tf").read_text(encoding="utf-8")
+    assert "default     = false" in variables.split('variable "deletion_rehearsal_open"')[1]
 
 
 def test_the_declarations_carry_the_probe_families_and_nothing_wider() -> None:

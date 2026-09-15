@@ -82,6 +82,21 @@ run "stage_none_declares_nothing" {
     condition     = length(aws_vpc_endpoint.production_secretsmanager) == 0 && length(aws_vpc_endpoint.production_interface) == 0
     error_message = "stage none must declare no endpoint"
   }
+
+  # Proposed ADR-0050: the deletion rehearsal declares nothing by default.
+  assert {
+    condition = (
+      !local.deletion_rehearsal_open
+      && length(aws_ecs_task_definition.deletion_rehearsal) == 0
+      && length(aws_iam_role_policy.deletion_rehearsal_bootstrap) == 0
+      && length(aws_ssm_parameter.deletion_rehearsal_binding) == 0
+      && length(aws_iam_policy.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_permission_set.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_customer_managed_policy_attachment.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 0
+    )
+    error_message = "stage none must declare no deletion rehearsal resource"
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -505,4 +520,213 @@ run "an_open_provider_cidr_is_refused" {
   }
 
   expect_failures = [var.production_provider_origin_cidrs]
+}
+
+# ---------------------------------------------------------------------------
+# Proposed ADR-0050: the deletion rehearsal is CLOSED by default at every stage,
+# opens only with the owner's variable AND its own image, and adds no assignment
+# before stage b
+# ---------------------------------------------------------------------------
+
+# The default: stage a with the rehearsal image pinned still declares nothing,
+# because `deletion_rehearsal_open` is false unless the owner accepts D-1.
+run "rehearsal_closed_by_default_at_stage_a_with_its_digest" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+    production_image_digests = {
+      acquisition        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      deletion_rehearsal = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+
+  assert {
+    condition = (
+      !local.deletion_rehearsal_open
+      && length(aws_ecs_task_definition.deletion_rehearsal) == 0
+      && length(aws_iam_role_policy.deletion_rehearsal_bootstrap) == 0
+      && length(aws_ssm_parameter.deletion_rehearsal_binding) == 0
+      && length(aws_iam_policy.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_permission_set.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 0
+    )
+    error_message = "the closed rehearsal declares no rehearsal resource"
+  }
+
+  assert {
+    condition     = length(aws_iam_role.production_acquire_task) == 1 && length(aws_ecs_task_definition.production_acquire) == 1
+    error_message = "the closed rehearsal changes nothing about stage a"
+  }
+}
+
+# The owner's variable alone, with no rehearsal image: still nothing.
+run "rehearsal_open_without_its_digest_declares_nothing" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    deletion_rehearsal_open                = true
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+    production_image_digests = {
+      acquisition = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }
+
+  assert {
+    condition = (
+      !local.deletion_rehearsal_open
+      && length(aws_ecs_task_definition.deletion_rehearsal) == 0
+      && length(aws_iam_role_policy.deletion_rehearsal_bootstrap) == 0
+      && length(aws_ssm_parameter.deletion_rehearsal_binding) == 0
+      && length(aws_iam_policy.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_permission_set.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 0
+    )
+    error_message = "the closed rehearsal declares no rehearsal resource"
+  }
+}
+
+# The owner's variable at stage none: meaningless, nothing declared.
+run "rehearsal_open_at_stage_none_declares_nothing" {
+  command = plan
+
+  variables {
+    production_stage        = "none"
+    deletion_rehearsal_open = true
+    production_image_digests = {
+      deletion_rehearsal = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+
+  assert {
+    condition = (
+      !local.deletion_rehearsal_open
+      && length(aws_ecs_task_definition.deletion_rehearsal) == 0
+      && length(aws_iam_role_policy.deletion_rehearsal_bootstrap) == 0
+      && length(aws_ssm_parameter.deletion_rehearsal_binding) == 0
+      && length(aws_iam_policy.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_permission_set.deletion_rehearsal_launcher) == 0
+      && length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 0
+    )
+    error_message = "the closed rehearsal declares no rehearsal resource"
+  }
+}
+
+# Open at stage a: the task definition as the actual deletion role, the role's
+# bootstrap delta, the binding, the launcher set and its policy -- and NO assignment.
+run "rehearsal_open_at_stage_a_declares_the_task_the_set_and_no_assignment" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    deletion_rehearsal_open                = true
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+    production_image_digests = {
+      acquisition        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      deletion_rehearsal = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+
+  assert {
+    condition     = local.deletion_rehearsal_open && length(aws_ecs_task_definition.deletion_rehearsal) == 1
+    error_message = "open at stage a with its digest declares the rehearsal task definition"
+  }
+
+  # The task and execution role ARNs are provider-computed and unknown at plan time
+  # under the mock; that the task role IS `aws_iam_role.licensed_data_deletion` is held
+  # by the structural test over the parsed declaration (test_production_infrastructure).
+  assert {
+    condition     = aws_ecs_task_definition.deletion_rehearsal[0].family == "kalpamani-deletion-rehearsal"
+    error_message = "the rehearsal task definition carries the closed rehearsal family name"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.deletion_rehearsal[0].cpu == aws_ecs_task_definition.production_acquire[0].cpu && aws_ecs_task_definition.deletion_rehearsal[0].network_mode == aws_ecs_task_definition.production_acquire[0].network_mode
+    error_message = "the rehearsal task has the production task shape"
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.deletion_rehearsal_bootstrap) == 1 && aws_iam_role_policy.deletion_rehearsal_bootstrap[0].name == "mock-kalpamani-research-deletion-rehearsal-bootstrap"
+    error_message = "the bootstrap delta is one inline policy, declared under its own name"
+  }
+
+  assert {
+    condition     = length(aws_ssm_parameter.deletion_rehearsal_binding) == 1 && aws_ssm_parameter.deletion_rehearsal_binding[0].name == "/kalpamani/production/deletion/runtime-binding"
+    error_message = "the rehearsal binding parameter is declared under the compiled name"
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_permission_set.deletion_rehearsal_launcher) == 1 && aws_ssoadmin_permission_set.deletion_rehearsal_launcher[0].name == "KalpaManiDeletionRehearse" && length(aws_iam_policy.deletion_rehearsal_launcher) == 1 && length(aws_ssoadmin_customer_managed_policy_attachment.deletion_rehearsal_launcher) == 1
+    error_message = "the launcher permission set, its policy and its reference are declared"
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 0
+    error_message = "open at stage a declares NO rehearsal assignment"
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_account_assignment.production_acquisition) == 0 && length(aws_iam_role.production_acquire_task) == 1 && length(aws_iam_role.production_build_task) == 1
+    error_message = "the rehearsal changes nothing about the production actors"
+  }
+}
+
+# Open at stage b, with the R-3 digest: the one rehearsal assignment, beside the
+# accepted four.
+run "rehearsal_open_at_stage_b_declares_the_one_assignment" {
+  command = plan
+
+  variables {
+    production_stage                       = "b"
+    production_r3_verification_digest      = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    deletion_rehearsal_open                = true
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+    production_image_digests = {
+      acquisition        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      deletion_rehearsal = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_account_assignment.deletion_rehearsal_launcher) == 1 && length(aws_ssoadmin_account_assignment.production_acquisition) == 1
+    error_message = "open at stage b with the R-3 digest declares the one rehearsal assignment beside the four"
+  }
 }
