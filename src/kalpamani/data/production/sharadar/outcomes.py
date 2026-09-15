@@ -72,7 +72,7 @@ class PlacementIncident(StrEnum):
 
 class HeldCheckOutcome(StrEnum):
     """What the launcher established about its held probe task before its one check
-    (proposed ADR-0048 s.3). Closed."""
+    (ADR-0048 s.3). Closed."""
 
     #: Not a held probe launch, or the sequence never reached the release.
     NOT_APPLICABLE = "NOT_APPLICABLE"

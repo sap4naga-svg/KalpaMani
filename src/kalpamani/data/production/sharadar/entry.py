@@ -88,7 +88,7 @@ ENTRY_ACTOR: Final[dict[TaskEntry, ProductionActor]] = {
 VERIFICATION_ENTRIES: Final[frozenset[TaskEntry]] = frozenset(
     {TaskEntry.ACQUISITION_VERIFY, TaskEntry.BUILD_VERIFY}
 )
-#: The permission-probe entries (proposed ADR-0048): the accepted bootstrap, then
+#: The permission-probe entries (ADR-0048): the accepted bootstrap, then
 #: exactly one catalogued permission operation under the task role, or a bounded hold.
 PROBE_ENTRIES: Final[frozenset[TaskEntry]] = frozenset(
     {TaskEntry.ACQUISITION_PROBE, TaskEntry.BUILD_PROBE}
@@ -156,7 +156,7 @@ class TaskOutcome(StrEnum):
     MANIFEST_STATE_UNKNOWN = "MANIFEST_STATE_UNKNOWN"
     MANIFEST_REFUSED = "MANIFEST_REFUSED"
     UNCLASSIFIED = "UNCLASSIFIED"
-    # A permission-probe entry's terminal outcomes (proposed ADR-0048): the accepted
+    # A permission-probe entry's terminal outcomes (ADR-0048): the accepted
     # bootstrap released and the task issued its one operation (or held).
     PROBE_MATCHED = "PROBE_MATCHED"
     PROBE_INVERTED = "PROBE_INVERTED"
@@ -211,7 +211,7 @@ EXIT_STATUS: Final[dict[TaskOutcome, int]] = {
     TaskOutcome.MANIFEST_STATE_UNKNOWN: 37,
     TaskOutcome.MANIFEST_REFUSED: 38,
     TaskOutcome.UNCLASSIFIED: 40,
-    # Proposed ADR-0048: non-zero on purpose, like VERIFIED_BOOTSTRAP; a probe task is
+    # ADR-0048: non-zero on purpose, like VERIFIED_BOOTSTRAP; a probe task is
     # never a run, and its exit code alone never completes a permission record -- the
     # verified receipt does.
     TaskOutcome.PROBE_MATCHED: 41,
@@ -397,7 +397,7 @@ class TaskReceipt:
     #: them (proposed ADR-0045, Route B): present only on a build REFUSED_NORMALIZATION
     #: receipt, and evidence for owner review -- never an accepted set.
     schema_observation: SchemaObservation | None = None
-    #: The permission-probe observation (proposed ADR-0048): present exactly on a probe
+    #: The permission-probe observation (ADR-0048): present exactly on a probe
     #: entry's PROBE_* receipt. What the task's one operation answered, never a value.
     permission: PermissionProbeObservation | None = None
 

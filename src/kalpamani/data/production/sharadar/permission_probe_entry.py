@@ -1,4 +1,4 @@
-"""The two permission-probe entries: the accepted bootstrap, then one operation (proposed ADR-0048).
+"""The two permission-probe entries: the accepted bootstrap, then one operation (ADR-0048).
 
 **Not accepted, not in force.** ADR-0047 expands ADR-0036 s.3's R-4 and R-5 rows into subcells
 under the human principal **and** under the task role, and names the task-role half as

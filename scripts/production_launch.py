@@ -65,6 +65,7 @@ Refused by name, so a wrong reflex fails loudly: ``--run``, ``--live``, ``--exec
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -74,6 +75,9 @@ from typing import Any, Final, Protocol
 
 #: The one flag that opens the authorized branch. Long on purpose.
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-launch"
+#: The flag that admits one bounded receipt collection (proposed ADR-0049 s.2): a logs read
+#: under the actor's launcher profile, after that identity is proven, for one launch record.
+COLLECT_FLAG: Final = "--i-am-the-owner-authorizing-receipt-collection"
 
 #: Spellings a reflex might reach for. Each is refused with a reason before parsing.
 REFUSED_FLAGS: Final[dict[str, str]] = {
@@ -110,6 +114,15 @@ EXIT_INTERRUPTED_AFTER_LAUNCH: Final = 14
 EXIT_RECOVERED: Final = 0
 EXIT_VERDICT_RECORDED: Final = 0
 EXIT_REFUSED_LEGACY_RESERVATIONS: Final = 15
+EXIT_COLLECTION_NOT_COLLECTED: Final = 16
+EXIT_REFUSED_COLLECTION_RECORDS: Final = 17
+EXIT_REFUSED_CONTRADICTION_UNRESOLVED: Final = 18
+EXIT_REFUSED_RECEIPT_BINDING: Final = 19
+#: The hand-read completion's acknowledgement of one recorded contradiction, by the
+#: collection record's digest; repeatable; never accepted with a collection.
+ACKNOWLEDGE_FLAG: Final = "--acknowledge-collection-contradiction"
+
+_SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
 
 #: Allowlisted output sentences. Nothing else reaches stdout.
 SENTENCES: Final[dict[str, str]] = {
@@ -133,6 +146,30 @@ SENTENCES: Final[dict[str, str]] = {
         "launch interrupted after the sequence began; the identity stays reserved -- recover"
     ),
     "row_completed": "ledger row completed from the verified receipt",
+    "collection_not_collected": (
+        "receipt not collected: the collection is recorded (outcome and counts, never log "
+        "content), the row stays provisional, nothing is established about whether a "
+        "receipt exists, and the next collection reads the stream again"
+    ),
+    "refused_collection_records": (
+        "launch refused: the recorded collections of this launch are malformed, bound to "
+        "another launch or stream, carry an unverifiable line, or contradict each other; "
+        "nothing is chosen between them"
+    ),
+    "refused_contradiction_unresolved": (
+        "launch refused: a recorded collection of this launch found contradictory receipts "
+        "and no disposition names it; no collection resolves that -- the owner reads the "
+        "stream, completes from a hand-read receipt and acknowledges the record by digest"
+    ),
+    "refused_receipt_binding": (
+        "launch refused: a disposition bound this launch to one hand-read receipt; only a "
+        "hand-read completion with that receipt continues, no other receipt does, and a "
+        "collection does not"
+    ),
+    "refused_destination": (
+        "launch refused: the registration names no log destination for this entry, or not "
+        "this entry's"
+    ),
     "row_not_completed": "ledger row not completed: the receipt establishes no disposition",
     "recovered": "interrupted attempt recorded; the identity is consumed and nothing was launched",
     "verdict_recorded": "isolation verdict recorded beside the launch record",
@@ -179,6 +216,13 @@ class LaunchArguments:
     reachability_evidence: Path | None
     #: ``None`` is the ordinary release; a negative mode names the R-1 cell it produces.
     release_mode: str | None = None
+    #: ``--complete-row --collect-receipt``: the receipt read from the launch's own stream
+    #: (proposed ADR-0049 s.2) instead of a hand-read file; needs :data:`COLLECT_FLAG`.
+    collect_receipt: bool = False
+    collection_authorized: bool = False
+    #: ``--acknowledge-collection-contradiction <sha256>`` (repeatable): the hand-read
+    #: completion's explicit disposition of recorded contradictions (ADR-0049 s.2.5).
+    acknowledged_contradictions: tuple[str, ...] = ()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -207,6 +251,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--receipt-lines", type=Path)
     parser.add_argument("--reachability-evidence", type=Path)
     parser.add_argument("--release-mode", choices=_RELEASE_MODES)
+    parser.add_argument("--collect-receipt", action="store_true")
+    parser.add_argument(COLLECT_FLAG, dest="collection_authorized", action="store_true")
+    parser.add_argument(
+        ACKNOWLEDGE_FLAG, dest="acknowledged_contradictions", action="append", default=[]
+    )
     return parser
 
 
@@ -242,16 +291,35 @@ def parse_arguments(argv: Sequence[str]) -> LaunchArguments:
         receipt_lines=namespace.receipt_lines,
         reachability_evidence=namespace.reachability_evidence,
         release_mode=namespace.release_mode,
+        collect_receipt=bool(namespace.collect_receipt),
+        collection_authorized=bool(namespace.collection_authorized),
+        acknowledged_contradictions=tuple(namespace.acknowledged_contradictions),
     )
+    # An acknowledgement belongs to a hand-read completion only, and names a digest.
+    if arguments.acknowledged_contradictions and (
+        not arguments.complete_row
+        or arguments.receipt_lines is None
+        or any(_SHA256_RE.fullmatch(d) is None for d in arguments.acknowledged_contradictions)
+    ):
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     modes = sum((arguments.complete_row, arguments.recover, arguments.isolation_verdict))
     if modes > 1 or (modes == 1 and arguments.authorized):
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+    # Collection is a completion from the launch's own stream: --complete-row with the
+    # collection flag, no hand-read file, no other mode and no launch flag.
+    if arguments.collect_receipt != arguments.collection_authorized or (
+        arguments.collect_receipt
+        and (not arguments.complete_row or arguments.receipt_lines is not None)
+    ):
         raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     # A negative release mode is a verification launch's (preparation or execution)
     # and no other mode's; the production kind never carries one.
     if arguments.release_mode is not None and (modes or arguments.kind != "verification"):
         raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     if arguments.complete_row or arguments.isolation_verdict:
-        if arguments.launch_record is None or arguments.receipt_lines is None:
+        if arguments.launch_record is None or (
+            arguments.receipt_lines is None and not arguments.collect_receipt
+        ):
             raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
         if arguments.isolation_verdict and arguments.verification_configuration is None:
             raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
@@ -548,6 +616,10 @@ class ClientFactory(Protocol):
         """A client with ``get_parameter``, ``put_parameter`` and ``delete_parameter``."""
         ...
 
+    def logs(self, profile: str) -> Any:
+        """A client with ``get_log_events`` (the receipt collector's one operation)."""
+        ...
+
 
 def workstation_client_config() -> dict[str, object]:
     """The botocore ``Config`` arguments for every workstation client. Pure.
@@ -600,6 +672,10 @@ class _Boto3Clients:
 
     def ssm(self, profile: str) -> Any:
         return self._client(profile, "ssm")
+
+    def logs(self, profile: str) -> Any:
+        # The same config: one attempt in total (effective SDK retries 0), finite timeouts.
+        return self._client(profile, "logs")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -862,13 +938,21 @@ def execute_launch(
 
 
 def _record_and_receipt(
-    arguments: LaunchArguments, *, root_source: Callable[[], Path] | None
+    arguments: LaunchArguments,
+    *,
+    root_source: Callable[[], Path] | None,
+    receipt_text: str | None = None,
 ) -> tuple[Any, Any, Any]:
-    """The store, the launch record and the receipt verified against it, or refuse."""
+    """The store, the launch record and the receipt verified against it, or refuse.
+
+    The receipt lines come from the hand-read file, or -- ``receipt_text`` -- from the
+    collector, and pass through exactly the same verifier and the same binding rules.
+    """
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.receipts import ReceiptError, collect_and_verify
 
-    assert arguments.launch_record is not None and arguments.receipt_lines is not None
+    assert arguments.launch_record is not None
+    assert arguments.receipt_lines is not None or receipt_text is not None
     root = _private_root(root_source)
     if not _contained(arguments.launch_record, root):
         raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
@@ -884,15 +968,180 @@ def _record_and_receipt(
     ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     _bound_reservation(store, record)
-    try:
-        text = _read(arguments.receipt_lines).decode("utf-8")
-    except UnicodeDecodeError:
-        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if receipt_text is None:
+        assert arguments.receipt_lines is not None
+        try:
+            text = _read(arguments.receipt_lines).decode("utf-8")
+        except UnicodeDecodeError:
+            raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    else:
+        text = receipt_text
     try:
         verified = collect_and_verify(text.splitlines(), expectation=record.expectation())
     except ReceiptError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     return store, record, verified
+
+
+def _registered_destination(arguments: LaunchArguments, record: Any) -> Any:
+    """The log destination the registration names for this launch's entry, or refuse."""
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.receipt_collector import (
+        CollectorError,
+        destination_for,
+    )
+
+    try:
+        inputs = lr.parse_launch_inputs(_read(arguments.launch_inputs))
+    except lr.LaunchRecordError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    target = inputs.targets.get((record.actor, record.kind))
+    if target is None or target.task_definition_arn != record.task_definition_arn:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    try:
+        return destination_for(record.entry, target.task_definition.log_destination)
+    except CollectorError:
+        raise LaunchRefusalError("refused_destination", EXIT_REFUSED_RECORDS) from None
+
+
+def collect_receipt_lines(
+    arguments: LaunchArguments,
+    *,
+    clients: ClientFactory,
+    environment: Callable[[str], str | None],
+    now: Callable[[], datetime],
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+    root_source: Callable[[], Path] | None,
+    security_of: Callable[[Path], Any] | None,
+) -> str:
+    """The launch's receipt line from its own stream (proposed ADR-0049 s.2), or refuse.
+
+    The launch record (bound to its reservation), the registered destination held to the
+    record's entry, the launcher identity proven through the accepted human bootstrap, then
+    one bounded collection under that profile -- recorded as a collection record whatever
+    its outcome, the line kept only once it verified against this launch record. The
+    collection is refused until the launcher observed the task's terminal state (a
+    stopped task writes nothing more; delivery lag is the collector's stated limit).
+    Every collection record about this launch is admitted through the collector's one
+    rule (:func:`admit_collection_records`): a verified COLLECTED line is reused and the
+    stream is not read again (repeatable completion); a rejected, exhausted, incomplete
+    or contradictory attempt never blocks, and the stream is read again; malformed,
+    misbound, unverifiable or mutually contradictory records refuse, and nothing is
+    chosen between them. Anything short of COLLECTED leaves the row provisional and
+    establishes nothing about whether a receipt exists.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+    from kalpamani.data.production.sharadar.receipt_collector import (
+        CollectionRecordDefect,
+        CollectionRecordError,
+        SdkLogsClient,
+        admit_collection_records,
+        collect_receipt,
+    )
+    from kalpamani.data.production.sharadar.runner import HumanBootstrapOutcome, human_bootstrap
+    from kalpamani.data.production.sharadar.vocabulary import IdentityPath, constants_for
+
+    assert arguments.launch_record is not None
+    root = _private_root(root_source)
+    if not _contained(arguments.launch_record, root):
+        raise LaunchRefusalError("refused_containment", EXIT_REFUSED_CONTAINMENT)
+    store = _store(arguments, root)
+    try:
+        record = lr.parse_launch_record(_read(arguments.launch_record))
+    except lr.LaunchRecordError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if (
+        record.identity != arguments.identity
+        or record.kind.value != arguments.kind
+        or record.actor.value != arguments.actor
+    ):
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    _bound_reservation(store, record)
+    if record.observed_exit_code is None:
+        # No collection before the launcher observed the terminal state.
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    try:
+        ledger, _digest = store.read_ledger()
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    row = ledger.row(record.identity)
+    if row is None or row.evidence is not lr.LedgerEvidence.EXIT_CODE_ONLY:
+        # No collection for a row that is not provisional: nothing to complete, no read.
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    destination = _registered_destination(arguments, record)
+    from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+
+    record_digest = sha256_hex(canonical_bytes(record.document()))
+    expectation = record.expectation()
+    # Every collection record about this launch, under the collector's one rule.
+    try:
+        admission = admit_collection_records(
+            _collection_payloads(arguments.records_dir),
+            identity=record.identity,
+            launch_record_sha256=record_digest,
+            destination=destination,
+            task_id=record.task_id,
+            expectation=expectation,
+        )
+    except CollectionRecordError as error:
+        if error.defect is CollectionRecordDefect.CONTRADICTION_UNRESOLVED:
+            raise LaunchRefusalError(
+                "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
+            ) from None
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise LaunchRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    except OSError:
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    if admission.reusable_line is not None:
+        return admission.reusable_line
+    if admission.bound_receipt_sha256 is not None:
+        # A resolution begun by a hand-read completion is finished by one: no read.
+        raise LaunchRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
+    constants = constants_for(record.actor)
+    bootstrap = human_bootstrap(
+        actor=record.actor,
+        path=IdentityPath.LAUNCHER,
+        environment=environment,
+        caller_identity=lambda: clients.sts(constants.launcher_profile).get_caller_identity(),
+        root_source=root_source,
+        security_of=security_of,
+    )
+    if bootstrap.outcome is not HumanBootstrapOutcome.IDENTITY_PROVEN:
+        raise LaunchRefusalError("refused_bootstrap", EXIT_REFUSED_BOOTSTRAP)
+    try:
+        client = SdkLogsClient(lambda _service: clients.logs(constants.launcher_profile))
+    except Exception:
+        raise LaunchRefusalError("refused_dependency", EXIT_REFUSED_DEPENDENCY) from None
+    collected = collect_receipt(
+        destination=destination,
+        task_id=record.task_id,
+        expectation=expectation,
+        client=client,
+        now=now,
+        monotonic=monotonic,
+        sleep=sleep,
+    )
+    try:
+        store.write_record(
+            "receipt-collection",
+            collected.document(identity=record.identity, launch_record_sha256=record_digest),
+            at=collected.finished_at,
+        )
+    except StoreError:
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    _emit([collected.summary()])
+    if collected.receipt_line is None:
+        raise LaunchRefusalError("collection_not_collected", EXIT_COLLECTION_NOT_COLLECTED)
+    return collected.receipt_line
 
 
 def _bound_reservation(store: Any, record: Any) -> Any:
@@ -929,6 +1178,7 @@ def complete_row(
     *,
     now: Callable[[], datetime],
     root_source: Callable[[], Path] | None = None,
+    receipt_text: str | None = None,
 ) -> bool:
     """Verify the hand-read receipt against the launch record and complete the row.
 
@@ -940,13 +1190,35 @@ def complete_row(
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
 
-    store, record, verified = _record_and_receipt(arguments, root_source=root_source)
+    store, record, verified = _record_and_receipt(
+        arguments, root_source=root_source, receipt_text=receipt_text
+    )
+    # The receipt's outcome is the exit the launcher observed at the terminal state: two
+    # pieces of evidence for one launch that disagree complete nothing.
+    from kalpamani.data.production.sharadar.entry import EXIT_STATUS
+
+    if (
+        record.observed_exit_code is not None
+        and EXIT_STATUS.get(verified.outcome) != record.observed_exit_code
+    ):
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    dispositions: list[dict[str, Any]] = []
+    if receipt_text is None:
+        # A hand-read completion over a recorded, unresolved contradiction needs the
+        # owner's explicit acknowledgement of that record; it is then disposed, bound to
+        # this receipt, and the contradiction record stays exactly as written.
+        assert arguments.receipt_lines is not None
+        dispositions = _dispositions_for(
+            arguments, record, receipt_lines=_read(arguments.receipt_lines), now=now
+        )
     try:
         with store.locked(now=now):
             ledger, digest = store.read_ledger()
             existing = ledger.row(record.identity)
             if existing is None or existing.evidence is not lr.LedgerEvidence.EXIT_CODE_ONLY:
                 raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+            for document in dispositions:
+                store.write_record("collection-disposition", document, at=now())
             try:
                 completed = lr.complete_ledger_row(ledger, record=record, receipt=verified)
             except lr.LaunchRecordError as error:
@@ -959,6 +1231,87 @@ def complete_row(
             raise LaunchRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     return True
+
+
+def _collection_payloads(records_dir: Path) -> list[bytes]:
+    """Every collection record and disposition in the directory, as bytes."""
+    paths = [
+        *records_dir.glob("receipt-collection-*.json"),
+        *records_dir.glob("collection-disposition-*.json"),
+    ]
+    return [path.read_bytes() for path in sorted(paths)]
+
+
+def _dispositions_for(
+    arguments: LaunchArguments, record: Any, *, receipt_lines: bytes, now: Callable[[], datetime]
+) -> list[dict[str, Any]]:
+    """The disposition documents a hand-read completion writes for the recorded
+    contradictions it acknowledges, or refuse.
+
+    Every unresolved contradiction record must be acknowledged by its digest, and every
+    acknowledged digest must name a recorded contradiction (unresolved or already
+    disposed, so the completion is repeatable); a malformed or misbound record refuses.
+    """
+    from kalpamani.data.contracts.canonical import sha256_hex
+    from kalpamani.data.production.sharadar.receipt_collector import (
+        CollectionDisposition,
+        CollectionRecordDefect,
+        CollectionRecordError,
+        ContradictionDisposition,
+        contradiction_status,
+    )
+    from kalpamani.data.production.sharadar.receipts import ReceiptError, collect_receipt_line
+
+    try:
+        status = contradiction_status(
+            _collection_payloads(arguments.records_dir),
+            identity=record.identity,
+            launch_record_sha256=_launch_record_digest(record),
+        )
+    except CollectionRecordError as error:
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise LaunchRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    except OSError:
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    acknowledged = set(arguments.acknowledged_contradictions)
+    known = set(status.unresolved) | set(status.disposed)
+    if not set(status.unresolved) <= acknowledged or not acknowledged <= known:
+        raise LaunchRefusalError(
+            "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
+        )
+    try:
+        line = collect_receipt_line(receipt_lines.decode("utf-8").splitlines())
+    except (ReceiptError, UnicodeDecodeError):
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if not status.admits_line(line):
+        # A disposition bound this launch to another receipt: no substitution.
+        raise LaunchRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
+    if not status.unresolved:
+        return []
+    return [
+        CollectionDisposition(
+            identity=record.identity,
+            launch_record_sha256=_launch_record_digest(record),
+            contradiction_sha256=digest,
+            receipt_line_sha256=sha256_hex(line.encode("utf-8")),
+            disposition=ContradictionDisposition.HAND_READ_COMPLETION,
+            recorded_at=now(),
+        ).document()
+        for digest in status.unresolved
+    ]
+
+
+def _launch_record_digest(record: Any) -> str:
+    from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+
+    return sha256_hex(canonical_bytes(record.document()))
 
 
 def recover(
@@ -1188,7 +1541,26 @@ def main(
     clock = now if now is not None else (lambda: datetime.now(tz=UTC))
     try:
         if arguments.complete_row:
-            done = complete_row(arguments, now=clock, root_source=root_source)
+            receipt_text: str | None = None
+            if arguments.collect_receipt:
+                import time as _time
+
+                # The real logs client exists only here, inside the collection flag, after
+                # the record, the reservation, the registered destination and the launcher
+                # identity are admitted (inside collect_receipt_lines).
+                receipt_text = collect_receipt_lines(
+                    arguments,
+                    clients=clients if clients is not None else _Boto3Clients(),
+                    environment=environment if environment is not None else _environment,
+                    now=clock,
+                    monotonic=monotonic if monotonic is not None else _time.monotonic,
+                    sleep=sleep if sleep is not None else _time.sleep,
+                    root_source=root_source,
+                    security_of=security_of,
+                )
+            done = complete_row(
+                arguments, now=clock, root_source=root_source, receipt_text=receipt_text
+            )
             _emit([SENTENCES["row_completed" if done else "row_not_completed"]])
             return EXIT_ROW_COMPLETED if done else EXIT_ROW_NOT_COMPLETED
         if arguments.recover:

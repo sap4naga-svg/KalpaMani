@@ -1,4 +1,4 @@
-"""Proposed ADR-0048 says what the code does, and the code says the same.
+"""ADR-0048 says what the code does, and the code says the same.
 
 The two mechanisms it delivers (the permission-probe entry, the held ExecuteCommand check), the
 contracts and vocabularies it adds, the layers the catalogue now carries, the deletion path it
@@ -36,12 +36,25 @@ HEX_64: Final = re.compile(r"\b[0-9a-f]{64}\b")
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
 
 
-def test_the_adr_exists_is_proposed_and_names_its_gates() -> None:
+def test_the_adr_exists_is_accepted_and_names_its_gates() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0048-*.md"))] == [ADR.name]
+    # The conditional status line is preserved as history; the acceptance note beside it
+    # records the merge of PR #107.
     assert "Status: " + PROPOSED in ADR_TEXT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #107 merged" in ADR_PLAIN and "2026-09-15T10:22:22Z" in ADR_TEXT
+    assert "c0566574c41bc31b7144fafe919078a213982143" in ADR_TEXT
+    assert "86fe67b18cb6a213559b418d5312785972b675eb" in ADR_TEXT
+    assert "ADR-0048 is therefore ACCEPTED / IN FORCE" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     assert "acceptance grants no permission" in ADR_PLAIN
     assert "## 7. Effectiveness and execution gates" in ADR_TEXT
+    for name in ("CLAUDE.md", "README.md"):
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        assert "ADR-0048 ACCEPTED / IN FORCE" in text
+        assert "PR #107 merged 2026-09-15T10:22:22Z" in text
+        assert "ADR-0048 PROPOSED, NOT IN FORCE" not in text
+        assert "ADR-0049 PROPOSED, NOT IN FORCE" in text
     assert "Nothing was run to produce this decision" in ADR_PLAIN
     assert "Mocked results are not AWS verification" in ADR_PLAIN
     assert "G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE" in ADR_PLAIN
@@ -203,12 +216,12 @@ def test_the_declarations_carry_the_probe_families_and_nothing_wider() -> None:
     assert "KalpaManiDeletionRehearse" not in policies
 
 
-def test_the_status_register_carries_the_proposal() -> None:
+def test_the_status_register_carries_the_accepted_state() -> None:
     for name in ("CLAUDE.md", "README.md"):
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert ADR.name in text
         assert "ADR-0048 permission-probe tasks + held ExecuteCommand (code):" in text
-        assert "ADR-0048 PROPOSED, NOT IN FORCE" in text
+        assert "ADR-0048 ACCEPTED / IN FORCE" in text
         assert "the deletion rehearsal path designed and NOT opened" in text
     readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
         encoding="utf-8"

@@ -172,7 +172,7 @@ class CompiledLaunch:
     assign_public_ip: bool
     platform_version: str
     binding_key_arn: str
-    #: The ``startedBy`` tag a permission-probe launch carries (proposed ADR-0048): the
+    #: The ``startedBy`` tag a permission-probe launch carries (ADR-0048): the
     #: session's tag, so the permission cleanup discovers the probe task exactly as it
     #: discovers a task a subcell's own ``RunTask`` started. ``None`` for every
     #: production and verification launch, whose request is unchanged.
@@ -235,7 +235,7 @@ class CompiledLaunch:
 
     @property
     def probe(self) -> bool:
-        """Whether this launch targets the actor's permission-probe family (proposed ADR-0048)."""
+        """Whether this launch targets the actor's permission-probe family (ADR-0048)."""
         definition = TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn)
         assert definition is not None  # held by __post_init__
         return definition.group(2) == constants_for(self.actor).probe_task_family
@@ -263,7 +263,7 @@ def run_task_request(compiled: CompiledLaunch) -> dict[str, Any]:
     """The exact ``RunTask`` keyword arguments, and **no ``overrides`` key**.
 
     A permission-probe launch adds ``startedBy`` -- the documented request field the
-    permission cleanup lists by -- and nothing else (proposed ADR-0048).
+    permission cleanup lists by -- and nothing else (ADR-0048).
     """
     if type(compiled) is not CompiledLaunch:
         raise _refuse(ComputeOperation.RUN_TASK, ComputeFailure.INVALID_CONFIGURATION)

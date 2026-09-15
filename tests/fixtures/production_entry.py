@@ -548,7 +548,7 @@ class FakeOperationClient:
 
 
 class ProbeHarness:
-    """One permission-probe task (proposed ADR-0048) through the real entry, injected.
+    """One permission-probe task (ADR-0048) through the real entry, injected.
 
     The binding and release are the actor's real contracts; the input is the probe input
     naming ``subcell_id`` and its resolved target under ``context``; the metadata reports

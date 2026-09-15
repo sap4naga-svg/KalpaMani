@@ -130,7 +130,7 @@ def test_the_implementation_matches_the_document() -> None:
     assert compiled.COMPILED_CONFIGURATION_CONTRACT_ID == "kalpamani-compiled-configuration/v1"
     assert compiled.COMPILED_CONFIGURATION_PATH == "/etc/kalpamani/compiled-configuration.json"
     # ADR-0044 introduced v1; ADR-0045 moved the receipt to v2 (two evidence blocks) and
-    # proposed ADR-0048 to v3 (the permission block); ADR-0044's own text is unchanged.
+    # ADR-0048 to v3 (the permission block); ADR-0044's own text is unchanged.
     assert receipts.RECEIPT_CONTRACT_ID == "kalpamani-task-receipt/v3"
     assert receipts.RECEIPT_LINE_PREFIX == "receipt: "
     assert not (PRODUCTION / "spent_source.py").exists()

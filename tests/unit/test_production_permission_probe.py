@@ -1,4 +1,4 @@
-"""The permission-probe mechanisms (proposed ADR-0048), on fakes and synthetic records only.
+"""The permission-probe mechanisms (ADR-0048), on fakes and synthetic records only.
 
 The task-role subcells are exercised by a probe task; the launcher's ``ExecuteCommand``
 refusal against its own held probe task; the probe input and observation contracts; the

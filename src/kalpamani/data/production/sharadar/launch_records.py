@@ -95,6 +95,11 @@ from kalpamani.data.production.sharadar.metadata_grammar import (
     IMAGE_DIGEST_RE,
 )
 from kalpamani.data.production.sharadar.plan import plan_digest_for
+from kalpamani.data.production.sharadar.receipt_collector import (
+    CollectorError,
+    LogDestination,
+    parse_log_destination,
+)
 from kalpamani.data.production.sharadar.receipts import (
     BOOTSTRAP_REFUSALS,
     LEDGER_OUTCOME_OF,
@@ -121,7 +126,7 @@ RECORD_SCHEMA_VERSION: Final = 1
 MAX_RECORD_BYTES: Final = 256 * 1024
 #: The reserved prefix of every verification identity. A production identity never has it.
 VERIFICATION_IDENTITY_PREFIX: Final = "verify-"
-#: A permission-probe launch's identity (proposed ADR-0048): ``probe-<session stamp>``.
+#: A permission-probe launch's identity (ADR-0048): ``probe-<session stamp>``.
 PROBE_IDENTITY_PREFIX: Final = "probe-"
 #: An authorization is for now: it expires, and a stale one is refused.
 MAX_AUTHORIZATION_VALIDITY: Final = timedelta(hours=24)
@@ -550,6 +555,10 @@ TASK_DEFINITION_INTENTIONAL_DIFFERENCES: Final[tuple[str, ...]] = (
     "image_digest",
 )
 _TASK_USER: Final = "10001:10001"
+#: The one optional key of the task-definition evidence (proposed ADR-0049): the registered
+#: log destination the receipt collector derives a task's stream from. A registration made
+#: before the collector existed stays valid; the collector refuses until one is registered.
+_TASK_DEFINITION_OPTIONAL_FIELDS: Final[frozenset[str]] = frozenset({"log_destination"})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -578,10 +587,17 @@ class TaskDefinitionEvidence:
     work_tmpfs: bool
     command: str
     image_digest: str
+    #: The registered log destination (proposed ADR-0049): the group and stream prefix the
+    #: owner transcribed from the applied revision, and the container name; ``None`` for a
+    #: registration made before the collector existed.
+    log_destination: LogDestination | None = None
 
     def document(self) -> dict[str, Any]:
-        """The closed block."""
-        return {name: getattr(self, name) for name in sorted(_TASK_DEFINITION_FIELDS)}
+        """The closed block (the optional destination present only when registered)."""
+        document = {name: getattr(self, name) for name in sorted(_TASK_DEFINITION_FIELDS)}
+        if self.log_destination is not None:
+            document["log_destination"] = self.log_destination.document()
+        return document
 
     def __repr__(self) -> str:
         """Family and revision only."""
@@ -656,8 +672,18 @@ class LaunchInputs:
 
 
 def _task_definition(raw: object) -> TaskDefinitionEvidence:
-    if type(raw) is not dict or set(raw) != _TASK_DEFINITION_FIELDS:
+    if (
+        type(raw) is not dict
+        or not _TASK_DEFINITION_FIELDS <= set(raw)
+        or not set(raw) <= _TASK_DEFINITION_FIELDS | _TASK_DEFINITION_OPTIONAL_FIELDS
+    ):
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    destination: LogDestination | None = None
+    if "log_destination" in raw:
+        try:
+            destination = parse_log_destination(raw["log_destination"])
+        except CollectorError:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
     family = exact_str(raw["family"])
     revision = raw["revision"]
     task_role = exact_str(raw["task_role_arn"])
@@ -710,6 +736,7 @@ def _task_definition(raw: object) -> TaskDefinitionEvidence:
         work_tmpfs=tmpfs,
         command=command,
         image_digest=image,
+        log_destination=destination,
     )
 
 
@@ -789,7 +816,7 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
     targets: dict[tuple[ProductionActor, LaunchKind], LaunchTarget] = {}
     for actor in ProductionActor:
         block = actors[actor.value]
-        # ``permission_probe`` (proposed ADR-0048) is the one optional key: a registration
+        # ``permission_probe`` (ADR-0048) is the one optional key: a registration
         # made before the probe family existed stays a valid registration without it.
         if type(block) is not dict or set(block) - {"permission_probe"} != _LAUNCH_ACTOR_FIELDS:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
@@ -1124,7 +1151,7 @@ _GATE_EVIDENCE_FIELDS: Final[frozenset[str]] = frozenset(
 _WORKLOAD_RUN_FIELDS: Final[frozenset[str]] = frozenset(
     {"identity", "plan_digest", "outcome", "evidence", "completed_at"}
 )
-#: A permission-probe launch's workload (proposed ADR-0048): the subcell the probe answers
+#: A permission-probe launch's workload (ADR-0048): the subcell the probe answers
 #: and the workstation chain it was launched for -- the statement, the attempt, the session
 #: stamp and its ``startedBy`` tag, the hold, and the digest of the probe input the launcher
 #: materializes. Reserved beside the ledger **before** ``RunTask``, so an interrupted probe
@@ -1451,7 +1478,7 @@ def probe_specification(
     hold_seconds: int,
     input_digest: str,
 ) -> LaunchSpecification:
-    """The specification of one permission-probe launch (proposed ADR-0048), or refuse.
+    """The specification of one permission-probe launch (ADR-0048), or refuse.
 
     What the permission tool reserves beside the ledger **before** ``RunTask``: the
     actor's registered probe target and placement, and the workload that attributes the
@@ -1899,7 +1926,7 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     covered: Slice | None = None
     plan_digest: str | None = None
-    # A probe launch (proposed ADR-0048) carries no workload: no slice, no plan digest,
+    # A probe launch (ADR-0048) carries no workload: no slice, no plan digest,
     # whichever actor's probe it is.
     if (
         ENTRY_ACTOR[entry] is ProductionActor.ACQUISITION
@@ -1973,7 +2000,7 @@ def provisional_ledger_outcome(
     if outcome is TaskOutcome.VERIFIED_BOOTSTRAP:
         return "VERIFIED" if kind is LaunchKind.VERIFICATION else "HALTED"
     if outcome in PROBE_OUTCOMES:
-        # A probe exit on a probe launch is PROBED (proposed ADR-0048); on any other
+        # A probe exit on a probe launch is PROBED (ADR-0048); on any other
         # kind the image did something the record cannot name.
         return LEDGER_OUTCOME_PROBED if kind is LaunchKind.PERMISSION_PROBE else "HALTED"
     if outcome in BOOTSTRAP_REFUSALS or outcome in PRE_BOOTSTRAP_OUTCOMES:

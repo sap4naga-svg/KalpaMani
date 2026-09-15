@@ -43,7 +43,7 @@ BUILD_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"build_configuration"})
 #: A verification entry (proposed ADR-0045) compiles the origin address set and nothing
 #: else: no secret name, no build configuration.
 VERIFICATION_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"origin_addresses"})
-#: A permission-probe entry (proposed ADR-0048) compiles nothing beyond the code identity:
+#: A permission-probe entry (ADR-0048) compiles nothing beyond the code identity:
 #: an empty inputs object, and no secret name, origin or build configuration.
 PROBE_INPUT_FIELDS: Final[frozenset[str]] = frozenset()
 INPUT_FIELDS_BY_ENTRY: Final[dict[str, frozenset[str]]] = {

@@ -77,7 +77,7 @@ def test_the_adr_distinguishes_decided_from_proposed() -> None:
 
 def test_the_implementation_matches_the_document() -> None:
     # ADR-0043 decided the two production entries. The two verification entries beside
-    # them are ADR-0045's and the two probe entries proposed ADR-0048's, not this
+    # them are ADR-0045's and the two probe entries ADR-0048's, not this
     # document's, and each is held by its own test.
     production_entries = {
         e

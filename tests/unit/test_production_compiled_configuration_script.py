@@ -79,7 +79,7 @@ def _inputs(tmp_path: Path, entry: TaskEntry, **overrides: Any) -> Path:
     elif entry is TaskEntry.BUILD:
         document = {"build_configuration": configuration().document()}
     elif entry in PROBE_ENTRIES:
-        # A probe entry (proposed ADR-0048) compiles nothing beyond the code identity.
+        # A probe entry (ADR-0048) compiles nothing beyond the code identity.
         document = {}
     else:
         # A verification entry (ADR-0045) compiles the origin set and nothing else.
@@ -226,7 +226,7 @@ def test_the_packaging_files_wire_the_four_entries_and_nothing_else() -> None:
         encoding="utf-8"
     )
     # Two production task definitions, two verification ones (ADR-0045) and, under the
-    # proposed ADR-0048 declaration, two permission-probe ones; the Dockerfile has one
+    # ADR-0048 declaration, two permission-probe ones; the Dockerfile has one
     # target per entry.
     assert compute.count('user      = "10001:10001"') == len(TaskEntry) == 6
     assert dockerfile.count("USER 10001:10001") == len(TaskEntry)
@@ -241,7 +241,7 @@ def test_the_packaging_files_wire_the_four_entries_and_nothing_else() -> None:
     assert "pip install --no-deps --no-build-isolation ." in dockerfile
     assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
     assert "BUILD_BACKEND" in dockerfile
-    # Six targets (ADR-0045's four, plus proposed ADR-0048's two probe targets): every
+    # Six targets (ADR-0045's four, plus ADR-0048's two probe targets): every
     # one traverses its configuration directory and holds its entry executable to a
     # POSIX shebang.
     assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 6

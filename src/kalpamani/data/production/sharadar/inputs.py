@@ -84,7 +84,7 @@ LEDGER_OUTCOME_COMPLETED: Final = "COMPLETED"
 #: A verification launch's row (proposed ADR-0045): the identity was consumed by a
 #: verification task that reserved nothing, and may never be launched for production.
 LEDGER_OUTCOME_VERIFIED: Final = "VERIFIED"
-#: A permission-probe launch's row (proposed ADR-0048): the identity was consumed by a
+#: A permission-probe launch's row (ADR-0048): the identity was consumed by a
 #: probe task that issued one operation or held; never COMPLETED, never VERIFIED.
 LEDGER_OUTCOME_PROBED: Final = "PROBED"
 LEDGER_OUTCOMES: Final[frozenset[str]] = frozenset(

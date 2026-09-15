@@ -4,7 +4,7 @@ One class implements :class:`~permission_cells.PermissionClient` over whatever S
 injected ``client_for(service)`` returns: the workstation tool hands in a profile-pinned
 session's clients (ADR-0047), the probe task's entrypoint hands in the task's isolated,
 container-credentialed clients restricted to the **one** service its subcell's operation
-names (proposed ADR-0048). Every operation is one SDK call, classified into an
+names (ADR-0048). Every operation is one SDK call, classified into an
 :class:`~r3_verification.Observation` by status, error code and the documented message
 context, and the response body -- a secret's value, an object's bytes -- is **never read**.
 
@@ -245,7 +245,7 @@ def single_service_client(
 ) -> SdkPermissionClient:
     """A client that can reach the one service ``operation`` names, and no other.
 
-    The probe task's factory (proposed ADR-0048): a subcell that issues ``GetSecretValue``
+    The probe task's factory (ADR-0048): a subcell that issues ``GetSecretValue``
     holds a Secrets Manager client and nothing else; an S3 subcell holds an S3 client and
     nothing else. Any other service is refused before an SDK client exists.
     """

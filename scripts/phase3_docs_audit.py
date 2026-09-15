@@ -838,6 +838,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # ADR-0047 merged as PR #106 on 2026-09-15: the negative R-1 launches and the R-4..R-9
     # permission subcells.
     ("ADR-0047", "PR #106 merged"),
+    # ADR-0048 merged as PR #107 on 2026-09-15: the permission-probe tasks and the held
+    # ExecuteCommand check; the deletion rehearsal path designed and not opened.
+    ("ADR-0048", "PR #107 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull

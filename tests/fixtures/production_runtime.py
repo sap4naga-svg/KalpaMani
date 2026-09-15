@@ -353,13 +353,13 @@ def compiled_verification_task(actor: ProductionActor) -> CompiledTask:
 
 
 def probe_revision_arn(actor: ProductionActor, revision: int = REVISION) -> str:
-    """The registered revision ARN of ``actor``'s permission-probe family (proposed ADR-0048)."""
+    """The registered revision ARN of ``actor``'s permission-probe family (ADR-0048)."""
     family = constants_for(actor).probe_task_family
     return f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:{revision}"
 
 
 def compiled_probe_task(actor: ProductionActor) -> CompiledTask:
-    """The compiled task of ``actor``'s permission-probe image (proposed ADR-0048)."""
+    """The compiled task of ``actor``'s permission-probe image (ADR-0048)."""
     return CompiledTask(
         actor=actor,
         family=constants_for(actor).probe_task_family,

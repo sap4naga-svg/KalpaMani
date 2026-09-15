@@ -1,6 +1,6 @@
 """ADR-0047 (accepted on the merge of PR #106) says what the code does, and the code says the same.
 
-The catalogue's layers have since moved under proposed ADR-0048 (the task-role and ExecuteCommand
+The catalogue's layers have since moved under ADR-0048 (the task-role and ExecuteCommand
 subcells are executable by a probe launch); ADR-0047's own text records the state it decided and
 is held here as that record, with its accepted-state note and its one post-acceptance correction.
 
@@ -347,7 +347,7 @@ def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
     assert len(pc.SUBCELLS) == 98 and "98 in" in ADR_PLAIN
     assert by_layer[pc.Layer.L3_RUNTIME] == 56
     assert by_layer[pc.Layer.L3_BY_R1] == 6
-    # ADR-0047's 36 BLOCKED are, since proposed ADR-0048, 32 task-layer, 2 held-task and 2
+    # ADR-0047's 36 BLOCKED are, since ADR-0048, 32 task-layer, 2 held-task and 2
     # BLOCKED: the same subcells, the same cells; the ADR's table is the day it decided.
     assert (
         by_layer[pc.Layer.L3_TASK] + by_layer[pc.Layer.L3_HELD_TASK] + by_layer[pc.Layer.BLOCKED]
@@ -413,7 +413,7 @@ def test_every_adr_0036_clause_of_r4_to_r9_is_held_by_a_subcell() -> None:
 
 def test_the_two_required_mechanisms_are_named_and_not_implemented() -> None:
     # The s.5 table is history (the mechanisms it named are delivered or designed by
-    # proposed ADR-0048, which the post-acceptance note records); the deletion role's
+    # ADR-0048, which the post-acceptance note records); the deletion role's
     # dependency is still the code's.
     assert "## 5. Required and not implemented" in ADR_TEXT
     assert "task-side permission probe entry" in ADR_PLAIN
@@ -421,7 +421,7 @@ def test_the_two_required_mechanisms_are_named_and_not_implemented() -> None:
     assert "running task of the actor" in ADR_PLAIN
     assert "not implemented; not authorized by this ADR" in ADR_PLAIN
     assert "A human role never stands in for a task role" in ADR_PLAIN
-    assert "Since acceptance (proposed ADR-0048" in ADR_PLAIN
+    assert "Since acceptance (ADR-0048" in ADR_PLAIN
     assert "no deletion task definition exists" in pc.DELETION_DEPENDENCY
     assert "ADR-0048" in pc.DELETION_DEPENDENCY
     assert (

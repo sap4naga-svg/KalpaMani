@@ -148,7 +148,7 @@ class TestSelectionAndVocabulary:
                 assert "no processing" in sentence and EXIT_STATUS[outcome] == 18
                 continue
             if outcome in PROBE_OUTCOMES:
-                # The probe sentences (proposed ADR-0048): a probe issued its one
+                # The probe sentences (ADR-0048): a probe issued its one
                 # operation or held; it neither completed nor refused.
                 assert sentence.startswith("permission probe ")
                 assert 41 <= EXIT_STATUS[outcome] <= 44

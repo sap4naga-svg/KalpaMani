@@ -630,7 +630,7 @@ def test_the_dockerfile_copies_only_the_allowlisted_sources_and_the_declared_con
             source == path or source.startswith(path + "/") for path in context.IMAGE_SOURCE_PATHS
         ), source
     assert "docker/production/build" not in dockerfile
-    # One copy per target: two production, two verification and (proposed ADR-0048)
+    # One copy per target: two production, two verification and (ADR-0048)
     # two permission-probe targets.
     assert dockerfile.count("COPY --chmod=0444 configuration/compiled-configuration.json") == 6
     assert dockerfile.count("ARG CONFIGURATION_DIGEST") == 6
