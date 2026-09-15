@@ -610,13 +610,19 @@ class RehearsalTaskState(StrEnum):
 
     #: ``RunTask`` was never issued, or answered a definitive refusal: no task exists.
     NOT_STARTED = "NOT_STARTED"
-    #: A task was started and the launcher stopped it (a misplacement, a stale release).
+    #: A task was started, the launcher stopped it (a misplacement, a stale release) AND
+    #: then observed the exact task ``STOPPED``: settled by observation (correction 2).
     STOPPED = "STOPPED"
     #: A task was started and observed at its terminal state.
     OBSERVED_TERMINAL = "OBSERVED_TERMINAL"
     #: A task was started and NOT observed terminal (observation exhausted, or a stop
     #: that failed): only the cleanup settles it.
     STARTED_NOT_TERMINAL = "STARTED_NOT_TERMINAL"
+    #: A task was started, ``StopTask`` was acknowledged, and the exact task was NOT
+    #: observed ``STOPPED`` afterwards -- still running when the observation bound was
+    #: reached, or the observation failed: an acknowledgement is not a termination, so
+    #: only the cleanup, describing this known task, settles it (correction 2).
+    STOP_ACKNOWLEDGED = "STOP_ACKNOWLEDGED"
     #: Whether a task exists is not established (an ambiguous ``RunTask``; an
     #: interruption recovered offline): only the cleanup, listing by the tag, settles it.
     UNKNOWN = "UNKNOWN"
@@ -771,11 +777,13 @@ def unsettled_rehearsals(
     A reservation with no resolution is interrupted work (the process died between the
     reservation and its terminal outcome) and needs ``recover_rehearsal_launch``. A
     resolution whose task state is not self-settled (``UNKNOWN``,
-    ``STARTED_NOT_TERMINAL``) stays unsettled until a verified cleanup pass recorded after
-    it names the reservation's digest and confirms its known tasks stopped -- uncertain
-    cleanup is preserved as unsettled, never assumed. Every unsettled reservation blocks
-    every rehearsal launch, whatever the subcell, the records directory or the
-    authorization; a malformed reservation or resolution refuses rather than unblocks.
+    ``STARTED_NOT_TERMINAL``, ``STOP_ACKNOWLEDGED``) stays unsettled until a verified
+    cleanup pass recorded after it names the reservation's digest and confirms its known
+    task stopped by describing exactly that task -- an acknowledged stop is not a
+    termination, and uncertain cleanup is preserved as unsettled, never assumed. Every
+    unsettled reservation blocks every rehearsal launch, whatever the subcell, the records
+    directory or the authorization; a malformed reservation or resolution refuses rather
+    than unblocks.
     """
     resolutions = rehearsal_resolutions(store)
     passes = list(cleanups)
@@ -1051,6 +1059,9 @@ class RehearsalLaunchReport:
     parameter_deletes: int
     record: RehearsalLaunchRecord | None
     cleanup_failures: tuple[str, ...]
+    #: The task state the resolution anchored (``None`` when refused before the
+    #: reservation): what the launcher established about the task, never more.
+    task_state: RehearsalTaskState | None
 
     def __repr__(self) -> str:
         return f"RehearsalLaunchReport(outcome={self.outcome.value!r})"
@@ -1099,7 +1110,9 @@ def launch_rehearsal(
     failures: list[str] = []
 
     def report(
-        outcome: RehearsalLaunchOutcome, record: RehearsalLaunchRecord | None = None
+        outcome: RehearsalLaunchOutcome,
+        record: RehearsalLaunchRecord | None = None,
+        task_state: RehearsalTaskState | None = None,
     ) -> RehearsalLaunchReport:
         return RehearsalLaunchReport(
             outcome=outcome,
@@ -1110,6 +1123,7 @@ def launch_rehearsal(
             parameter_deletes=counts["delete"],
             record=record,
             cleanup_failures=tuple(failures),
+            task_state=task_state,
         )
 
     try:
@@ -1169,7 +1183,7 @@ def launch_rehearsal(
             store.anchor(REHEARSAL_RESOLUTIONS_ANCHOR, identity, resolution.document())
         except StoreError as error:
             failures.append(f"resolution:{error.defect.value}")
-        return report(outcome, record)
+        return report(outcome, record, state)
 
     issued = now()
     rehearsal_input = RehearsalInput(
@@ -1237,9 +1251,33 @@ def launch_rehearsal(
             break
         sleep(OBSERVATION_POLL_SECONDS)
 
+    def stop_and_observe(reason: str) -> RehearsalTaskState:
+        """Stop the exact task, then observe it to ``STOPPED`` within what is left of the
+        one observation bound. Correction 2: a ``StopTask`` acknowledgement settles nothing
+        -- ECS acknowledges a stop it has yet to carry out -- so the state is ``STOPPED``
+        only on an observed termination, ``STOP_ACKNOWLEDGED`` (unsettled, the task
+        identity kept for the cleanup) when the task was still running at the bound or
+        the observation failed, and ``STARTED_NOT_TERMINAL`` when the stop itself was
+        refused."""
+        nonlocal reads
+        if not _stop(adapters, task_arn, reason, counts, failures):
+            return RehearsalTaskState.STARTED_NOT_TERMINAL
+        while not exhausted():
+            reads += 1
+            counts["describe"] += 1
+            try:
+                current = adapters.ecs.describe_task(task_arn)
+            except ComputeError as error:
+                failures.append(f"describe_task_after_stop:{error.failure.value}")
+                return RehearsalTaskState.STOP_ACKNOWLEDGED
+            if current.stopped:
+                return RehearsalTaskState.STOPPED
+            sleep(OBSERVATION_POLL_SECONDS)
+        failures.append("describe_task_after_stop:observation_exhausted")
+        return RehearsalTaskState.STOP_ACKNOWLEDGED
+
     def stopped_state() -> RehearsalTaskState:
-        stopped = _stop(adapters, task_arn, STOP_REASON_MISPLACED, counts, failures)
-        return RehearsalTaskState.STOPPED if stopped else RehearsalTaskState.STARTED_NOT_TERMINAL
+        return stop_and_observe(STOP_REASON_MISPLACED)
 
     if described is None or interface_id is None or described.stopped:
         state = stopped_state()
@@ -1282,13 +1320,9 @@ def launch_rehearsal(
             expires_at_iso=release.expires_at.isoformat(),
         )
     except ParameterError:
-        stopped = _stop(adapters, task_arn, STOP_REASON_STALE_RELEASE, counts, failures)
+        state = stop_and_observe(STOP_REASON_STALE_RELEASE)
         _delete(adapters, REHEARSAL_INPUT_PARAMETER, counts, failures)
-        return resolve(
-            RehearsalLaunchOutcome.STALE_RELEASE,
-            RehearsalTaskState.STOPPED if stopped else RehearsalTaskState.STARTED_NOT_TERMINAL,
-            task_id=task_id,
-        )
+        return resolve(RehearsalLaunchOutcome.STALE_RELEASE, state, task_id=task_id)
     # Observe to the terminal state.
     terminal: TaskDescription | None = None
     while not exhausted():

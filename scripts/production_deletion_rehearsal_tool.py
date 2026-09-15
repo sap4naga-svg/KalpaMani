@@ -601,6 +601,7 @@ def rehearse(
         f"rehearsal launch={report.outcome.value} subcell={subcell_id} "
         f"run_tasks={report.run_tasks} describes={report.describes} stops={report.stops} "
         f"parameter_puts={report.parameter_puts} parameter_deletes={report.parameter_deletes} "
+        f"task_state={'none' if report.task_state is None else report.task_state.value} "
         f"cleanup_failures={list(report.cleanup_failures)}"
     )
     if report.record is not None:
