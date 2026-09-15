@@ -131,18 +131,59 @@ accepted request; `overrides` stays absent, `enableExecuteCommand` stays `false`
 the release written, the task observed to its terminal state, the prescribed cleanup, and a **launch
 record plus an owner-ledger row** (`kind = permission-probe`, outcome `PROBED` from a probe exit,
 `REFUSED` or `HALTED` otherwise) written under the ledger lock — every launched identity is in the
-ledger, probe or not. The launch record's specification digest is the **attempt's digest**.
+ledger, probe or not.
+
+**The launch is attributed before it is made** (correction 1, §8.1). Between the attempt and the first
+client, under the ledger lock, the tool **reserves the probe identity beside the ledger** exactly as the
+launch tool reserves every identity (ADR-0045): an exclusive `kalpamani-launch-reservation/v1` carrying
+the whole **probe launch specification** — the registered probe target and placement, and a workload
+naming the subcell, the prepared statement, the written attempt, the session stamp and its `startedBy`
+tag, the hold and the digest of the materialized probe input. The launch record then names **that
+specification's digest** and binds to the reservation through the one record-to-reservation rule; an
+interrupted launch — after `RunTask`, before any launch publication — is attributable to its attempt,
+its tag and its cluster **from the reservation alone**. The consumed authorization stays consumed; a
+reserved identity that never reached the ledger refuses every further probe launch until
+`--recover-probe-launch <id>` records its row offline (from the launch record when one exists and
+binds, `HALTED` from the reservation otherwise; a record naming another specification refuses) —
+nothing is relaunched, nothing is removed, the attempt stays `INTERRUPTED`, and the cleanup discovers
+any started task on the reservation's cluster by the reservation's tag, bounded, with the launch
+record's task, when one was written, confirmed by exact identity. No post-launch record is needed to
+account for a started probe.
 
 The subcell is then **`AWAITING_RECEIPT`** (the cell `INCONCLUSIVE`, never `PASSED` on an exit code):
 `--complete-subcell <id> --receipt-lines <file>` verifies the hand-read receipt against that launch
-record through the accepted validator, holds its permission block to this attempt, statement, subcell
-and stamp, and writes the permission record — `identity_verified` exactly when the probe's bootstrap
-released, which is the task's own identity proof; the created object is the attempt's exact key; the
-probe task itself is a started task of the record, discovered by the session's tag and confirmed
-`STOPPED` by the cleanup like every launched task. A receipt of a probe that refused before its
-operation completes the record as `UNDECIDED` (`NOT_EXERCISED`, zero operations), never re-executed
-automatically. A launch that started no task consumes the authorization and leaves the attempt
-`INTERRUPTED`. The receipt collector of ADR-0044 §5 stays deferred: receipts are hand-read.
+record through the accepted validator, holds its outcome to the **exit code the launcher observed at
+the terminal state**, holds its permission block to this attempt, statement, subcell and stamp, writes
+the permission record — `identity_verified` exactly when the probe's bootstrap released, which is the
+task's own identity proof; the created object is the attempt's exact key; the probe task itself is a
+started task of the record, discovered by the session's tag and confirmed `STOPPED` by the cleanup
+like every launched task — **keeps the receipt as evidence** (`kalpamani-probe-receipt-evidence/v1`:
+the receipt document as collected, bound to the launch record by that record's digest) and completes
+the owner-ledger row from it. A receipt of a probe that refused before its operation completes the
+record as `UNDECIDED` (`NOT_EXERCISED`, zero operations), never re-executed automatically. A launch
+that started no task consumes the authorization and leaves the attempt `INTERRUPTED`. **Completion is
+repeatable** (correction 1, §8.1): an interruption between the record, the receipt evidence and the
+ledger leaves a partial completion, and the same completion run again with the same receipt writes
+exactly what is missing — the receipt must then re-establish what the existing record recorded — while
+a completion already whole changes nothing and says so; no evidence is ever removed. The receipt
+collector of ADR-0044 §5 stays deferred: receipts are hand-read.
+
+**A probe-layer result binds through its whole evidence** (correction 1, §8.2). The one validator
+(ADR-0047 §3.4) requires of a task-layer or held-task record, beyond the permission chain: exactly one
+probe launch attributed to the attempt by its reservation, with exactly one launch record that binds to
+that reservation (specification, workload, target, placement) and whose workload names this subcell,
+statement, attempt, stamp and tag, the actor's probe entry and identity, the hold of the layer, and
+the task the record started; exactly one owner-ledger row for that identity, of the probe kind and
+actor, launched when the record says and completed `RECEIPT_VERIFIED` with the receipt's disposition;
+exactly one receipt evidence, **re-verified on every read** against that launch record's expectation,
+naming the record by digest, whose outcome is the observed terminal exit and whose permission block
+equals the record's observation (a task subcell) or which attests a released, held probe (a held
+subcell, §3). A missing receipt reads `AWAITING_RECEIPT`; a missing, substituted, duplicated or
+contradicting launch, reservation, ledger or receipt reads `UNBOUND` and never `PASSED`; a duplicate is
+a defect, never a choice among candidates; a probe launch record no reservation attributes makes every
+probe subcell `UNBOUND`. The task-issued operation (the receipt's block) and the launcher's
+`ExecuteCommand` observation (the record written at launch) stay two different facts with their own
+evidence.
 
 ### 2.6 Classification: every issuing service's documented denial
 
@@ -156,23 +197,40 @@ does not know stay `AMBIGUOUS` — `UNDECIDED`. The R-3 classifier is unchanged.
 The two `R6-*-EXECUTE-COMMAND` subcells move to layer **`L3_HELD_TASK`**. Their target is the actor's
 own **held probe task**: the tool launches the probe family with `hold_seconds = 180` (bounded by the
 probe's ceiling of 600 s and the launcher's observation ceiling), and `launch_authorized_run` invokes
-its one **`while_running`** hook exactly once — after the release is written and before observation
-begins, the one moment an attributable, released, running task of the actor exists — with the launched
-task's handle. The hook issues **one `ExecuteCommand`** under the launcher's profile with the
-documented request (`cluster`, `task`, `command`, `interactive: true`) and records the answer at once:
-a denial `MATCHED`; **an unexpected session (a 200) is an inversion and a capability to close** — the
-task is stopped immediately, the stop acknowledged in the record; an `InvalidParameterException`, a
-`TargetNotConnectedException` or a task that already exited decides nothing (`UNDECIDED`). The hook is
-admitted for a released permission-probe launch only, its own failure never changes the sequence, and
-a held launch that never reached its check (a misplacement, a refused release) writes no record: the
-attempt stays `INTERRUPTED` and the cleanup discovers the task by the tag. The security property under
+its one **`while_running`** hook at most once — after the release is written and before observation
+begins — and only once the **held-task precondition** holds (correction 1, §8.3): the launcher
+describes the task it started afresh, at 5 s intervals for at most 120 s (inside the probe's own hold),
+until `DescribeTasks` reports it **`RUNNING`** on the registered revision with the registered image;
+that fresh description (`HeldTask`: task, revision, image, `lastStatus`, when observed, how many
+descriptions) is what the check receives and what is kept as evidence
+(`kalpamani-held-task-evidence/v1`). The hook then issues **one `ExecuteCommand`** under the launcher's
+profile with the documented request (`cluster`, `task`, `command`, `interactive: true`) and records
+the answer at once: a denial `MATCHED`; **an unexpected session (a 200) is an inversion and a
+capability to close** — the task is stopped immediately, the stop acknowledged in the record; an
+`InvalidParameterException`, a `TargetNotConnectedException` or a task that already exited decides
+nothing (`UNDECIDED`). A task that stops before it is observed running, that has not reached `RUNNING`
+at the ceiling, that cannot be described, or that reports another revision or image is **not
+checked**: the launch reports which (`TASK_STOPPED`, `READINESS_TIMEOUT`, `OBSERVATION_FAILED`,
+`TASK_MISMATCH`), the record says nothing was issued (`UNDECIDED`, `NOT_EXERCISED`) and the held-task
+evidence says why — one attempt, explicit accounting, no retry. The hook is admitted for a released
+permission-probe launch only, its own failure never changes the sequence, and a held launch that never
+reached its release (a misplacement, a refused release) writes no record: the attempt stays
+`INTERRUPTED` and the cleanup discovers the task by the reservation's tag. The security property under
 test is preserved: `enableExecuteCommand` stays `false` on every task definition, the launcher keeps
 its explicit deny, and nothing here enables the capability to make the test runnable.
 
-**A stated limitation.** Whether ECS evaluates the caller's IAM authorization before it validates the
-task's `enableExecuteCommand` state is not established offline. If the service refuses on the
-parameter first, the recorded answer is `UNDECIDED`, and the subcell stays undecided rather than
-reading as a permission verdict it did not obtain.
+**What the precondition proves, and what it does not.** The fresh `RUNNING` description proves that,
+at the moment the check was admitted, the exact task this sequence started and released was running on
+the registered revision and image — the probe was *available* as a target. The probe's own receipt
+(`PROBE_HELD` from a released bootstrap, kept as evidence at completion, §2.5) proves the task then held
+as designed; a receipt that says its bootstrap refused, or that it did not hold, reads the check as
+`UNDECIDED` — the launcher's denial against a task whose availability was not established decides
+nothing, and never `PASSED`. **What remains an evaluation-order limitation**: whether ECS evaluates the
+caller's IAM authorization before it validates the task's `enableExecuteCommand` state, and whether the
+task's managed agent was connected, are not established offline and are not observable without the
+capability the test refuses to enable. If the service refuses on the parameter or the connection
+first, the recorded answer is `UNDECIDED`, and the subcell stays undecided rather than reading as a
+permission verdict it did not obtain.
 
 ## 4. Proposed and not opened — the deletion role's rehearsal path (2 subcells stay BLOCKED)
 
@@ -208,8 +266,11 @@ Every subcell keeps its ADR-0036 §3 trace (ADR-0047 §4); no clause moves. The 
 
 **98 subcells; 56 / 6 / 32 / 2 / 2.** Nothing has been executed: every task-layer and held-task
 subcell reads `UNEXECUTED`, and R-8 reads `BLOCKED` with its dependency. The cell runner reads a
-launched, uncompleted probe as `AWAITING_RECEIPT` (`INCONCLUSIVE`), and **empty, partial, simulated
-or blocked coverage never passes**.
+launched, uncompleted probe as `AWAITING_RECEIPT` (`INCONCLUSIVE`), a reserved, unrecorded probe
+launch as `INTERRUPTED` awaiting recovery, a check whose held-task precondition did not hold as
+`UNDECIDED`, and a result whose launch, reservation, ledger or receipt evidence is missing,
+substituted, duplicated or contradicting as `UNBOUND`; **empty, partial, simulated or blocked coverage
+never passes**.
 
 ## 6. Amendments stated
 
@@ -228,6 +289,11 @@ or blocked coverage never passes**.
 - **ADR-0047 §5**: the task-side probe entry and the `ExecuteCommand` mechanism are delivered here; the
   deletion path is designed (§4) and not opened. ADR-0047's own §5 table is history and is not
   rewritten.
+- **ADR-0045 §3 / ADR-0047 §3.4, narrowly** (correction 1): the launch specification admits a
+  permission-probe workload, and a probe launch is reserved beside the ledger before `RunTask`
+  exactly as every other launch; the one validator requires of a probe-layer result its
+  reservation-attributed launch, its re-verified receipt (`kalpamani-probe-receipt-evidence/v1`),
+  its ledger row and, held, its precondition evidence (`kalpamani-held-task-evidence/v1`).
 - No accepted request, key builder, bucket policy, assignment or human permission set changes; no
   ADR is superseded.
 
@@ -240,3 +306,47 @@ a probe subcell is executed only by an authorization naming its prepared stateme
 one launch; the receipt is hand-read; none has run against AWS. The deletion rehearsal path stays a
 separate decision. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE, live trading
 stays HARD-DISABLED.**
+
+## 8. Corrections after review (correction 1; the ADR stays PROPOSED)
+
+An independent review of the pull request introducing this ADR found three defects in the offline
+implementation beside it. Each was reproduced through the real tool, launcher, store and runner on
+synthetic files before it was corrected; each correction is stated above where it belongs and recorded
+here as a correction rather than rewritten as though the design had always said so.
+
+### 8.1 Probe interruption and recovery
+
+As reviewed, a probe launch interrupted after `RunTask` and before its launch record left the started
+task unaccounted for: the cleanup discovered probe tasks only from a launch record, so no record meant
+no discovery, while the authorization stayed consumed; and a completion interrupted between its
+permission record and the ledger replacement could not be repeated, leaving the row provisional for
+good. Now the probe identity is **reserved beside the ledger before `RunTask`** with the whole
+specification (§2.5), the cleanup accounts for the started probe from the reservation alone,
+`--recover-probe-launch` records the row offline without relaunching, and completion is repeatable
+without relaunching, removing evidence or leaving a partial completion unrepairable. `RunTask` is never
+retried; discovery stays bounded; an unresolved discovery stays explicit.
+
+### 8.2 Complete probe evidence binding
+
+As reviewed, the one validator bound a probe-layer result through its permission chain only: with the
+launch record removed, its verified placement substituted, a second launch record beside it, or the
+ledger row reverted to exit-code-only, the matrix preserved `PASSED`; the receipt was not kept at all.
+Now the validator requires the launch, receipt and ledger evidence stated in §2.5, refuses missing,
+substituted, conflicting and duplicate launch evidence without selecting among candidates, and holds
+the receipt outcome to the observed terminal exit and the permission observation to the attempt and
+statement; a task-issued operation and the launcher's `ExecuteCommand` observation each need their own
+evidence.
+
+### 8.3 The held-task precondition
+
+As reviewed, the launcher issued its `ExecuteCommand` immediately after the release, on the placement
+description alone, without observing the task `RUNNING`: a task still `PENDING`, or stopped after the
+release, was checked as if available, and a denial against it read `PASSED`. Now the bounded
+precondition of §3 admits the check only on a fresh `RUNNING` description of exactly the launched task,
+keeps that description as evidence, records every other outcome as no check made, and the completion
+of the held subcell from the probe's own receipt holds the probe to having held; the evaluation-order
+limitation is restated exactly. One `ExecuteCommand` attempt, explicit accounting, the
+unexpected-success cleanup and the refusal to enable the capability are unchanged.
+
+None of this opens the deletion rehearsal path (§4), grants a deferred permission, or changes the
+gates of §7.

@@ -295,6 +295,22 @@ an intercepted transport (the serialized `ExecuteCommand` request asserted there
 declarations validated in an external copy under the pinned provider. No image, no Terraform plan or
 apply, no AWS call, no private input.
 
+**Correction cycle 1 (review of the pull request; ADR-0048 §8; still PROPOSED).** Three findings,
+each reproduced on the reviewed head through the real modules before correction: (1) a probe launch
+interrupted after `RunTask` and before its record left the started task unaccounted for, and a
+completion interrupted before the ledger was unrepeatable — now the probe identity is reserved beside
+the ledger before `RunTask` with its whole specification, the cleanup accounts for the task from the
+reservation alone, `--recover-probe-launch` records the row offline, completion is repeatable, and
+`RunTask` is never retried; (2) the validator preserved `PASSED` with the launch record removed or
+substituted, a duplicate beside it or the ledger row reverted — now the launch, the receipt (kept and
+re-verified on every read) and the ledger row are required, exact and never chosen among candidates,
+tested through the public runner beside a valid control; (3) the `ExecuteCommand` check was issued
+without observing the held task `RUNNING` — now a bounded fresh-description precondition admits the
+check, is kept as evidence, and every other outcome decides nothing. Focused regressions and the
+required gates on the corrected head are recorded in the export; **synthetic tests do not establish AWS
+verification**, nothing has been run against AWS, the deletion path stays BLOCKED, and every deferred
+permission is unchanged.
+
 ## F-11 — the negative R-1 launches and the R-4 … R-9 subcells, ADR-0047 (accepted on the merge of PR #106)
 
 **Disposition: implemented offline, accepted (PR #106 merged 2026-09-15T00:26:19Z, merge commit

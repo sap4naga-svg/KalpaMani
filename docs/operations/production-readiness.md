@@ -861,6 +861,40 @@ obtainable only after the relevant runtime step.
   an external copy under the pinned provider (`init`, `validate`, 15 mock-provider runs) — declared,
   not planned, not applied.
 
+### 12.1a Correction cycle 1 (review of the pull request; ADR-0048 §8; the ADR stays PROPOSED)
+
+Three defects the review found in 12.1 were reproduced through the real tool, launcher, store and
+runner on synthetic files, then corrected:
+
+- **Probe interruption and recovery.** The probe identity is now **reserved beside the ledger before
+  `RunTask`** with the whole probe launch specification (target, placement, and a workload naming the
+  subcell, statement, attempt, stamp, `startedBy` tag, hold and input digest); the launch record names
+  that specification and binds to the reservation. An interruption after `RunTask` and before any
+  launch publication leaves the authorization consumed and the started task attributable from the
+  reservation alone: the cleanup discovers it on the reservation's cluster by the reservation's tag
+  (bounded; an unresolved discovery stays explicit), `--recover-probe-launch` records the ledger row
+  offline (from a bound launch record, else `HALTED`), every other probe launch refuses until it does,
+  and `RunTask` is never retried. A completion interrupted between its record, its receipt evidence and
+  the ledger is **repeatable** with the same receipt (writes exactly what is missing; a whole completion
+  changes nothing and says so); nothing is relaunched and no evidence is removed.
+- **Complete probe evidence binding.** The one validator now requires of every probe-layer result its
+  reservation-attributed launch (exactly one record, bound; workload, actor, identity, entry, hold and
+  started task exact), its owner-ledger row (`RECEIPT_VERIFIED`, the receipt's disposition, launched
+  when the record says), and its **receipt evidence** (`kalpamani-probe-receipt-evidence/v1`, kept at
+  completion and **re-verified on every read** against the launch record's expectation; outcome = the
+  observed terminal exit; the permission block = the record's observation for a task subcell; a
+  released, held probe for a held subcell). Missing, substituted, conflicting or duplicate evidence
+  reads `UNBOUND` (a missing receipt `AWAITING_RECEIPT`), never `PASSED`, and no candidate is ever
+  chosen among several — tested through the public runner beside a complete valid control.
+- **The held-task precondition.** The launcher admits its one `ExecuteCommand` only on a **fresh
+  `RUNNING` description** of exactly the task it started, on the registered revision and image (5 s
+  polls, 120 s ceiling, inside the probe's hold), kept as `kalpamani-held-task-evidence/v1`; a task
+  stopped first, not running at the ceiling, undescribable or mismatching is **not checked** and the
+  record decides nothing (`UNDECIDED`, the evidence naming which). The held subcell completes from the
+  probe's own receipt, which must attest a released, held probe. What the precondition proves (the
+  probe was available as a target) and what stays an evaluation-order limitation (IAM before
+  `enableExecuteCommand`; the managed agent's connection) are stated in ADR-0048 §3.
+
 ### 12.2 Designed and not opened — the deletion rehearsal path
 
 ADR-0048 §4 designs a rehearsal family under the deletion role, a rehearsal launcher passing exactly
