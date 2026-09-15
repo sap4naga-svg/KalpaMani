@@ -27,7 +27,8 @@ one decision it deferred (§4) — effective together with the offline code merg
 else. While the pull request was open it was proposed and carried no authority — true then, and not
 rewritten. **Acceptance authorized no R-3 session, no materialization, no launch, no run, no probe, no
 analysis, no Terraform plan or apply and no IAM change**; every tool still refuses by default and none
-has run against AWS. The deferral of §4 is decided by a later, separately proposed ADR-0047.
+has run against AWS. The deferral of §4 is decided by a later, separately proposed ADR-0047 — since
+accepted on the merge of PR #106 (2026-09-15).
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no
 container image built or pulled, no registry contacted, no credential retrieved, no provider request,
@@ -251,7 +252,7 @@ and launch records it already had access to and adds no field to any of them.
 
 ## 4. Deferred: the negative R-1 cells
 
-> **Decided since by proposed ADR-0047** (a later, separate pull request): the two negative modes are
+> **Decided since by ADR-0047** (a later, separate pull request, PR #106, since merged): the two negative modes are
 > bound into the authorized specification and the launcher, and R-4 .. R-9 are expanded into
 > executable subcells. The text below records the deferral as this ADR made it and is not rewritten.
 

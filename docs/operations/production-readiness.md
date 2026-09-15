@@ -726,7 +726,12 @@ docs-audit registry say *accepted* where they said *proposed*, with the days it 
 preserved as written. **Acceptance authorized no R-3 session, no materialization, no launch, no run,
 no probe, no analysis, no Terraform plan or apply and no IAM change.**
 
-## 11. The coverage cycle — negative R-1 launches and the R-4 … R-9 subcells implemented offline; proposed ADR-0047
+## 11. The coverage cycle — negative R-1 launches and the R-4 … R-9 subcells implemented offline; ADR-0047 (accepted on the merge of PR #106)
+
+*ADR-0047 has since been accepted: PR #106 merged 2026-09-15T00:26:19Z (merge commit
+`167f1564378cfb96759093b43fbde5443f6c56b6`). The sections below record the cycle and its corrections
+as they were written, and §11.2's "decided only by acceptance" is decided; §12 records the mechanisms
+cycle that followed.*
 
 **Status: offline code over accepted contracts, proposed in its own pull request; not an
 authorization and not runtime evidence.** Baseline `main` at `5174dcf290b4837d38af8ce4a4b975c6557e482e` (the PR #105 merge).
@@ -814,8 +819,61 @@ deletion role** for R-8. Until they exist, R-4, R-5 and R-8 read `BLOCKED` with 
 and the aggregate cannot read `VERIFIED`. Acceptance would grant no permission and authorize no
 execution.
 
+*§11.2 is history: ADR-0047's acceptance decided the release-mode field, the contracts and the cleanup
+wording; the two mechanisms are delivered (the probe entry, the held task) or designed and not opened
+(the deletion path) by proposed ADR-0048 — §12.*
+
 ### 11.3 What remains — the refreshed owner checklist
 
 [`production-owner-inputs.md`](production-owner-inputs.md) §D now separates the values required before
 packaging, the decisions or permissions required before cloud verification, and the evidence
 obtainable only after the relevant runtime step.
+
+## 12. The mechanisms cycle — permission-probe tasks and the held ExecuteCommand check implemented offline; proposed ADR-0048
+
+### 12.1 Implemented offline (never run)
+
+- **Permission-probe entries** `kalpamani-production-acquire-probe` / `kalpamani-research-build-probe`
+  (`permission_probe_entry.py`): the accepted bootstrap over the **probe input**
+  (`kalpamani-permission-probe-input/v1`, `permission_probe.py` — the subcell, the bound statement and
+  attempt digests, the stamp, the exact resolved target, a bounded hold), then exactly one catalogued
+  operation under the task role through `permission_cells.issue_subcell` over the one service the
+  operation names (`permission_client.single_service_client`), or a hold; `PROBE_MATCHED` /
+  `PROBE_INVERTED` / `PROBE_UNDECIDED` / `PROBE_HELD` (41–44); the receipt's closed `permission`
+  block (`kalpamani-task-receipt/v3`), never a value, key, name or ARN.
+- **The workstation tool**: a task-layer subcell is prepared and authorized as before, its authorization
+  consumed and its attempt written, then launched through the accepted launch sequence under the
+  actor's human and launcher profiles (a probe revision from the registration's optional
+  `permission_probe` target, `startedBy` the session's tag, no override), recorded as a launch record
+  and an owner-ledger row (`permission-probe`, `PROBED`), and completed only from the hand-read
+  receipt (`--complete-subcell --receipt-lines`) verified against that launch record —
+  `identity_verified` exactly when the probe's bootstrap released; the probe task is a started task the
+  cleanup discovers by the tag and confirms `STOPPED`. Layers `L3_TASK` (32) and `L3_HELD_TASK` (2);
+  status `AWAITING_RECEIPT` (cell `INCONCLUSIVE`) between launch and completion.
+- **The held `ExecuteCommand` check**: the launcher's one `while_running` check against its own held
+  probe task, with the documented request (`interactive: true` — the earlier `interactive=False` was an
+  invalid request a fake 200 had accepted); an unexpected session is INVERTED and the task stopped at
+  once; the security property (no `enableExecuteCommand`, the launcher's deny) is unchanged.
+- **Classification**: `AccessDeniedException` / `UnauthorizedOperation` are denials for every issuing
+  service (they had read as `AMBIGUOUS`); every unknown answer still decides nothing.
+- **Declarations**: the two probe families and one more exact `ecs:RunTask` resource per launcher,
+  gated like the verification families (`acquisition_probe`, `build_probe` digest keys), validated in
+  an external copy under the pinned provider (`init`, `validate`, 15 mock-provider runs) — declared,
+  not planned, not applied.
+
+### 12.2 Designed and not opened — the deletion rehearsal path
+
+ADR-0048 §4 designs a rehearsal family under the deletion role, a rehearsal launcher passing exactly
+that role to ECS (no human assumption), the role's two bootstrap parameters, and three R-8 subcells
+over the exact synthetic object the bound R-4 human record established, confirmed removed by the
+control principal's cleanup. It reverses ADR-0007's verified inert property and is **a governance
+decision not taken here**: R-8 stays BLOCKED with that dependency named.
+
+### 12.3 Counts, and what has not moved
+
+98 subcells: 56 `L3_RUNTIME` / 6 `L3_BY_R1` / 32 `L3_TASK` / 2 `L3_HELD_TASK` / 2 `BLOCKED`. Nothing has
+been executed; no probe has been launched; no image exists; every owner value stays MISSING; the
+receipt collector (ADR-0044 §5) and the G-14 transition stay deferred and were not reopened. One
+limitation is stated rather than resolved: whether ECS authorizes the caller before validating a
+task's `enableExecuteCommand` state is not established offline — if not, the held check reads
+`UNDECIDED`, never a verdict it did not obtain.

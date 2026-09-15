@@ -271,9 +271,36 @@ correction (a placement- or workload-only change to a valid launch record read `
 `f949dcb9…`) was reproduced with the real parsers and runner on synthetic files and is held the same way. ADR-0045's acceptance (PR #104 merged 2026-09-14) is synchronized in the same pull
 request and implied none of this: no analyzer permission, no runtime verification, no image, no run.
 
-## F-11 — the negative R-1 launches and the R-4 … R-9 subcells, proposed ADR-0047
+## F-12 — the permission-probe tasks and the held ExecuteCommand check, proposed ADR-0048
 
-**Disposition: implemented offline, proposed.** The two negative modes are bound into the
+**Disposition: implemented offline, proposed; the deletion rehearsal path designed and not opened.**
+The 32 task-role subcells are executed by a **permission-probe task** of the actor's own family: the
+workstation prepares and authorizes the subcell exactly as before, consumes the authorization, writes
+the attempt, then launches the probe through the accepted launch sequence with the bound statement as
+its input; the probe composes the accepted bootstrap, issues **exactly one** catalogued operation under
+the task role over the one service it names, and carries the classified answer home in its receipt;
+the workstation completes the record only from that receipt, verified against its launch record, with
+`identity_verified` exactly when the probe's bootstrap released — **never on an exit code**. The two
+`ExecuteCommand` subcells are checked by the launcher against its own **held** probe task, once, with
+the documented request; an unexpected session is an inversion and the task is stopped. Every issuing
+service's documented denial is classified; every unknown answer decides nothing. The probe task is a
+started task the cleanup discovers by the session tag and confirms `STOPPED`. **The deletion role's
+rehearsal path is designed (ADR-0048 §4) and not opened**: opening it reverses ADR-0007's verified
+inert property, so R-8's two subcells stay BLOCKED with that dependency named. Layers 56 / 6 / 32 / 2
+/ 2; nothing executed; **acceptance would authorize no execution and grant no permission**.
+
+**Validation performed for the mechanisms cycle.** The full suite, `ruff check`, `ruff format --check`,
+`mypy` and the docs audit on the final head, every one on synthetic temporary files, counting fakes and
+an intercepted transport (the serialized `ExecuteCommand` request asserted there); the amended
+declarations validated in an external copy under the pinned provider. No image, no Terraform plan or
+apply, no AWS call, no private input.
+
+## F-11 — the negative R-1 launches and the R-4 … R-9 subcells, ADR-0047 (accepted on the merge of PR #106)
+
+**Disposition: implemented offline, accepted (PR #106 merged 2026-09-15T00:26:19Z, merge commit
+`167f1564378cfb96759093b43fbde5443f6c56b6`); while the pull request was open it was proposed, which is
+how the paragraph below reads and is not rewritten.** The 36 BLOCKED subcells it names are, since, 34
+executable offline by proposed ADR-0048's mechanisms (F-12) and 2 still BLOCKED on the deletion path. The two negative modes are bound into the
 authorized specification (and so into the authorization's digest), applied by the launcher in one
 changed step with no retry in any mode, recorded with the launcher's own terminal observation, and
 passed by the matrix only on the expected, receipt-verified, bound refusal — **an unexpected success

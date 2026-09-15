@@ -93,8 +93,8 @@ deferred owner decision is resolved by assumption.**
 
 | Decision or permission | For | Recorded in |
 |---|---|---|
-| a **task-side permission probe entry** (a third verification entry, a task-definition family, a compiled-configuration field, a launcher resource) | the 32 task-role subcells of R-4 and R-5 — until then `BLOCKED`; a human role is never a substitute | ADR-0047 §5 |
-| a **running task of the actor** to execute into (during an authorized R-1 launch, a later decision of the verification entries) | the 2 R-6 `ExecuteCommand` subcells — until then `BLOCKED` | ADR-0047 §5 |
+| the **permission-probe families and launcher resources** proposed by ADR-0048 (two families under the actors' task roles, one more exact `ecs:RunTask` resource per launcher, two image digests) — a Terraform apply, separately authorized after ADR-0048's acceptance | the 32 task-role subcells of R-4 and R-5 and the 2 R-6 `ExecuteCommand` subcells — executable offline since ADR-0048, `UNEXECUTED` until a probe is launched; a human role is never a substitute | ADR-0048 §2, §3, §5 |
+| the **deletion rehearsal path** (a rehearsal family under the deletion role, a rehearsal launcher passing exactly that role to ECS, the role's two bootstrap parameters) — reverses ADR-0007's verified inert property | the 2 R-8 subcells — until that decision `BLOCKED` | ADR-0048 §4 — designed, not opened |
 | `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask` on the governed cluster for the **control principal** (whether its identity policy already holds them is not established here) | the cleanup's discovery and settlement of an unexpected or ambiguous launch — until then a `failed` discovery is residue | ADR-0047 §3.5, §5 — recorded, not granted |
 | an **owner attestation** for an ambiguous launch whose task is never discovered | the subcell stays `CLEANUP_UNRESOLVED` (discovery exhaustion is never proof of absence) | ADR-0047 §3.5, §5 — not implemented, not decided |
 | **discovery of a task that stopped early and aged out of the `startedBy` listing** (a `ListTasks` by `startedBy` admits no status filter; a documented request under another filter, or an attestation, would be a later decision) | such a launch stays `CLEANUP_UNRESOLVED` | ADR-0047 §3.5, §5 — limitation recorded, not implemented, not decided |
@@ -120,6 +120,8 @@ deferred owner decision is resolved by assumption.**
 
 **What the coverage cycle closed, and what it left.** The withheld-release launch mode and the negative
 R-1 cells, and the R-4 … R-9 orchestration, are no longer code gaps: both are implemented offline and
-proposed by ADR-0047. Still absent as code: the task-side permission probe entry and the deletion
-role's execution path (D.2, blocking 34 subcells), the receipt collector (ADR-0044 §5, deferred) and
-the G-14 transition procedure (deferred).
+proposed by ADR-0047. Since the mechanisms cycle (proposed ADR-0048) the task-side permission probe
+entry and the held `ExecuteCommand` check exist as offline code (34 subcells executable, none
+executed); still absent as code: the deletion role's execution path (D.2, blocking 2 subcells; designed
+by ADR-0048 §4 and not opened), the receipt collector (ADR-0044 §5, deferred) and the G-14 transition
+procedure (deferred).

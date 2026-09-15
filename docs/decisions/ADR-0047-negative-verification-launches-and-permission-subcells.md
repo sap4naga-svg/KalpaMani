@@ -19,6 +19,30 @@ IAM change, no image; and **acceptance grants no permission** — every subcell 
 the accepted declarations already state, and the two mechanisms §5 names stay unimplemented until
 their own decisions.
 
+**The condition above has since been satisfied.** **PR #106 merged** — merged **2026-09-15T00:26:19Z**,
+merge commit **`167f1564378cfb96759093b43fbde5443f6c56b6`**, ordered parents
+**`5174dcf290b4837d38af8ce4a4b975c6557e482e`** then **`7eecbb61747f8516dafd0cd44261b816fe5312bd`** (the
+approved head, after three independently reviewed correction cycles recorded in §8–§10), with a
+**merge tree identical to the reviewed pull-request head tree** (`5fcccc891aa52b0004b35656c25a9df3e76cc850`).
+ADR-0047 is therefore **ACCEPTED / IN FORCE** exactly as the clause above states — the completion of
+the verification cell matrix's executable coverage, the narrow amendments of §6, and the two mechanisms
+§5 named as required and not implemented — effective together with the offline code merged beside it,
+and nothing else. While the pull request was open it was proposed and carried no authority — true then,
+and not rewritten. **Acceptance authorized no launch, no negative launch, no permission subcell, no
+cleanup, no run, no probe, no Terraform plan or apply and no IAM change**; every tool still refuses by
+default and none has run against AWS. The mechanisms §5 names as required are decided by a later,
+separately proposed ADR-0048: the task-side probe entry and the `ExecuteCommand` mechanism are
+delivered there (with one further subcell status, `AWAITING_RECEIPT`, for a launched probe whose
+receipt is not yet verified), and the deletion role's execution path is designed there and not opened.
+
+**One sentence of §3.4 is corrected after acceptance, and the correction is recorded here rather than
+by rewriting the sentence.** §3.4 says an unverified cleanup record "never makes a prerequisite object
+available for a dependent subcell". The implementation and its tests hold the opposite direction: an
+unverified cleanup **establishes no removal**, so the prerequisite object **stays available** — a
+dependent subcell can still be prepared against it, and the next verified pass settles the object
+again. The accurate sentence is "never makes a prerequisite object *unavailable*"; the original wording
+below is kept as the record of what was reviewed and merged.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no RunTask,
 no container image built or pulled, no registry contacted, no credential retrieved, no provider
 request, no private input inspected. Every result beside this text is a counting fake's, on synthetic
@@ -263,7 +287,9 @@ tool's prerequisite availability and by its cleanup suppression alike): the same
 no earlier than the record, **and the control principal's identity verified**. **A cleanup record
 whose identity is not verified settles nothing**: it is preserved and reported (the reason names it),
 but it never confirms an object removed or a launch terminated, never makes a prerequisite object
-available for a dependent subcell, and never suppresses the next cleanup pass — a verified pass
+available for a dependent subcell [*corrected after acceptance: an unverified cleanup establishes no
+removal, so the prerequisite object stays available — it never makes it* unavailable; *see the note
+under the status*], and never suppresses the next cleanup pass — a verified pass
 settles the same object or launch again. The cell
 runner derives each subcell from the records: a bound `MATCHED` result under the current binding whose
 identity was verified and whose every open object or launch is settled is `PASSED`; **an inversion under the current
@@ -341,6 +367,12 @@ prove them.
 
 No permission is granted by this ADR: D-14 (analyzer), V-16 (`ecs:DescribeTaskDefinition`),
 `logs:GetLogEvents` (the receipt collector) and G-14 stay recorded and not granted.
+
+*Since acceptance (proposed ADR-0048, not this ADR's decision): the task-side permission probe entry
+and the running task the `ExecuteCommand` subcells needed are delivered as the permission-probe entry
+and the held probe task; the deletion role's execution path is designed as a rehearsal path and stays a
+separate decision; the control principal's ECS actions, the owner attestation and the stopped-task
+listing stay recorded as above. The table is history and is not rewritten.*
 
 ## 6. Amendments stated
 
