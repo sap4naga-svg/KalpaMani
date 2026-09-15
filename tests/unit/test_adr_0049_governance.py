@@ -56,6 +56,12 @@ def test_the_collector_bounds_and_contract_match_the_text() -> None:
         assert defect.value in ADR_TEXT, defect
     assert rc.admit_collection_records.__name__ in ADR_TEXT
     assert rc.parse_collection_record.__name__ in ADR_TEXT
+    # Correction 2: a recorded contradiction is never superseded; the disposition is explicit.
+    assert rc.DISPOSITION_CONTRACT_ID in ADR_TEXT
+    assert "is never superseded" in ADR_PLAIN
+    assert "--acknowledge-collection-contradiction" in ADR_TEXT
+    for disposition in rc.ContradictionDisposition:
+        assert disposition.value in ADR_TEXT, disposition
     assert rc.LOGS_TOTAL_MAX_ATTEMPTS == 1 and "total_max_attempts = 1" in ADR_PLAIN
     assert rc.COLLECTION_CONTRACT_ID == "kalpamani-receipt-collection/v1"
     assert rc.COLLECTION_CONTRACT_ID in ADR_TEXT

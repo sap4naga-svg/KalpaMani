@@ -935,7 +935,9 @@ task's `enableExecuteCommand` state is not established offline — if not, the h
   (`kalpamani-receipt-collection/v1`, one parser) keeping the verified receipt line and no other
   event; **one cache-admission rule for both tools** (every record about the launch read, bound to the
   launch record and the destination, contradictions and unverifiable lines refusing whatever the
-  filename order, rejected and exhausted attempts never blocking the next read); the line handed to
+  filename order, a recorded contradiction never superseded — disposed only by a hand-read completion
+  that acknowledges it by digest, recorded beside it — rejected and exhausted attempts never blocking
+  the next read); the line handed to
   **exactly the hand-read completion** — `production_launch.py --complete-row --collect-receipt` and
   `production_permission_cells.py --collect-receipt <subcell>`, each behind
   `--i-am-the-owner-authorizing-receipt-collection` and the actor's launcher identity, refused until
@@ -948,7 +950,9 @@ task's `enableExecuteCommand` state is not established offline — if not, the h
   throttle, a 5xx and a denial are asserted at an intercepted transport with invented credentials.
   Correction 1 (ADR-0049 §6): the three review findings — an incomplete scan establishing
   uniqueness, unvalidated content persisted before refusal, cached records chosen by filename order
-  with no recovery — reproduced on the reviewed head and closed.
+  with no recovery — reproduced on the reviewed head and closed. Correction 2 (ADR-0049 §6.4): a
+  recorded contradiction superseded by a later collection or a cache hit — reproduced through both
+  public paths and closed (`CONTRADICTION_UNRESOLVED`; explicit acknowledged disposition).
 - **The deletion rehearsal path** (`deletion_rehearsal.py`, proposed ADR-0049 §3; ADR-0048 §4's
   design): the target derived from the one bound, MATCHED R-4 human `PutObject` record whose key is the
   synthetic marker's content address and whose object no cleanup has settled — nothing else is ever a

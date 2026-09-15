@@ -140,10 +140,22 @@ the completion (`refused_collection_records`), **and nothing is chosen by filena
 other order**. A verified `COLLECTED` record is reused and the stream is not read again; a completion
 interrupted after the collection record repairs itself on the next run without a read. **Recovery
 from a rejected attempt is explicit and automatic**: a `RECEIPT_REJECTED`, `SCAN_INCOMPLETE`,
-exhausted, denied, throttled, failed or contradictory record never blocks — the next collection
-reads the stream again and its record is written beside the earlier ones. Contradictory or
-unverifiable `COLLECTED` records are the one state no collection resolves: they name a conflict in
-the evidence the owner reviews, and no tool picks between them. The
+exhausted, denied, throttled or failed record never blocks — the next collection reads the stream
+again and its record is written beside the earlier ones. **A recorded `CONTRADICTORY_RECEIPTS` is
+never superseded** (§6, correction 2): while it stands, the admission rule refuses
+(`CONTRADICTION_UNRESOLVED`) — no later collection is made, no `COLLECTED` record recorded before or
+after it is reused, and no ordering changes that. The one route past it is **explicit and
+evidence-bound**: the owner reads the stream, completes from a hand-read receipt
+(`--complete-row --receipt-lines` / `--complete-subcell --receipt-lines`) and acknowledges the
+contradiction record by its digest (`--acknowledge-collection-contradiction <sha256>`, repeatable;
+refused beside a collection, refused for a digest that names no recorded contradiction, and every
+unresolved contradiction must be acknowledged); the tool then writes one **disposition** record
+(`kalpamani-collection-disposition/v1`: identity, launch record digest, the contradiction record's
+digest, the digest of the receipt line completed from, `HAND_READ_COMPLETION`, the instant) beside
+the untouched contradiction record, and only a disposed contradiction admits the launch again. No
+rule chooses between two lines, no collection resolves a contradiction, and a disposition naming no
+recorded contradiction refuses (`DISPOSITION_UNBOUND`). Unverifiable or mutually contradictory
+`COLLECTED` records likewise name a conflict no tool picks between. The
 logs client is built **only inside the collection flag** (`--i-am-the-owner-authorizing-receipt-
 collection`, with `--complete-row --collect-receipt` in the launch tool and `--collect-receipt
 <subcell>` in the permission tool), after the record, its reservation, the registered destination and
@@ -314,3 +326,14 @@ Also corrected with them: a collection is refused until the launcher observed th
 state (§2.2); the tools print one closed summary line (outcome, counts, `scan_complete`); the two R-8
 subcells stay BLOCKED, the rehearsal path stays CLOSED, and no permission or runtime authorization
 moves.
+
+4. **Correction 2 — a recorded contradiction was silently superseded.** After correction 1 a
+   `CONTRADICTORY_RECEIPTS` record was history that never blocked: a later collection returning one
+   valid line completed the row and the subcell, and a `COLLECTED` record placed beside the
+   contradiction was reused in either filename order. Now the admission rule refuses while any
+   contradiction record of the launch has no disposition (`CONTRADICTION_UNRESOLVED`); the only
+   route past it is the explicit, evidence-bound disposition of §2.5 — a hand-read completion that
+   acknowledges the record by digest, recorded as `kalpamani-collection-disposition/v1` beside the
+   untouched contradiction record — and no automatic rule resolves anything. Exhausted and rejected
+   attempts stay retryable as designed; the launch tool also refuses a collection for a row that is
+   no longer provisional before any read.
