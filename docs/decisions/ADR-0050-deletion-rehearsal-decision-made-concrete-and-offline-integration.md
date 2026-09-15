@@ -22,10 +22,11 @@ Terraform plan or apply, no IAM, permission-set, key-policy or bucket-policy cha
 grants no permission** — every permission named here is declared behind a variable that is false, and
 none is applied.
 
-**Correction 1 (§8) is part of this proposal.** After review of the pull request, three findings
-were reproduced through the public tool on synthetic files and fakes and corrected in the same open
-pull request; the corrected behaviour is stated in §2.7, §2.8, §3.3, §3.5, §3.6 and §8, and the ADR
-stays PROPOSED — the correction takes no decision and authorizes nothing.
+**Corrections 1 and 2 (§8) are part of this proposal.** After review of the pull request, three
+findings (correction 1) and then one more (correction 2 — a `StopTask` acknowledgement is not a
+termination) were reproduced through the public tool on synthetic files and fakes and corrected in the
+same open pull request; the corrected behaviour is stated in §2.7, §2.8, §3.3, §3.5, §3.6 and §8, and
+the ADR stays PROPOSED — the corrections take no decision and authorize nothing.
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no log read, no S3 operation,
 no `RunTask`, no `ExecuteCommand`, no deletion, no container image built or pulled, no registry
@@ -167,8 +168,8 @@ Every outcome is recorded, none is retried, and nothing is resolved by assumptio
 | a stale input parameter exists | `REFUSED_INPUT_EXISTS` | consumed, reserved | nothing launched; the stale parameter is the owner's to remove |
 | `RunTask` refused definitively | `LAUNCH_REFUSED` | consumed, reserved | input deleted; no retry |
 | `RunTask` answered ambiguously (transient, throttled, unknown, malformed) | `LAUNCH_AMBIGUOUS` | consumed, reserved | input deleted; **never retried**; a task may exist and the cleanup discovers it by the session tag |
-| placement mismatch (subnet, groups, public IP, revision, image) | `MISPLACED` | consumed, reserved | task **stopped**, never released; no record |
-| a stale release exists | `STALE_RELEASE` | consumed, reserved | task stopped; no record |
+| placement mismatch (subnet, groups, public IP, revision, image) | `MISPLACED` | consumed, reserved | `StopTask` on the exact task, never released; no record. The stop is then **observed** (§8.4): `STOPPED` only when the task was seen `STOPPED` within the one bound; `STOP_ACKNOWLEDGED` — unsettled, the task identity kept — when it was still running at the bound or the observation failed; `STARTED_NOT_TERMINAL` when the stop was refused |
+| a stale release exists | `STALE_RELEASE` | consumed, reserved | `StopTask` on the exact task, then observed exactly as above; no record |
 | task not observed terminal within the bounds | `OBSERVATION_EXHAUSTED` | consumed | launch record written **without an exit**; **completes nothing** (`LAUNCH_NOT_TERMINAL`); the resolution records `STARTED_NOT_TERMINAL` and the launch stays unsettled until the cleanup stops the task |
 | the launcher process is interrupted after the reservation (§8.1) | no resolution — the reservation stands alone | consumed, reserved | every launch refused (`REFUSED_RECOVERY_PENDING`); `--recover-rehearsal-launch` records `RECOVERED_INTERRUPTED` with the task state `UNKNOWN` **offline, from the reservation alone**; still unsettled until the cleanup |
 | task terminal without an exit code | `LAUNCHED`, exit `null` | consumed | completes nothing |
@@ -190,10 +191,11 @@ the object. A started task the launcher lost is discovered by the cleanup throug
 `kalpamani-rehearsal-<stamp>`, as for every probe launch — under the **accepted cleanup rule and no rule
 of its own** (§8.1): the cleanup parser admits the rehearsal tag beside the permission tag
 (`CLEANUP_STARTED_BY_PREFIXES`), the reservation's cluster and tag are what it lists, and a reservation
-whose resolution is `UNKNOWN` or `STARTED_NOT_TERMINAL` is settled only by a verified cleanup recorded
-after the resolution that discovered at least one task and stopped every one. **A listing that finds
-nothing settles nothing**; uncertain cleanup is preserved as unresolved, and every unresolved
-reservation keeps every launch refused.
+whose resolution is `UNKNOWN`, `STARTED_NOT_TERMINAL` or `STOP_ACKNOWLEDGED` is settled only by a
+verified cleanup recorded after the resolution that discovered at least one task and confirmed every one
+`STOPPED` — for a known task, by describing exactly that task (§8.4). **A listing that finds nothing
+settles nothing, and a `StopTask` acknowledgement settles nothing**; uncertain cleanup is preserved as
+unresolved, and every unresolved reservation keeps every launch refused.
 
 ### 2.9 Residual risk the owner accepts by taking D-1
 
@@ -319,10 +321,15 @@ subnet, groups, the observed exit, the instants, the statement, authorization, s
 (`<ledger>.rehearsal_resolutions/<identity>.json`, `kalpamani-deletion-rehearsal-resolution/v1`: the
 reservation digest, the outcome, the task state, the task and the launch record when there is one). Every
 terminal outcome resolves: a refusal before `RunTask` is `NOT_STARTED`; an ambiguous answer is
-`UNKNOWN`; a misplaced or stale-release task is `STOPPED`, or `STARTED_NOT_TERMINAL` when the stop
-itself failed; an exhausted observation is `STARTED_NOT_TERMINAL`; a terminal task is
-`OBSERVED_TERMINAL`. `NOT_STARTED`, `STOPPED` and `OBSERVED_TERMINAL` settle themselves; the other two,
-and a reservation with no resolution at all, are **unsettled** (§2.8, §8.1).
+`UNKNOWN`; a misplaced or stale-release task is `STOPPED` only when, after the acknowledged stop, the
+exact task was **observed** `STOPPED` within what was left of the one observation bound —
+`STOP_ACKNOWLEDGED` when it was still running at the bound or the observation failed, and
+`STARTED_NOT_TERMINAL` when the stop itself was refused (§8.4); an exhausted observation is
+`STARTED_NOT_TERMINAL`; a terminal task is `OBSERVED_TERMINAL`. `NOT_STARTED`, `STOPPED` and
+`OBSERVED_TERMINAL` settle themselves; the other three, and a reservation with no resolution at all,
+are **unsettled** (§2.8, §8.1). The launch report and the tool's launch line carry the anchored
+`task_state`, and every observation failure after a stop is reported beside the outcome
+(`describe_task_after_stop:<class>`, `describe_task_after_stop:observation_exhausted`).
 
 `complete_rehearsal(launch, receipt_document, statement)` rebuilds the rehearsal record from the
 verified receipt and nothing else: the launch must be `LAUNCHED` with an observed exit
@@ -404,6 +411,7 @@ reservation, resolution or receipt evidence refuses every mode (32).
 | an unresolved launch blocks every launch, across records directories and authorizations; recovery is offline; uncertain cleanup stays unresolved | `test_production_deletion_rehearsal_correction_1.py::TestFinding1AnchoredReservationsAndRecovery` (§8.1) |
 | one binding rule; missing, substituted or conflicting evidence qualifies nothing; the prerequisite concerns the exact target; completion recovery is repeatable | `…::TestFinding2OneBindingRule` (§8.2) |
 | a hand receipt never silently supersedes a recorded contradiction; the disposition binds the receipt across interruptions | `…::TestFinding3DispositionsOnTheHandPath` (§8.3) |
+| a `StopTask` acknowledgement settles nothing: acknowledged-but-running, a failed or exhausted observation after the stop, a refused stop, and a confirmed termination, on the MISPLACED and STALE_RELEASE paths | `test_production_deletion_rehearsal_correction_2.py` (§8.4) |
 
 ## 4. Decision — the inert declaration
 
@@ -475,8 +483,9 @@ launch blocked nothing, and there was no way to recover an interrupted launch's 
 anchored there (`rehearsal_reservations`) **before the launch, retaining the whole compiled
 specification** — the `RunTask` request and its stamp — and a **resolution** is anchored beside it
 (`rehearsal_resolutions`) at every terminal outcome with the closed task state `NOT_STARTED`, `STOPPED`,
-`OBSERVED_TERMINAL`, `STARTED_NOT_TERMINAL` or `UNKNOWN`. A reservation without a resolution, or whose
-resolution is `UNKNOWN` or `STARTED_NOT_TERMINAL`, is **unsettled**; `launch_rehearsal` refuses
+`OBSERVED_TERMINAL`, `STARTED_NOT_TERMINAL`, `STOP_ACKNOWLEDGED` (§8.4) or `UNKNOWN`. A reservation
+without a resolution, or whose resolution is `UNKNOWN`, `STARTED_NOT_TERMINAL` or `STOP_ACKNOWLEDGED`,
+is **unsettled**; `launch_rehearsal` refuses
 `REFUSED_RECOVERY_PENDING` while any is, **before anything is consumed**, whatever the records directory
 and whatever the authorization. `--recover-rehearsal-launch <subcell>` records `RECOVERED_INTERRUPTED`
 with the state `UNKNOWN` for exactly one interrupted reservation of the subcell, **offline** — from the
@@ -515,3 +524,24 @@ collection refuses without `--acknowledge-collection-contradiction` (29), the di
 receipt line by digest (a different line is 30, on the hand path and in the collector's cache reuse
 alike), the acknowledgement is admitted only on `--complete-rehearsal --receipt-lines` with hex digests,
 and the disposition is written with the record so the binding survives an interruption.
+
+### 8.4 A `StopTask` acknowledgement is not a termination (correction 2)
+
+**Finding.** On the `MISPLACED` and `STALE_RELEASE` paths a successful `StopTask` acknowledgement
+resolved the reservation `STOPPED` — a self-settled state — with no `DescribeTasks` afterwards. ECS
+acknowledges a stop it has yet to carry out, so the next launch — reproduced from another records
+directory under a new authorization — consumed its authorization and issued `RunTask` while the
+stopped-but-unobserved task may still have been running.
+
+**Correction.** After an acknowledged stop the launcher observes the exact task (`DescribeTasks` on its
+ARN, 5 s polls) within what is left of the **one** observation bound (120 reads / 600 s, shared with the
+placement and terminal observations). The anchored task state is `STOPPED` only on an observed
+`STOPPED`; `STOP_ACKNOWLEDGED` — unsettled, the task identity kept — when the task was still running at
+the bound or the observation failed (the failure reported beside the outcome); `STARTED_NOT_TERMINAL`
+when the stop itself was refused. An unsettled `STOP_ACKNOWLEDGED` reservation refuses every launch
+before any authorization is consumed, across records directories, and is settled only by the accepted
+cleanup rule — the control principal's verified cleanup describing exactly the known task `STOPPED`; a
+task still `RUNNING` there is stopped again by the control and stays residue, and the block stands. The
+launch report and the tool's launch line carry the anchored `task_state`. Nothing else moves: `RunTask`
+and `StopTask` are each issued once, no record is written on either path, and the premature-settlement
+assertions of the existing suites now require the observed termination.

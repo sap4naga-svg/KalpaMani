@@ -1040,7 +1040,10 @@ taken here or by ADR-0050's acceptance**; the path stays CLOSED and R-8 BLOCKED.
   authorizations until the control principal's verified cleanup settles it under the accepted rule —
   a listing that finds nothing settles nothing; the hand-read completion is held to ADR-0049's
   contradiction and disposition rules (§8.3); every completion retains the verified receipt beside the
-  record and is repeatable from that evidence.
+  record and is repeatable from that evidence. Correction 2 (§8.4): a `StopTask` acknowledgement on the
+  MISPLACED or STALE_RELEASE path settles nothing — the exact task is observed within the one bound, only
+  an observed `STOPPED` settles, and `STOP_ACKNOWLEDGED` (task identity kept) blocks every launch until
+  the control principal's cleanup describes that task `STOPPED`.
 - **The inert declaration** (`production_deletion_rehearsal.tf`, `production_variables.tf`,
   `production_bindings.tf`): every rehearsal resource gated on stage a/b **and** `deletion_rehearsal_open`
   (**false by default**) **and** a `deletion_rehearsal` image digest, the assignment on stage b too;

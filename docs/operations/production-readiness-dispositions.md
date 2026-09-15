@@ -462,3 +462,17 @@ applies ADR-0049's contradiction and disposition rules — a recorded contradict
 acknowledgement, the disposition binds the receipt, and the binding survives an interruption. The
 after-correction reproduction reports every check NOT REPRODUCED; the ADR stays PROPOSED, D-1 not taken,
 the path CLOSED, the declaration inert, both R-8 subcells BLOCKED.
+
+**Correction 2 (PR #109 review; ADR-0050 §8.4).** Reproduced through the public tool on both the
+`MISPLACED` and the `STALE_RELEASE` paths: a successful `StopTask` acknowledgement, with no observation
+afterwards, resolved the reservation `STOPPED` and the next launch from another records directory
+consumed an authorization and issued `RunTask`. Corrected: after the acknowledged stop the launcher
+observes the exact task within the one observation bound; only an observed `STOPPED` settles; a task
+still running at the bound, or a failed observation, is `STOP_ACKNOWLEDGED` — unsettled, the task
+identity kept, every launch refused before consumption across records directories — until the control
+principal's verified cleanup describes that task `STOPPED` (a task still running there is residue and the
+block stands); a refused stop stays `STARTED_NOT_TERMINAL`. Controls in
+`test_production_deletion_rehearsal_correction_2.py` (acknowledged-but-running, failed and exhausted
+observation, refused stop, confirmed termination, the shared bound); the existing premature-settlement
+assertions now require the observed termination. ADR still PROPOSED; D-1 not taken; path CLOSED;
+declaration inert; both R-8 subcells BLOCKED.

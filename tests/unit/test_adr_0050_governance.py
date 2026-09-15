@@ -7,6 +7,7 @@ modes it integrates offline; the inert declaration; the owner checklist; the sta
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -126,6 +127,29 @@ def test_the_contracts_and_bounds_match_the_text() -> None:
         assert binding_defect.value in ADR_TEXT, binding_defect
     assert "## 8. Corrections after review (correction 1; the ADR stays PROPOSED)" in ADR_TEXT
     assert "A listing that finds nothing settles nothing" in ADR_PLAIN
+    # Correction 2: an acknowledged stop is not a termination.
+    assert "### 8.4 A `StopTask` acknowledgement is not a termination (correction 2)" in ADR_TEXT
+    assert "a StopTask acknowledgement settles nothing" in ADR_PLAIN
+    assert dl.RehearsalTaskState.STOP_ACKNOWLEDGED.value in ADR_TEXT
+    assert "describe_task_after_stop:observation_exhausted" in ADR_TEXT
+    settled = {
+        s
+        for s in dl.RehearsalTaskState
+        if dl.RehearsalResolution(
+            identity="rehearsal-20260912T150000Z-abcd",
+            reservation_sha256="0" * 64,
+            outcome="MISPLACED",
+            task_state=s,
+            task_id=None,
+            launch_record_sha256=None,
+            resolved_at=datetime(2026, 9, 12, 15, tzinfo=UTC),
+        ).self_settled
+    }
+    assert settled == {
+        dl.RehearsalTaskState.NOT_STARTED,
+        dl.RehearsalTaskState.STOPPED,
+        dl.RehearsalTaskState.OBSERVED_TERMINAL,
+    }
     assert "CLEANUP_STARTED_BY_PREFIXES" in ADR_TEXT and pc.CLEANUP_STARTED_BY_PREFIXES == (
         "kalpamani-permission-",
         dl.REHEARSAL_STARTED_BY_PREFIX,
@@ -194,6 +218,8 @@ def test_the_status_register_carries_the_proposal() -> None:
     ).read_text(encoding="utf-8")
     assert "## F-14 — the deletion rehearsal made concrete" in dispositions
     assert "Correction 1 (PR #109 review; ADR-0050 §8)" in dispositions
+    assert "Correction 2 (PR #109 review; ADR-0050 §8.4)" in dispositions
+    assert "Correction 2 (§8.4)" in readiness
     assert "### 14.2 Implemented offline (never run)" in readiness
     assert "--recover-rehearsal-launch" in readiness
     inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
