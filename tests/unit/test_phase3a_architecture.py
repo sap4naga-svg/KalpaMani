@@ -159,6 +159,10 @@ _ACCOUNT_FIELD_EXEMPT_FILES: Final = (
     DATA_ROOT / "qualify" / "sharadar" / "runtime_binding.py",
     DATA_ROOT / "production" / "sharadar" / "bindings.py",
     DATA_ROOT / "production" / "sharadar" / "identity.py",
+    # Proposed ADR-0050: the deletion rehearsal task reads the rehearsal runtime binding
+    # (`kalpamani-deletion-runtime-binding/v1`, the same AWS field) and compares its
+    # identity against it, under the same compensating check as the loaders above.
+    DATA_ROOT / "production" / "sharadar" / "deletion_rehearsal_task.py",
 )
 
 
