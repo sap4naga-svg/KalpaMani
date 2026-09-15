@@ -251,3 +251,72 @@ if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
 CHECK
 USER 10001:10001
 CMD ["kalpamani-research-build-verify"]
+
+# --- Permission-probe targets (proposed ADR-0048; not accepted). The same base, the same
+# checks, ONE probe entry executable, and a compiled configuration compiled for that
+# probe entry (the common fields only: no secret name, no origin address set, no build
+# configuration). A probe image composes the accepted bootstrap and then issues exactly
+# one catalogued permission operation under the task role, or holds.
+FROM base AS acquire-probe
+ARG CONFIGURATION_DIGEST
+COPY --chmod=0555 docker/production/entry/kalpamani-production-acquire-probe /usr/local/bin/kalpamani-production-acquire-probe
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-production-acquire-probe python - <<'CHECK'
+import hashlib, json, os, pathlib, stat, sys
+def refuse(reason):  # a closed, value-free reason; never a digest, a commit or a field
+    print("image check refused: " + reason)
+    sys.exit(1)
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+if hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]:
+    refuse("the compiled configuration does not hash to CONFIGURATION_DIGEST")
+document = json.loads(raw)
+if document.get("entry") != os.environ["EXPECTED_ENTRY"]:
+    refuse("the compiled configuration was compiled for another entry")
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+if document.get("code_commit") != commit:
+    refuse("the compiled configuration names another code commit than KALPAMANI_COMMIT")
+mode = lambda path: stat.S_IMODE(os.stat(path).st_mode)
+if mode("/etc/kalpamani") & 0o055 != 0o055:
+    refuse("the configuration directory is not traversable by the runtime user")
+if mode("/etc/kalpamani/compiled-configuration.json") & 0o044 != 0o044:
+    refuse("the compiled configuration is not readable by the runtime user")
+entry = pathlib.Path("/usr/local/bin/" + os.environ["EXPECTED_ENTRY"])
+if mode(entry) & 0o055 != 0o055:
+    refuse("the entry executable is not executable by the runtime user")
+if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
+    refuse("the entry executable's shebang is not a POSIX one")
+CHECK
+USER 10001:10001
+CMD ["kalpamani-production-acquire-probe"]
+
+FROM base AS build-probe
+ARG CONFIGURATION_DIGEST
+COPY --chmod=0555 docker/production/entry/kalpamani-research-build-probe /usr/local/bin/kalpamani-research-build-probe
+COPY --chmod=0444 configuration/compiled-configuration.json /etc/kalpamani/compiled-configuration.json
+RUN test -n "${CONFIGURATION_DIGEST}" && EXPECTED_ENTRY=kalpamani-research-build-probe python - <<'CHECK'
+import hashlib, json, os, pathlib, stat, sys
+def refuse(reason):  # a closed, value-free reason; never a digest, a commit or a field
+    print("image check refused: " + reason)
+    sys.exit(1)
+raw = pathlib.Path("/etc/kalpamani/compiled-configuration.json").read_bytes()
+if hashlib.sha256(raw).hexdigest() != os.environ["CONFIGURATION_DIGEST"]:
+    refuse("the compiled configuration does not hash to CONFIGURATION_DIGEST")
+document = json.loads(raw)
+if document.get("entry") != os.environ["EXPECTED_ENTRY"]:
+    refuse("the compiled configuration was compiled for another entry")
+commit = pathlib.Path("/opt/kalpamani/CODE_COMMIT").read_text().strip()
+if document.get("code_commit") != commit:
+    refuse("the compiled configuration names another code commit than KALPAMANI_COMMIT")
+mode = lambda path: stat.S_IMODE(os.stat(path).st_mode)
+if mode("/etc/kalpamani") & 0o055 != 0o055:
+    refuse("the configuration directory is not traversable by the runtime user")
+if mode("/etc/kalpamani/compiled-configuration.json") & 0o044 != 0o044:
+    refuse("the compiled configuration is not readable by the runtime user")
+entry = pathlib.Path("/usr/local/bin/" + os.environ["EXPECTED_ENTRY"])
+if mode(entry) & 0o055 != 0o055:
+    refuse("the entry executable is not executable by the runtime user")
+if not entry.read_bytes().startswith(b"#!/bin/sh\n"):
+    refuse("the entry executable's shebang is not a POSIX one")
+CHECK
+USER 10001:10001
+CMD ["kalpamani-research-build-probe"]

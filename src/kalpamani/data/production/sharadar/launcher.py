@@ -174,7 +174,7 @@ class LaunchReport:
     network_interface_id: str | None = None
     subnet_id: str | None = None
     security_group_ids: tuple[str, ...] | None = None
-    #: The release behaviour this sequence applied (proposed ADR-0047). Under
+    #: The release behaviour this sequence applied (ADR-0047). Under
     #: ``WITHHELD`` no release was written; under ``MISMATCHED`` the release named a
     #: task ARN derived from, and never equal to, the launched task's.
     release_mode: ReleaseMode = ReleaseMode.NORMAL
@@ -345,8 +345,17 @@ def launch_authorized_run(
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
     release_mode: ReleaseMode = ReleaseMode.NORMAL,
+    while_running: Callable[[LaunchHandle], None] | None = None,
 ) -> LaunchReport:
     """Run the whole launch sequence for one authorized run; one sanitized report.
+
+    ``while_running`` (proposed ADR-0048) is invoked exactly once, after the release is
+    written and before observation begins, with the handle of the task this sequence
+    started -- the one moment a permission-probe launch has an attributable, released,
+    running task of its own actor to make the launcher's ``ExecuteCommand`` refusal check
+    against. It is admitted for a permission-probe launch only, its own exception is
+    swallowed (the check records its own answer), and it never changes the sequence: the
+    task is observed to its terminal state and the prescribed cleanup runs as always.
 
     ``identity_proof`` is invoked with ``HUMAN`` before the input is materialized and
     before it is deleted, and with ``LAUNCHER`` before the launch and before the
@@ -355,7 +364,7 @@ def launch_authorized_run(
     that raises stops it with ``REFUSED_IDENTITY_UNAVAILABLE``; at a cleanup proof
     either is a cleanup failure for that stage alone, and the primary outcome stands.
 
-    ``release_mode`` (proposed ADR-0047) is ``NORMAL`` for every production launch and
+    ``release_mode`` (ADR-0047) is ``NORMAL`` for every production launch and
     the positive verification cells. A negative mode is admitted only for a
     verification launch -- a compiled verification target and a ``verify-`` identity --
     and changes exactly one step: under ``WITHHELD`` step 1a writes **no** release and
@@ -376,6 +385,12 @@ def launch_authorized_run(
         not compiled.verification or not authorization.identity.startswith("verify-")
     ):
         raise ValueError("a negative release mode is a verification launch's alone")
+    if compiled.probe != authorization.identity.startswith("probe-"):
+        raise ValueError("a probe identity is a permission-probe launch's alone")
+    if compiled.probe and compiled.started_by is None:
+        raise ValueError("a permission-probe launch carries the session's startedBy tag")
+    if while_running is not None and (not compiled.probe or release_mode is not ReleaseMode.NORMAL):
+        raise ValueError("a while-running check is a released permission-probe launch's alone")
     constants = constants_for(compiled.actor)
     before = _AdapterCounts.of(adapters)
     identity_calls = 0
@@ -581,6 +596,15 @@ def launch_authorized_run(
                 stop_own_task(STOP_REASON_RELEASE_EXISTS)
                 raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
             release_written = True
+
+        # Step 8a (proposed ADR-0048): the launcher's one check against its own released,
+        # running probe task. Its answer is the check's own record; a failure inside it
+        # changes nothing here.
+        if while_running is not None and release_written:
+            try:
+                while_running(LaunchHandle(task_arn=task_arn))
+            except Exception:  # noqa: S110 - the check records its own outcome
+                pass
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()

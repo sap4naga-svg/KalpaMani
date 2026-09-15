@@ -77,14 +77,16 @@ def test_the_adr_names_no_real_value() -> None:
 
 
 def test_the_four_entries_and_the_exit_code_match_the_document() -> None:
-    assert {e.value for e in entry.TaskEntry} == {
+    # ADR-0045's four entries; the two probe entries beside them are proposed ADR-0048's.
+    assert {e.value for e in entry.TaskEntry if e not in entry.PROBE_ENTRIES} == {
         "kalpamani-production-acquire",
         "kalpamani-research-build",
         "kalpamani-production-acquire-verify",
         "kalpamani-research-build-verify",
     }
     for member in entry.TaskEntry:
-        assert member.value in ADR_TEXT
+        if member not in entry.PROBE_ENTRIES:
+            assert member.value in ADR_TEXT
     assert entry.VERIFICATION_ENTRIES == frozenset(
         {entry.TaskEntry.ACQUISITION_VERIFY, entry.TaskEntry.BUILD_VERIFY}
     )
@@ -183,9 +185,11 @@ def test_the_one_admitted_corroboration_and_its_limits_are_stated() -> None:
 
 
 def test_the_receipt_version_and_the_observation_block_match_the_document() -> None:
-    assert receipts.RECEIPT_CONTRACT_ID == "kalpamani-task-receipt/v2"
+    # ADR-0045 moved the receipt to v2; proposed ADR-0048 moves it to v3 by adding the
+    # permission block, and ADR-0045's own text still names the version it introduced.
+    assert receipts.RECEIPT_CONTRACT_ID == "kalpamani-task-receipt/v3"
     assert "kalpamani-task-receipt/v2" in ADR_TEXT
-    assert receipts.RECEIPT_SCHEMA_VERSION == 2
+    assert receipts.RECEIPT_SCHEMA_VERSION == 3
     assert receipts.LEDGER_OUTCOME_OF[entry.TaskOutcome.VERIFIED_BOOTSTRAP] == "VERIFIED"
     assert LEDGER_OUTCOME_VERIFIED in LEDGER_OUTCOMES
     assert schema_observation.MAX_DIGESTS_PER_DATASET == 8

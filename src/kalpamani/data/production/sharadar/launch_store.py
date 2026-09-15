@@ -99,7 +99,7 @@ LOCK_SUFFIX: Final = ".lock"
 LEGACY_RESERVATIONS_DIRECTORY: Final = "reservations"
 #: How many fresh random names are tried before a record write is refused.
 MAX_NAME_ATTEMPTS: Final = 8
-#: Beside the ledger, the consumed authorizations (proposed ADR-0047): one exclusive file
+#: Beside the ledger, the consumed authorizations (ADR-0047): one exclusive file
 #: per authorization digest, created before the operation it authorizes.
 CONSUMED_SUFFIX: Final = ".consumed"
 

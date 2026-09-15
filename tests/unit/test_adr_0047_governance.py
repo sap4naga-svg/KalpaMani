@@ -1,4 +1,8 @@
-"""Proposed ADR-0047 says what the code does, and the code says the same.
+"""ADR-0047 (accepted on the merge of PR #106) says what the code does, and the code says the same.
+
+The catalogue's layers have since moved under proposed ADR-0048 (the task-role and ExecuteCommand
+subcells are executable by a probe launch); ADR-0047's own text records the state it decided and
+is held here as that record, with its accepted-state note and its one post-acceptance correction.
 
 The document is PROPOSED and says so; it names the release modes, the negative-evidence
 and permission contracts, the tool, the subcell counts, the two mechanisms it leaves
@@ -265,7 +269,18 @@ def _adr_0036_row(ref: str) -> str:
 
 def test_the_adr_exists_is_proposed_and_names_its_gates() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0047-*.md"))] == [ADR.name]
+    # The conditional status line is preserved as history; the acceptance note beside it
+    # records the merge, and the one post-acceptance correction of s.3.4 is recorded, not
+    # rewritten into the sentence.
     assert "Status: " + PROPOSED in ADR_TEXT
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "PR #106 merged" in ADR_PLAIN and "2026-09-15T00:26:19Z" in ADR_TEXT
+    assert "167f1564378cfb96759093b43fbde5443f6c56b6" in ADR_TEXT
+    assert "7eecbb61747f8516dafd0cd44261b816fe5312bd" in ADR_TEXT
+    assert "ADR-0047 is therefore ACCEPTED / IN FORCE" in ADR_PLAIN
+    assert "an unverified cleanup establishes no removal" in ADR_PLAIN
+    assert "never makes a prerequisite object *unavailable*" in ADR_PLAIN
+    assert "corrected after acceptance" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     assert "acceptance grants no permission" in ADR_PLAIN
     assert "## 7. Effectiveness and execution gates" in ADR_TEXT
@@ -332,7 +347,13 @@ def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
     assert len(pc.SUBCELLS) == 98 and "98 in" in ADR_PLAIN
     assert by_layer[pc.Layer.L3_RUNTIME] == 56
     assert by_layer[pc.Layer.L3_BY_R1] == 6
-    assert by_layer[pc.Layer.BLOCKED] == 36
+    # ADR-0047's 36 BLOCKED are, since proposed ADR-0048, 32 task-layer, 2 held-task and 2
+    # BLOCKED: the same subcells, the same cells; the ADR's table is the day it decided.
+    assert (
+        by_layer[pc.Layer.L3_TASK] + by_layer[pc.Layer.L3_HELD_TASK] + by_layer[pc.Layer.BLOCKED]
+        == 36
+    )
+    assert by_layer[pc.Layer.BLOCKED] == 2
     per_cell = {
         "R4-ACQUISITION": (34, 17, 0, 17),
         "R5-BUILD": (30, 15, 0, 15),
@@ -341,12 +362,13 @@ def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
         "R8-DELETION": (2, 0, 0, 2),
         "R9-FOUNDATION-TASK": (2, 2, 0, 0),
     }
+    moved = {pc.Layer.L3_TASK, pc.Layer.L3_HELD_TASK, pc.Layer.BLOCKED}
     for cell_id, (total, runtime, by_r1, blocked) in per_cell.items():
         cells = pc.subcells_of(cell_id)
         assert len(cells) == total, cell_id
         assert sum(1 for s in cells if s.layer is pc.Layer.L3_RUNTIME) == runtime, cell_id
         assert sum(1 for s in cells if s.layer is pc.Layer.L3_BY_R1) == by_r1, cell_id
-        assert sum(1 for s in cells if s.layer is pc.Layer.BLOCKED) == blocked, cell_id
+        assert sum(1 for s in cells if s.layer in moved) == blocked, cell_id
     # The table row of s.3.1 carries the same figures.
     assert (
         "| R-4 acquisition (`R4-ACQUISITION`) | 34 | 17" in ADR_TEXT
@@ -362,9 +384,9 @@ def test_the_subcell_counts_in_the_adr_are_the_catalogue_s() -> None:
     assert "| R-8 deletion (`R8-DELETION`) | 2 | — | — | 2 (no execution path) |" in ADR_TEXT
     assert "| R-9 foundation task role (`R9-FOUNDATION-TASK`) | 2 | 2" in ADR_TEXT
     assert "the 32 task-role subcells of R-4 and R-5" in ADR_PLAIN
-    assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.TASK_PROBE_DEPENDENCY) == 32
+    assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.L3_TASK) == 32
     assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.DELETION_DEPENDENCY) == 2
-    assert sum(1 for s in pc.SUBCELLS if s.blocked_on == pc.EXECUTE_COMMAND_DEPENDENCY) == 2
+    assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.L3_HELD_TASK) == 2
 
 
 def test_every_adr_0036_clause_of_r4_to_r9_is_held_by_a_subcell() -> None:
@@ -390,15 +412,18 @@ def test_every_adr_0036_clause_of_r4_to_r9_is_held_by_a_subcell() -> None:
 
 
 def test_the_two_required_mechanisms_are_named_and_not_implemented() -> None:
+    # The s.5 table is history (the mechanisms it named are delivered or designed by
+    # proposed ADR-0048, which the post-acceptance note records); the deletion role's
+    # dependency is still the code's.
     assert "## 5. Required and not implemented" in ADR_TEXT
     assert "task-side permission probe entry" in ADR_PLAIN
     assert "execution path for the deletion role" in ADR_PLAIN
     assert "running task of the actor" in ADR_PLAIN
-    assert "not a meaningful permission test" in pc.EXECUTE_COMMAND_DEPENDENCY
     assert "not implemented; not authorized by this ADR" in ADR_PLAIN
     assert "A human role never stands in for a task role" in ADR_PLAIN
-    assert "human role is never a substitute for a task role" in pc.TASK_PROBE_DEPENDENCY
+    assert "Since acceptance (proposed ADR-0048" in ADR_PLAIN
     assert "no deletion task definition exists" in pc.DELETION_DEPENDENCY
+    assert "ADR-0048" in pc.DELETION_DEPENDENCY
     assert (
         "D-14 (analyzer), V-16" in ADR_PLAIN and "G-14 stay recorded and not granted" in ADR_PLAIN
     )
@@ -413,7 +438,10 @@ def test_the_status_register_carries_the_proposal() -> None:
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert ADR.name in text
         assert "ADR-0047 negative launches + permission subcells (code):" in text
-        assert "ADR-0047 PROPOSED, NOT IN FORCE" in text
+        # Accepted on the merge of PR #106; the register says so, and no longer proposed.
+        assert "ADR-0047 ACCEPTED / IN FORCE" in text
+        assert "PR #106 merged 2026-09-15T00:26:19Z" in text
+        assert "ADR-0047 PROPOSED, NOT IN FORCE" not in text
         # The accepted-state synchronization of ADR-0046 travels in the same change.
         assert "PR #105 merged 2026-09-14T20:37:38Z" in text
         assert "ADR-0046 ACCEPTED / IN FORCE" in text

@@ -84,8 +84,18 @@ LEDGER_OUTCOME_COMPLETED: Final = "COMPLETED"
 #: A verification launch's row (proposed ADR-0045): the identity was consumed by a
 #: verification task that reserved nothing, and may never be launched for production.
 LEDGER_OUTCOME_VERIFIED: Final = "VERIFIED"
+#: A permission-probe launch's row (proposed ADR-0048): the identity was consumed by a
+#: probe task that issued one operation or held; never COMPLETED, never VERIFIED.
+LEDGER_OUTCOME_PROBED: Final = "PROBED"
 LEDGER_OUTCOMES: Final[frozenset[str]] = frozenset(
-    {LEDGER_OUTCOME_COMPLETED, LEDGER_OUTCOME_VERIFIED, "MISPLACED", "REFUSED", "HALTED"}
+    {
+        LEDGER_OUTCOME_COMPLETED,
+        LEDGER_OUTCOME_VERIFIED,
+        LEDGER_OUTCOME_PROBED,
+        "MISPLACED",
+        "REFUSED",
+        "HALTED",
+    }
 )
 
 _ACQUISITION_FIELDS: Final[frozenset[str]] = frozenset(
@@ -571,6 +581,7 @@ __all__ = [
     "INPUT_SCHEMA_VERSION",
     "LEDGER_OUTCOMES",
     "LEDGER_OUTCOME_COMPLETED",
+    "LEDGER_OUTCOME_PROBED",
     "LEDGER_OUTCOME_VERIFIED",
     "MAX_BUILD_RUNS",
     "MAX_INPUT_VALIDITY",

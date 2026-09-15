@@ -83,6 +83,8 @@ def _refuse(operation: ComputeOperation, failure: ComputeFailure) -> ComputeErro
     return ComputeError(operation=operation, failure=failure)
 
 
+#: The permission session's ``startedBy`` tag grammar (permission_cells.started_by_of).
+STARTED_BY_RE: Final = re.compile(r"kalpamani-permission-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}")
 _DENIED_CODES: Final[frozenset[str]] = frozenset(
     {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}
 )
@@ -170,6 +172,11 @@ class CompiledLaunch:
     assign_public_ip: bool
     platform_version: str
     binding_key_arn: str
+    #: The ``startedBy`` tag a permission-probe launch carries (proposed ADR-0048): the
+    #: session's tag, so the permission cleanup discovers the probe task exactly as it
+    #: discovers a task a subcell's own ``RunTask`` started. ``None`` for every
+    #: production and verification launch, whose request is unchanged.
+    started_by: str | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing."""
@@ -219,6 +226,19 @@ class CompiledLaunch:
             raise ValueError("the registered image digest must be sha256:<64 hex>")
         if not CONFIGURATION_DIGEST_RE.fullmatch(self.configuration_digest or ""):
             raise ValueError("the registered configuration digest must be 64 lowercase hex")
+        if self.started_by is not None and (
+            type(self.started_by) is not str or not STARTED_BY_RE.fullmatch(self.started_by)
+        ):
+            raise ValueError("a startedBy tag is the permission session's tag, or None")
+        if self.started_by is not None and not self.probe:
+            raise ValueError("a startedBy tag is carried by a permission-probe launch alone")
+
+    @property
+    def probe(self) -> bool:
+        """Whether this launch targets the actor's permission-probe family (proposed ADR-0048)."""
+        definition = TASK_DEFINITION_ARN_RE.fullmatch(self.task_definition_arn)
+        assert definition is not None  # held by __post_init__
+        return definition.group(2) == constants_for(self.actor).probe_task_family
 
     @property
     def verification(self) -> bool:
@@ -240,10 +260,14 @@ class CompiledLaunch:
 
 
 def run_task_request(compiled: CompiledLaunch) -> dict[str, Any]:
-    """The exact ``RunTask`` keyword arguments, and **no ``overrides`` key**."""
+    """The exact ``RunTask`` keyword arguments, and **no ``overrides`` key**.
+
+    A permission-probe launch adds ``startedBy`` -- the documented request field the
+    permission cleanup lists by -- and nothing else (proposed ADR-0048).
+    """
     if type(compiled) is not CompiledLaunch:
         raise _refuse(ComputeOperation.RUN_TASK, ComputeFailure.INVALID_CONFIGURATION)
-    return {
+    request: dict[str, Any] = {
         "cluster": compiled.cluster_arn,
         "taskDefinition": compiled.task_definition_arn,
         "count": 1,
@@ -258,6 +282,9 @@ def run_task_request(compiled: CompiledLaunch) -> dict[str, Any]:
         },
         "enableExecuteCommand": False,
     }
+    if compiled.started_by is not None:
+        request["startedBy"] = compiled.started_by
+    return request
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

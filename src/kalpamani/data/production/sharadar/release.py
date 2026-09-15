@@ -339,7 +339,7 @@ class ReleaseMode(StrEnum):
     the barrier ceiling; ``MISMATCHED`` writes a release naming a task ARN derived
     from -- and never equal to -- the launched task's, so the task exits
     ``REFUSED_RELEASE_MISMATCH``. The mode is part of the specification and therefore
-    of the digest the authorization names (proposed ADR-0047).
+    of the digest the authorization names (ADR-0047).
     """
 
     NORMAL = "NORMAL"

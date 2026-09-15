@@ -65,6 +65,8 @@ from kalpamani.data.production.sharadar.documents import (
 from kalpamani.data.production.sharadar.entry import (
     ENTRY_ACTOR,
     EXIT_STATUS,
+    PROBE_ENTRIES,
+    PROBE_OUTCOMES,
     VERIFICATION_ENTRIES,
     TaskEntry,
     TaskOutcome,
@@ -74,6 +76,7 @@ from kalpamani.data.production.sharadar.inputs import (
     ACQUISITION_INPUT_SCHEMA_VERSION,
     INPUT_SCHEMA_VERSION,
     LEDGER_OUTCOME_COMPLETED,
+    LEDGER_OUTCOME_PROBED,
     LEDGER_OUTCOMES,
     MAX_BUILD_RUNS,
     MAX_INPUT_VALIDITY,
@@ -118,6 +121,8 @@ RECORD_SCHEMA_VERSION: Final = 1
 MAX_RECORD_BYTES: Final = 256 * 1024
 #: The reserved prefix of every verification identity. A production identity never has it.
 VERIFICATION_IDENTITY_PREFIX: Final = "verify-"
+#: A permission-probe launch's identity (proposed ADR-0048): ``probe-<session stamp>``.
+PROBE_IDENTITY_PREFIX: Final = "probe-"
 #: An authorization is for now: it expires, and a stale one is refused.
 MAX_AUTHORIZATION_VALIDITY: Final = timedelta(hours=24)
 
@@ -127,6 +132,7 @@ class LaunchKind(StrEnum):
 
     PRODUCTION = "production"
     VERIFICATION = "verification"
+    PERMISSION_PROBE = "permission-probe"
 
 
 class LedgerEvidence(StrEnum):
@@ -209,6 +215,8 @@ def identity_kind(identity: str) -> LaunchKind:
     """The kind an identity's spelling declares: the reserved prefix, or production."""
     if identity.startswith(VERIFICATION_IDENTITY_PREFIX):
         return LaunchKind.VERIFICATION
+    if identity.startswith(PROBE_IDENTITY_PREFIX):
+        return LaunchKind.PERMISSION_PROBE
     return LaunchKind.PRODUCTION
 
 
@@ -781,7 +789,9 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
     targets: dict[tuple[ProductionActor, LaunchKind], LaunchTarget] = {}
     for actor in ProductionActor:
         block = actors[actor.value]
-        if type(block) is not dict or set(block) != _LAUNCH_ACTOR_FIELDS:
+        # ``permission_probe`` (proposed ADR-0048) is the one optional key: a registration
+        # made before the probe family existed stays a valid registration without it.
+        if type(block) is not dict or set(block) - {"permission_probe"} != _LAUNCH_ACTOR_FIELDS:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
         role = exact_str(block["task_role_arn"])
         subnet = exact_str(block["subnet_id"])
@@ -804,15 +814,16 @@ def parse_launch_inputs(raw: object) -> LaunchInputs:
         for kind, field in (
             (LaunchKind.PRODUCTION, "production"),
             (LaunchKind.VERIFICATION, "verification"),
+            (LaunchKind.PERMISSION_PROBE, "permission_probe"),
         ):
-            target = _target(block[field])
+            target = _target(block.get(field))
             if target is None:
                 continue
-            expected = (
-                constants_for(actor).task_family
-                if kind is LaunchKind.PRODUCTION
-                else constants_for(actor).verification_task_family
-            )
+            expected = {
+                LaunchKind.PRODUCTION: constants_for(actor).task_family,
+                LaunchKind.VERIFICATION: constants_for(actor).verification_task_family,
+                LaunchKind.PERMISSION_PROBE: constants_for(actor).probe_task_family,
+            }[kind]
             if target.family != expected:
                 raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
             # The registered roles are this actor's and the shared execution role.
@@ -857,6 +868,8 @@ def compile_launch(
         binding_key_arn=inputs.binding_key_arn,
     )
     if compiled.verification != (kind is LaunchKind.VERIFICATION):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    if compiled.probe != (kind is LaunchKind.PERMISSION_PROBE):
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     return compiled, target
 
@@ -1015,7 +1028,7 @@ class LaunchSpecification:
     placement: dict[str, Any]
     gate_evidence: dict[str, Any]
     #: The release behaviour the owner authorizes with this specification; a negative
-    #: mode is admissible for a verification launch only (proposed ADR-0047).
+    #: mode is admissible for a verification launch only (ADR-0047).
     release_mode: ReleaseMode = ReleaseMode.NORMAL
 
     def __post_init__(self) -> None:
@@ -1574,11 +1587,11 @@ class LaunchRecord:
     security_group_ids: tuple[str, ...] | None
     #: The digest of the specification the authorization named and the reservation holds.
     specification_digest: str
-    #: The release behaviour the launcher applied -- the specification's (proposed ADR-0047).
+    #: The release behaviour the launcher applied -- the specification's (ADR-0047).
     release_mode: ReleaseMode = ReleaseMode.NORMAL
     #: The exit code the launcher itself observed at the task's terminal state, or ``None``
     #: when it observed no terminal state; the terminal-state confirmation a negative cell
-    #: needs beside the receipt (proposed ADR-0047).
+    #: needs beside the receipt (ADR-0047).
     observed_exit_code: int | None = None
 
     def __post_init__(self) -> None:
@@ -1683,6 +1696,8 @@ def parse_launch_record(raw: object) -> LaunchRecord:
     kind = LaunchKind(kind_value)
     if (entry in VERIFICATION_ENTRIES) != (kind is LaunchKind.VERIFICATION):
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    if (entry in PROBE_ENTRIES) != (kind is LaunchKind.PERMISSION_PROBE):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     if document["actor"] != ENTRY_ACTOR[entry].value:
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     identity = _identity(document["identity"])
@@ -1748,7 +1763,12 @@ def parse_launch_record(raw: object) -> LaunchRecord:
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     covered: Slice | None = None
     plan_digest: str | None = None
-    if ENTRY_ACTOR[entry] is ProductionActor.ACQUISITION:
+    # A probe launch (proposed ADR-0048) carries no workload: no slice, no plan digest,
+    # whichever actor's probe it is.
+    if (
+        ENTRY_ACTOR[entry] is ProductionActor.ACQUISITION
+        and kind is not LaunchKind.PERMISSION_PROBE
+    ):
         try:
             covered = parse_slice(document["slice"])
         except Exception:
@@ -1816,6 +1836,10 @@ def provisional_ledger_outcome(
         return LEDGER_OUTCOME_COMPLETED if kind is LaunchKind.PRODUCTION else "HALTED"
     if outcome is TaskOutcome.VERIFIED_BOOTSTRAP:
         return "VERIFIED" if kind is LaunchKind.VERIFICATION else "HALTED"
+    if outcome in PROBE_OUTCOMES:
+        # A probe exit on a probe launch is PROBED (proposed ADR-0048); on any other
+        # kind the image did something the record cannot name.
+        return LEDGER_OUTCOME_PROBED if kind is LaunchKind.PERMISSION_PROBE else "HALTED"
     if outcome in BOOTSTRAP_REFUSALS or outcome in PRE_BOOTSTRAP_OUTCOMES:
         return "REFUSED"
     if outcome in LEDGER_OUTCOME_OF:
@@ -1879,6 +1903,11 @@ def complete_ledger_row(
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     if completion.outcome == "VERIFIED" and record.kind is not LaunchKind.VERIFICATION:
         raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
+    if (
+        completion.outcome == LEDGER_OUTCOME_PROBED
+        and record.kind is not LaunchKind.PERMISSION_PROBE
+    ):
+        raise _refuse(LaunchRecordDefect.ACTOR_MISMATCH)
     completed = OwnerLedgerRow(
         identity=existing.identity,
         actor=existing.actor,
@@ -1903,6 +1932,7 @@ __all__ = [
     "LEDGER_CONTRACT_ID",
     "MAX_AUTHORIZATION_VALIDITY",
     "MAX_RECORD_BYTES",
+    "PROBE_IDENTITY_PREFIX",
     "RECORD_SCHEMA_VERSION",
     "SPECIFICATION_CONTRACT_ID",
     "TASK_DEFINITION_INTENTIONAL_DIFFERENCES",

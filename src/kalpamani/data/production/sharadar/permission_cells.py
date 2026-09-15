@@ -1,4 +1,4 @@
-"""The R-4 .. R-9 permission subcells (ADR-0036 s.3; proposed ADR-0047).
+"""The R-4 .. R-9 permission subcells (ADR-0036 s.3; ADR-0047; proposed ADR-0048).
 
 ADR-0036 s.3 states each of R-4 .. R-9 as one row: a principal, what must succeed and what
 must be refused. A row is not executable; this module expands each row into **subcells**,
@@ -12,11 +12,17 @@ every object a subcell created is confirmed removed.
 **What is decided here and what is not.** A subcell's layer says what can decide it:
 ``L3_RUNTIME`` -- one real request under the principal's own profile, counted; ``L3_BY_R1``
 -- the launcher's positive operations, which the R-1 bootstrap launch already performs and
-records (no second task is started to prove them); ``BLOCKED`` -- a subcell no accepted
-mechanism can execute: a task-role subcell needs a task-side probe entry (ADR-0047 s.5
-describes its contract; it is not implemented), and the deletion role has no execution path
-(no human may assume it and no deletion task definition exists). A blocked subcell blocks
-its cell; simulation (L2) is not executed by this module and could never pass a subcell.
+records (no second task is started to prove them); ``L3_TASK`` -- one real request issued
+**by the actor's permission-probe task under its own task role** (proposed ADR-0048): the
+tool launches the probe through the accepted launch sequence with the subcell's bound
+statement as its input, the probe issues exactly that operation after the release barrier,
+and the workstation completes the record only from the probe's verified receipt;
+``L3_HELD_TASK`` -- the launcher's ``ExecuteCommand`` refusal against its own probe task,
+launched to hold for the check and issue nothing; ``BLOCKED`` -- a subcell no accepted
+mechanism can execute: the deletion role has no execution path (no human may assume it
+and no deletion task definition exists), and the path proposed ADR-0048 s.4 designs is a
+governance decision this module does not take. A blocked subcell blocks its cell;
+simulation (L2) is not executed by this module and could never pass a subcell.
 
 **Expectations are decided by classification.** An ``ALLOWED`` operation matches only the
 success class the operation returns (``200``, ``204``); a ``DENIED`` operation matches only
@@ -66,12 +72,16 @@ from kalpamani.data.production.sharadar.launch_records import (
     LaunchInputs,
     LaunchKind,
 )
+from kalpamani.data.production.sharadar.permission_probe import (
+    PermissionProbeObservation,
+    SubcellOutcome,
+)
 from kalpamani.data.production.sharadar.r3_verification import (
     CONTROL_PROFILE,
     Observation,
     ObservedClass,
-    classify,
 )
+from kalpamani.data.production.sharadar.r3_verification import classify as _classify_s3
 from kalpamani.data.production.sharadar.release import TASK_ARN_RE
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 from kalpamani.data.qualify.sharadar.runtime_binding import (
@@ -185,31 +195,24 @@ class Layer(StrEnum):
 
     L3_RUNTIME = "L3_RUNTIME"
     L3_BY_R1 = "L3_BY_R1"
+    L3_TASK = "L3_TASK"
+    L3_HELD_TASK = "L3_HELD_TASK"
     BLOCKED = "BLOCKED"
 
 
-class SubcellOutcome(StrEnum):
-    """What one executed subcell established."""
+#: The layers a permission-probe launch executes (proposed ADR-0048).
+PROBE_LAYERS: Final[frozenset[Layer]] = frozenset({Layer.L3_TASK, Layer.L3_HELD_TASK})
+#: The layers the records decide: one runtime request, one probe launch, or one held probe.
+EXECUTABLE_LAYERS: Final[frozenset[Layer]] = frozenset({Layer.L3_RUNTIME, *PROBE_LAYERS})
 
-    MATCHED = "MATCHED"
-    INVERTED = "INVERTED"
-    UNDECIDED = "UNDECIDED"
-
-
-#: The exact dependency of every blocked subcell, by principal kind.
-TASK_PROBE_DEPENDENCY: Final = (
-    "a task-side permission probe entry (proposed ADR-0047 s.5): one closed verification "
-    "entry that issues exactly one operation under the task role and prints a receipt; "
-    "not implemented, and a human role is never a substitute for a task role"
-)
+#: The exact dependency of every blocked subcell.
 DELETION_DEPENDENCY: Final = (
-    "the deletion role has no execution path: no human may assume it and no deletion task "
-    "definition exists (ADR-0007); its rehearsal is a separately authorized runbook step"
-)
-EXECUTE_COMMAND_DEPENDENCY: Final = (
-    "a running task of this actor to execute into: ExecuteCommand against a task that does "
-    "not exist is not a meaningful permission test, a task of ours runs only during an "
-    "authorized R-1 launch, and executing into it during that launch is a later decision"
+    "the deletion role has no execution path: no human may assume it, no deletion task "
+    "definition exists and no principal holds iam:PassRole for it (ADR-0007, verified); "
+    "proposed ADR-0048 s.4 designs a governed rehearsal path (a rehearsal family, a "
+    "rehearsal launcher passing exactly that role to ECS, the role's two bootstrap "
+    "parameters), and whether to open it is a governance decision taken only by that "
+    "decision's acceptance -- not by this module"
 )
 
 
@@ -270,7 +273,7 @@ def _human_and_task(
     requires: tuple[str, ...] = (),
     creates: bool = False,
 ) -> tuple[Subcell, Subcell]:
-    """The same operation under the human principal (L3) and the task role (blocked)."""
+    """The same operation under the human principal (L3) and the task role (L3_TASK)."""
     return (
         Subcell(
             subcell_id=f"{prefix}-HUMAN",
@@ -291,11 +294,13 @@ def _human_and_task(
             operation=operation,
             target=target,
             expectation=expectation,
-            layer=Layer.BLOCKED,
+            layer=Layer.L3_TASK,
             trace=trace,
-            requires=tuple(r.replace("-HUMAN", "-HUMAN") for r in requires),
+            # A task subcell reads the object the HUMAN prerequisite created: the probe
+            # task can create nothing before it runs, and the human's bound record is the
+            # exact object that exists.
+            requires=requires,
             creates=creates,
-            blocked_on=TASK_PROBE_DEPENDENCY,
         ),
     )
 
@@ -662,7 +667,6 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
             expectation=expectation,
             layer=layer,
             trace=trace,
-            blocked_on=EXECUTE_COMMAND_DEPENDENCY if layer is Layer.BLOCKED else None,
         )
         for short, launcher in (("ACQ", _AL), ("BLD", _BL))
         for name, operation, target, expectation, layer, trace in (
@@ -738,8 +742,8 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
                 Operation.ECS_EXECUTE_COMMAND,
                 TargetKind.OWN_TASK,
                 _DENY,
-                Layer.BLOCKED,
-                "R-6 must be refused: ExecuteCommand",
+                Layer.L3_HELD_TASK,
+                "R-6 must be refused: ExecuteCommand (against the actor's own held probe task)",
             ),
         )
     ),
@@ -983,6 +987,11 @@ class ResolvedTarget:
     security_group_ids: tuple[str, ...] = ()
     assign_public_ip: bool | None = None
     platform_version: str | None = None
+    #: For the launcher's ExecuteCommand against its own held probe task (proposed
+    #: ADR-0048): the task's ARN, known only once the probe is running. **Not part of
+    #: the document**: the statement binds the probe revision and placement; the task is
+    #: whichever task that authorized launch produced.
+    task_arn: str | None = None
 
     def __repr__(self) -> str:
         """The kind only."""
@@ -1006,6 +1015,55 @@ class ResolvedTarget:
     @property
     def digest(self) -> str:
         return sha256_hex(canonical_bytes(self.document()))
+
+
+def resolved_target_from(document: Mapping[str, Any]) -> ResolvedTarget:
+    """A resolved target rebuilt from its closed document, or ``ValueError``.
+
+    The probe task rebuilds the target its input carries (proposed ADR-0048); the
+    digest of the rebuilt target is the digest the statement bound.
+    """
+    fields_ = {
+        "kind",
+        "bucket",
+        "key",
+        "name",
+        "cluster_arn",
+        "task_definition_arn",
+        "task_role_arn",
+        "subnet_id",
+        "security_group_ids",
+        "assign_public_ip",
+        "platform_version",
+    }
+    if type(document) is not dict or set(document) != fields_:
+        raise ValueError("resolved target: closed field set")
+    kind = exact_str(document["kind"])
+    if kind not in {m.value for m in TargetKind}:
+        raise ValueError("resolved target: kind")
+    optional = {}
+    for name in ("bucket", "key", "name", "cluster_arn", "task_definition_arn", "task_role_arn"):
+        value = document[name]
+        if value is not None and exact_str(value) is None:
+            raise ValueError(f"resolved target: {name}")
+        optional[name] = value
+    for name in ("subnet_id", "platform_version"):
+        value = document[name]
+        if value is not None and exact_str(value) is None:
+            raise ValueError(f"resolved target: {name}")
+        optional[name] = value
+    groups = document["security_group_ids"]
+    if type(groups) is not list or any(exact_str(g) is None for g in groups):
+        raise ValueError("resolved target: security groups")
+    public = document["assign_public_ip"]
+    if public is not None and type(public) is not bool:
+        raise ValueError("resolved target: assign_public_ip")
+    return ResolvedTarget(
+        kind=TargetKind(kind),
+        security_group_ids=tuple(groups),
+        assign_public_ip=public,
+        **optional,
+    )
 
 
 def synthetic_run_id(stamp: str) -> str:
@@ -1134,7 +1192,16 @@ def resolve_target(
         if actor is ProductionActor.ACQUISITION
         else ProductionActor.ACQUISITION
     )
-    own = inputs.targets[(actor, LaunchKind.VERIFICATION)].task_definition_arn
+    # A launcher's refused launches are aimed at (derivations of) its verification
+    # revision; its ExecuteCommand (proposed ADR-0048) at its own held probe task, whose
+    # revision is the registered permission-probe family's -- a registration without one
+    # cannot resolve that target.
+    own_kind = (
+        LaunchKind.PERMISSION_PROBE if cell.layer is Layer.L3_HELD_TASK else LaunchKind.VERIFICATION
+    )
+    if (actor, own_kind) not in inputs.targets:
+        raise ValueError("the launch target's revision is not registered")
+    own = inputs.targets[(actor, own_kind)].task_definition_arn
     match = _REVISION_ARN_RE.fullmatch(own)
     if match is None:
         raise ValueError("the registered revision is not a task-definition ARN")
@@ -1236,6 +1303,29 @@ class PermissionClient(Protocol):
     ) -> Observation: ...
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Observation: ...
     def execute_command(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
+
+
+#: The error codes Secrets Manager, SSM, ECS and EC2 answer a refused request with: an
+#: ``AccessDeniedException`` (HTTP 400) or ``UnauthorizedOperation``, where S3 answers
+#: ``AccessDenied`` (403). The R-3 classifier reads S3 alone; a permission subcell issues
+#: every one of these services, so its denials are classified here (proposed ADR-0048).
+_SERVICE_DENIAL_CODES: Final[frozenset[str]] = frozenset(
+    {"AccessDeniedException", "UnauthorizedOperation"}
+)
+
+
+def classify(observation: Observation) -> ObservedClass:
+    """The class of one answer from any service a subcell issues.
+
+    The accepted S3 classifier, except that a non-S3 service's documented denial code is
+    a denial (which policy refused is not what a subcell decides). Everything else --
+    an ``InvalidParameterException``, a ``TargetNotConnectedException``, a
+    ``ResourceNotFoundException`` -- stays what the accepted classifier makes of it, and
+    an answer it does not know is ``AMBIGUOUS``: a subcell decided nothing.
+    """
+    if observation.transport_failure is None and (observation.code or "") in _SERVICE_DENIAL_CODES:
+        return ObservedClass.DENIED_OTHER
+    return _classify_s3(observation)
 
 
 #: The success class each operation expects when ALLOWED.
@@ -1996,6 +2086,11 @@ def _issue(
             assign_public_ip=target.assign_public_ip,
             platform_version=target.platform_version,
         )
+    if op is Operation.ECS_EXECUTE_COMMAND:
+        # Against the actor's own held probe task (proposed ADR-0048): the one moment a
+        # released, running, attributable task of ours exists to execute into.
+        assert target.cluster_arn is not None and target.task_arn is not None
+        return client.execute_command(cluster_arn=target.cluster_arn, task_arn=target.task_arn)
     raise ValueError("an R-1-evidenced or blocked operation is never issued here")
 
 
@@ -2009,28 +2104,57 @@ def _task_id(task_arn: str) -> str:
     return match.group(3) if match else "unknown"
 
 
-def run_subcell(
-    cell: Subcell,
-    *,
-    target: ResolvedTarget,
-    attempt: PermissionAttempt,
-    prerequisites: Mapping[str, str],
-    client: PermissionClient,
-    identity_verified: bool,
-    now: datetime,
-) -> PermissionRecord:
-    """Execute one subcell: one operation, one decision, one bounded reaction.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SubcellIssue:
+    """What issuing one subcell's operation established, before it becomes a record.
 
-    The caller has already consumed the authorization, written ``attempt`` and verified
-    the principal's identity (``identity_verified`` records that it did). A DENIED launch
-    that started tasks stops each returned task at once -- the extra operations the budget
-    allows -- and the record carries every task id and the acknowledged stops; an answer
-    that left a write or a launch open is recorded as possibly committed so the cleanup
-    settles it. The subcell is INVERTED on any started task.
+    Shared by the workstation (which wraps it into a :class:`PermissionRecord` at once)
+    and the probe task (which carries it home in its receipt as a
+    :class:`PermissionProbeObservation`, proposed ADR-0048). Classes, counts, ids.
     """
-    if cell.layer is not Layer.L3_RUNTIME:
-        raise ValueError("only an L3 runtime subcell is executed")
-    observation = _issue(cell, target, client, attempt.stamp)
+
+    observed: ObservedClass
+    outcome: SubcellOutcome
+    operations: int
+    created_bucket: str | None
+    created_key: str | None
+    possibly_created: bool
+    started_task_ids: tuple[str, ...]
+    stop_acknowledged_ids: tuple[str, ...]
+    started_by: str | None
+    possibly_started: bool
+
+    def observation(
+        self, *, subcell_id: str, statement_sha256: str, attempt_sha256: str, stamp: str
+    ) -> PermissionProbeObservation:
+        """The receipt block a probe task carries home for this issue."""
+        return PermissionProbeObservation(
+            subcell_id=subcell_id,
+            statement_sha256=statement_sha256,
+            attempt_sha256=attempt_sha256,
+            stamp=stamp,
+            observed=self.observed,
+            outcome=self.outcome,
+            created=self.created_key is not None,
+            possibly_created=self.possibly_created,
+            operations=self.operations,
+            held_seconds=0,
+        )
+
+
+def issue_subcell(
+    cell: Subcell, *, target: ResolvedTarget, client: PermissionClient, stamp: str
+) -> SubcellIssue:
+    """Issue one subcell's one operation: one decision, one bounded reaction.
+
+    A DENIED launch that started tasks stops each returned task at once -- the extra
+    operations the budget allows -- and the issue carries every task id and the
+    acknowledged stops; an answer that left a write or a launch open is possibly
+    committed so the cleanup settles it. The subcell is INVERTED on any started task.
+    """
+    if cell.layer not in EXECUTABLE_LAYERS:
+        raise ValueError("only a runtime, task or held-task subcell issues an operation")
+    observation = _issue(cell, target, client, stamp)
     observed = classify(observation)
     outcome = decide(cell, observed)
     operations = 1
@@ -2038,8 +2162,21 @@ def run_subcell(
     acknowledged: list[str] = []
     possibly_started = False
     started_by: str | None = None
-    if cell.operation in _LAUNCHING:
-        started_by = started_by_of(attempt.stamp)
+    if cell.operation is Operation.ECS_EXECUTE_COMMAND:
+        # The held probe task is this session's launch, whatever the answer: recorded as a
+        # started task so the cleanup confirms it STOPPED. An unexpected session (a 200)
+        # is an inversion and a capability to close at once: the task is stopped.
+        assert target.cluster_arn is not None and target.task_arn is not None
+        started_by = started_by_of(stamp)
+        started.append(_task_id(target.task_arn))
+        if observed is ObservedClass.OK_200:
+            stop = client.stop_task(cluster_arn=target.cluster_arn, task_arn=target.task_arn)
+            operations += 1
+            if classify(stop) is ObservedClass.OK_200:
+                acknowledged.append(_task_id(target.task_arn))
+            outcome = SubcellOutcome.INVERTED
+    elif cell.operation in _LAUNCHING:
+        started_by = started_by_of(stamp)
         returned = tuple(observation.task_arns)[:MAX_RETURNED_TASKS]
         if returned:
             assert target.cluster_arn is not None
@@ -2066,6 +2203,30 @@ def run_subcell(
             created_key, created_bucket = target.key, target.bucket
         elif observed not in _DEFINITELY_NOT_COMMITTED:
             possibly_created = True
+    return SubcellIssue(
+        observed=observed,
+        outcome=outcome,
+        operations=operations,
+        created_bucket=created_bucket,
+        created_key=created_key,
+        possibly_created=possibly_created,
+        started_task_ids=tuple(started),
+        stop_acknowledged_ids=tuple(acknowledged),
+        started_by=started_by,
+        possibly_started=possibly_started,
+    )
+
+
+def record_of(
+    cell: Subcell,
+    *,
+    issue: SubcellIssue,
+    attempt: PermissionAttempt,
+    prerequisites: Mapping[str, str],
+    identity_verified: bool,
+    now: datetime,
+) -> PermissionRecord:
+    """The record one issue establishes for ``attempt`` -- however the issue was made."""
     return PermissionRecord(
         subcell_id=cell.subcell_id,
         cell_id=cell.cell_id,
@@ -2077,16 +2238,101 @@ def run_subcell(
         attempt_sha256=attempt.digest,
         authorization_sha256=attempt.authorization_sha256,
         prerequisites=dict(prerequisites),
-        observed=observed,
-        outcome=outcome,
-        created_bucket=created_bucket,
-        created_key=created_key,
-        possibly_created=possibly_created,
-        started_task_ids=tuple(started),
-        stop_acknowledged_ids=tuple(acknowledged),
-        started_by=started_by,
-        possibly_started=possibly_started,
-        operations=operations,
+        observed=issue.observed,
+        outcome=issue.outcome,
+        created_bucket=issue.created_bucket,
+        created_key=issue.created_key,
+        possibly_created=issue.possibly_created,
+        started_task_ids=issue.started_task_ids,
+        stop_acknowledged_ids=issue.stop_acknowledged_ids,
+        started_by=issue.started_by,
+        possibly_started=issue.possibly_started,
+        operations=issue.operations,
+        identity_verified=identity_verified,
+        started_at=attempt.started_at,
+        finished_at=now,
+        binding=attempt.binding,
+    )
+
+
+def run_subcell(
+    cell: Subcell,
+    *,
+    target: ResolvedTarget,
+    attempt: PermissionAttempt,
+    prerequisites: Mapping[str, str],
+    client: PermissionClient,
+    identity_verified: bool,
+    now: datetime,
+) -> PermissionRecord:
+    """Execute one runtime subcell on the workstation: one operation, one record.
+
+    The caller has already consumed the authorization, written ``attempt`` and verified
+    the principal's identity (``identity_verified`` records that it did). A task subcell
+    is never executed here: its operation is issued by the probe task
+    (:func:`issue_subcell` on the task side) and its record completed from the receipt.
+    """
+    if cell.layer is not Layer.L3_RUNTIME:
+        raise ValueError("only an L3 runtime subcell is executed")
+    issue = issue_subcell(cell, target=target, client=client, stamp=attempt.stamp)
+    return record_of(
+        cell,
+        issue=issue,
+        attempt=attempt,
+        prerequisites=prerequisites,
+        identity_verified=identity_verified,
+        now=now,
+    )
+
+
+def record_of_probe(
+    cell: Subcell,
+    *,
+    observation: PermissionProbeObservation,
+    attempt: PermissionAttempt,
+    prerequisites: Mapping[str, str],
+    probe_task_id: str,
+    identity_verified: bool,
+    now: datetime,
+) -> PermissionRecord:
+    """The record a probe task's verified receipt establishes for ``attempt``.
+
+    The observation must name this attempt, its statement, its subcell and its stamp;
+    the object it created is the exact key the attempt named; the probe task itself is a
+    started task of this record, settled by the cleanup like every other -- confirmed
+    STOPPED by ``DescribeTasks``, discovered by the session's ``startedBy`` tag.
+    """
+    if cell.layer not in PROBE_LAYERS:
+        raise ValueError("only a probe subcell completes from a probe observation")
+    if (
+        observation.subcell_id != cell.subcell_id
+        or observation.attempt_sha256 != attempt.digest
+        or observation.statement_sha256 != attempt.statement_sha256
+        or observation.stamp != attempt.stamp
+    ):
+        raise ValueError("the probe observation does not answer this attempt")
+    created = observation.created and attempt.key is not None
+    return PermissionRecord(
+        subcell_id=cell.subcell_id,
+        cell_id=cell.cell_id,
+        principal=cell.principal,
+        operation=cell.operation,
+        target=cell.target,
+        expectation=cell.expectation,
+        stamp=attempt.stamp,
+        attempt_sha256=attempt.digest,
+        authorization_sha256=attempt.authorization_sha256,
+        prerequisites=dict(prerequisites),
+        observed=observation.observed,
+        outcome=observation.outcome,
+        created_bucket=attempt.bucket if created else None,
+        created_key=attempt.key if created else None,
+        possibly_created=observation.possibly_created and attempt.key is not None,
+        started_task_ids=(probe_task_id,),
+        stop_acknowledged_ids=(),
+        started_by=started_by_of(attempt.stamp),
+        possibly_started=False,
+        operations=observation.operations,
         identity_verified=identity_verified,
         started_at=attempt.started_at,
         finished_at=now,
@@ -2415,6 +2661,7 @@ def parse_permission_record(raw: object) -> PermissionRecord:
     acknowledged = _task_ids(d["stop_acknowledged_ids"])
     started_by = d["started_by"]
     launching = cell.operation in _LAUNCHING
+    probe = cell.layer in PROBE_LAYERS
     if (
         stamp is None
         or _STAMP_RE.fullmatch(stamp) is None
@@ -2423,13 +2670,30 @@ def parse_permission_record(raw: object) -> PermissionRecord:
         or finished_at < started_at
         or type(d["operations"]) is not int
         or type(d["operations"]) is bool
-        or not 1 <= d["operations"] <= SUBCELL_OPERATION_BUDGET
+        or not 0 <= d["operations"] <= SUBCELL_OPERATION_BUDGET
         or type(d["identity_verified"]) is not bool
         or type(d["possibly_created"]) is not bool
         or type(d["possibly_started"]) is not bool
         or not set(acknowledged) <= set(started_task_ids)
         or (started_by is not None and started_by != started_by_of(stamp))
-        or (launching != (started_by is not None))
+    ):
+        raise ValueError("permission record: field")
+    if probe:
+        # A probe-layer record (proposed ADR-0048): the one started task is the probe
+        # task itself, under the session's tag, never possibly started; a task subcell's
+        # one operation (or none, when the probe refused before it); a held subcell's one
+        # ExecuteCommand plus the stop an unexpected session provoked.
+        if (
+            started_by is None
+            or len(started_task_ids) != 1
+            or d["possibly_started"]
+            or (cell.layer is Layer.L3_TASK and (acknowledged or d["operations"] > 1))
+            or (cell.layer is Layer.L3_HELD_TASK and d["operations"] != 1 + len(acknowledged))
+            or (d["operations"] == 0) != (observed is ObservedClass.NOT_EXERCISED)
+        ):
+            raise ValueError("permission record: field")
+    elif (
+        launching != (started_by is not None)
         or (not launching and (started_task_ids or d["possibly_started"]))
         or d["operations"] != 1 + len(started_task_ids)
     ):
@@ -2439,7 +2703,7 @@ def parse_permission_record(raw: object) -> PermissionRecord:
         raise ValueError("permission record: prerequisites contradict the subcell definition")
     # The outcome must be the one the class decides; a record cannot claim otherwise.
     expected = decide(cell, observed)
-    if started_task_ids:
+    if started_task_ids and not probe:
         expected = SubcellOutcome.INVERTED
     if outcome is not expected:
         raise ValueError("permission record: outcome contradicts the observed class")
@@ -2712,6 +2976,7 @@ class SubcellStatus(StrEnum):
     UNBOUND = "UNBOUND"
     CLEANUP_UNRESOLVED = "CLEANUP_UNRESOLVED"
     AWAITING_R1 = "AWAITING_R1"
+    AWAITING_RECEIPT = "AWAITING_RECEIPT"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2733,10 +2998,24 @@ class PermissionEvidence:
     cleanups: tuple[PermissionCleanup, ...] = ()
     malformed: int = 0
     context: PermissionContext | None = None
+    #: The probe launches the tool made (proposed ADR-0048), by the digest of the
+    #: attempt each answers: the launch record's specification digest names the attempt.
+    #: A launched attempt with no record yet is AWAITING_RECEIPT, not INTERRUPTED.
+    probe_launches: dict[str, ProbeLaunch] = field(default_factory=dict)
 
     @property
     def binding(self) -> PermissionBinding | None:
         return None if self.context is None else self.context.binding
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProbeLaunch:
+    """What the runner needs of one probe launch record: the attempt it answers, and
+    whether a task started (an identifier is never carried here)."""
+
+    attempt_sha256: str
+    task_started: bool
+    observed_exit_code: int | None
 
 
 class ChainDefect(StrEnum):
@@ -2999,7 +3278,18 @@ def derive_subcell(
     stale = [r for r in evidence.records.get(cell.subcell_id, ()) if r.binding != binding]
     attempts = [a for a in evidence.attempts.get(cell.subcell_id, ()) if a.binding == binding]
     answered = {r.attempt_sha256 for r in records}
-    if any(a.digest not in answered for a in attempts):
+    unanswered = [a for a in attempts if a.digest not in answered]
+    if unanswered:
+        launched = [a for a in unanswered if a.digest in evidence.probe_launches]
+        if cell.layer in PROBE_LAYERS and launched and len(launched) == len(unanswered):
+            if all(evidence.probe_launches[a.digest].task_started for a in launched):
+                return SubcellState(
+                    subcell_id=cell.subcell_id,
+                    status=SubcellStatus.AWAITING_RECEIPT,
+                    reason="the probe task was launched and its receipt is not yet verified "
+                    "(scripts/production_permission_cells.py --complete-subcell "
+                    "--receipt-lines); the cleanup settles the object the attempt named",
+                )
         return SubcellState(
             subcell_id=cell.subcell_id,
             status=SubcellStatus.INTERRUPTED,
@@ -3043,6 +3333,20 @@ def derive_subcell(
             reason=f"observed {inverted.observed.value} against {cell.expectation.value}{detail}",
         )
     latest = sorted(records, key=lambda r: r.started_at)[-1]
+    if (
+        not latest.identity_verified
+        and latest.outcome is SubcellOutcome.UNDECIDED
+        and latest.observed is ObservedClass.NOT_EXERCISED
+    ):
+        # A probe that refused before its operation (proposed ADR-0048): nothing was
+        # issued and no identity was proven for it; the answer decided nothing, and the
+        # subcell is not re-executed automatically.
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.UNDECIDED,
+            reason="the probe refused before issuing its operation (NOT_EXERCISED); "
+            "prepare and authorize again",
+        )
     if not latest.identity_verified:
         return SubcellState(
             subcell_id=cell.subcell_id,
@@ -3086,7 +3390,7 @@ __all__ = [
     "CLEANUP_OPERATIONS_PER_TASK_MAX",
     "DELETION_DEPENDENCY",
     "DISCOVERY_MAX_PAGES",
-    "EXECUTE_COMMAND_DEPENDENCY",
+    "EXECUTABLE_LAYERS",
     "MAX_AUTHORIZATION_VALIDITY",
     "MAX_PERMISSION_RECORD_BYTES",
     "MAX_PERMISSION_TARGETS_BYTES",
@@ -3100,11 +3404,11 @@ __all__ = [
     "PERMISSION_TARGETS_CONTRACT_ID",
     "PRINCIPAL_ACTOR",
     "PRINCIPAL_PROFILE",
+    "PROBE_LAYERS",
     "SUBCELLS",
     "SUBCELL_BY_ID",
     "SUBCELL_OPERATION_BUDGET",
     "SYNTHETIC_MARKER",
-    "TASK_PROBE_DEPENDENCY",
     "TASK_STOPPED_STATUS",
     "AuthorizationDefect",
     "BoundChain",
@@ -3129,8 +3433,10 @@ __all__ = [
     "PermissionStatement",
     "PermissionTargets",
     "Principal",
+    "ProbeLaunch",
     "ResolvedTarget",
     "Subcell",
+    "SubcellIssue",
     "SubcellOutcome",
     "SubcellState",
     "SubcellStatus",
@@ -3138,9 +3444,11 @@ __all__ = [
     "TasksToSettle",
     "bind_result",
     "bucket_of",
+    "classify",
     "decide",
     "declaration_digest",
     "derive_subcell",
+    "issue_subcell",
     "parse_permission_attempt",
     "parse_permission_authorization",
     "parse_permission_cleanup",
@@ -3148,7 +3456,10 @@ __all__ = [
     "parse_permission_record",
     "parse_permission_statement",
     "parse_permission_targets",
+    "record_of",
+    "record_of_probe",
     "resolve_target",
+    "resolved_target_from",
     "run_cleanup",
     "run_subcell",
     "started_by_of",

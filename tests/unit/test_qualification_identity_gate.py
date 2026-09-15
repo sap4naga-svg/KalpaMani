@@ -693,7 +693,7 @@ def test_the_adr_0021_symbols_reach_exactly_four_production_modules() -> None:
     """Containment, as a repository fact rather than a rule to remember.
 
     The verifier declares the contract, the two qualification entry points prove
-    their own actor, and the R-4..R-9 permission-subcell tool (proposed ADR-0047)
+    their own actor, and the R-4..R-9 permission-subcell tool (ADR-0047)
     proves a qualification actor the same way -- through the accepted gate, never a
     reimplementation -- only for an R-7 subcell under that actor's own profile and
     only inside its authorized branch. A fifth module naming either symbol would be a

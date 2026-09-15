@@ -2376,7 +2376,7 @@ def test_only_the_authorized_entry_points_construct_an_sdk_client() -> None:
         # retry budget and classification at the wire (PR #105); it refuses any
         # profile-based session and sends nothing.
         PROJECT_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
-        # The same, for the permission-subcell adapter (proposed ADR-0047): invented
+        # The same, for the permission-subcell adapter (ADR-0047): invented
         # static credentials, the HTTP transport replaced, any profile session refused.
         PROJECT_ROOT / "tests" / "unit" / "test_production_permission_cells.py",
     }

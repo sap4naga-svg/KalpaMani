@@ -1,0 +1,7 @@
+#!/bin/sh
+# The acquisition actor's PERMISSION-PROBE entry executable (proposed ADR-0048): the probe
+# task definition's `command` token. Exactly one closed argument reaches the runner; anything
+# appended by a command override makes the runner refuse (REFUSED_ENTRY, exit 2). The runner
+# composes the accepted bootstrap, then issues exactly the one catalogued permission operation
+# its probe input names (or holds for the launcher's check): no processing.
+exec /usr/local/bin/python3 /opt/kalpamani/scripts/production_task_entrypoint.py kalpamani-production-acquire-probe "$@"

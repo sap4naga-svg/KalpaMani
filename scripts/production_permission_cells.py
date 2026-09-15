@@ -1,4 +1,6 @@
-"""The R-4 .. R-9 permission-subcell tool (ADR-0036 s.3; proposed ADR-0047). **Refuses by default.**
+"""The R-4 .. R-9 permission-subcell tool (ADR-0036 s.3; ADR-0047; proposed ADR-0048).
+
+**Refuses by default.**
 
 The default invocation prints the plan of one subcell, or of every subcell of one cell,
 and performs nothing. ``--check-record`` reads one permission record back through its
@@ -34,6 +36,23 @@ recorded; an answer that leaves a write or a launch open is recorded as possibly
 Every record is written exclusively under the owner's records directory beside the launch
 records, where the cell runner derives the matrix from them.
 
+**A task-role subcell is executed by a probe launch** (proposed ADR-0048). The same order to
+the attempt record; then, instead of a client, the accepted launch sequence under the actor's
+human and launcher profiles (both identities proven through the accepted bootstrap, as the
+launch tool proves them): the probe input -- the subcell, the statement and attempt digests,
+the stamp and the exact resolved target -- materialized create-only, one ``RunTask`` of the
+registered permission-probe revision tagged with the session's ``startedBy``, placement
+verified, the release written, the task observed to its terminal state, the prescribed
+cleanup, and a launch record plus an owner-ledger row written under the ledger lock. The
+subcell is then **AWAITING_RECEIPT**: ``--complete-subcell <id> --receipt-lines <file>``
+verifies the hand-read receipt against that launch record (the accepted receipt validator)
+and, from its permission block, writes the record -- ``identity_verified`` exactly when the
+probe's bootstrap released, which is the task's own identity proof. The launcher's
+``ExecuteCommand`` subcell launches a **held** probe and makes its one refusal check while
+the task runs; its record is written at once, and the held task is a started task the
+cleanup confirms STOPPED. The probe task itself is discovered by the session's tag and
+settled by the cleanup like any launched task.
+
 No AWS activity happens in this repository's tests; every result here is a counting
 fake's. **Mocked results are not AWS verification.**
 """
@@ -54,11 +73,16 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex  # noqa: E402
 from kalpamani.data.production.sharadar import permission_cells as pc  # noqa: E402
+from kalpamani.data.production.sharadar import permission_probe as pp  # noqa: E402
 from kalpamani.data.production.sharadar import r3_verification as r3  # noqa: E402
+from kalpamani.data.production.sharadar.permission_client import (  # noqa: E402
+    SdkPermissionClient,
+)
 from kalpamani.data.production.sharadar.vocabulary import (  # noqa: E402
     EXPECTED_PARTITION,
     EXPECTED_REGION,
     IdentityPath,
+    ProductionActor,
 )
 from kalpamani.data.qualify.sharadar.runtime_binding import (  # noqa: E402
     ENVIRONMENT_BINDING_ENV_VAR,
@@ -77,6 +101,11 @@ READ_TIMEOUT_SECONDS: Final = 30
 CLEANUP_MAX_KEYS: Final = 64
 #: And at most this many launching attempts settled in one pass.
 CLEANUP_MAX_LAUNCHES: Final = 8
+#: How long a held probe task waits for the launcher's ExecuteCommand check (proposed
+#: ADR-0048): the launcher makes its one check as soon as the release is written, so the
+#: hold only has to outlast placement verification and the release; bounded by the
+#: probe's own ceiling and by the launcher's observation ceiling.
+PROBE_HOLD_SECONDS: Final = 180
 
 REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--all": "one subcell per authorized invocation; there is no batch",
@@ -91,6 +120,8 @@ REFUSED_OPTIONS: Final[dict[str, str]] = {
     "--key": "keys are resolved from the catalogue, never from an argument",
     "--reuse-authorization": "an authorization is consumed by its one execution; never reused",
     "--stamp": "the session stamp is the prepared statement's, never an argument",
+    "--task": "the probe task is the one the authorized launch started, never an argument",
+    "--exit-code": "an exit code never completes a permission record; the receipt does",
 }
 
 EXIT_PLANNED: Final = 0
@@ -113,6 +144,11 @@ EXIT_REFUSED_PREPARATION: Final = 14
 EXIT_REFUSED_AUTHORIZATION: Final = 15
 EXIT_REFUSED_AUTHORIZATION_CONSUMED: Final = 16
 EXIT_REFUSED_PREREQUISITE: Final = 17
+EXIT_PROBE_LAUNCHED: Final = 0
+EXIT_PROBE_NOT_STARTED: Final = 18
+EXIT_COMPLETED: Final = 0
+EXIT_REFUSED_COMPLETION: Final = 19
+EXIT_REFUSED_LEDGER: Final = 20
 
 SENTENCES: Final[dict[str, str]] = {
     "planned": "permission subcell plan printed; nothing was performed",
@@ -151,6 +187,20 @@ SENTENCES: Final[dict[str, str]] = {
         "permission cells refused: a prerequisite object is not established by a bound record, "
         "or is no longer present"
     ),
+    "probe_launched": (
+        "permission probe launched and observed; complete the subcell from its hand-read "
+        "receipt (--complete-subcell --receipt-lines)"
+    ),
+    "probe_not_started": (
+        "permission probe launch refused before a task started; the authorization is consumed "
+        "and the attempt stays interrupted (prepare and authorize again)"
+    ),
+    "completed": "permission subcell completed from its verified receipt; the record was written",
+    "refused_completion": (
+        "permission cells refused: no launched, unanswered attempt of this subcell under the "
+        "current binding, or the receipt does not verify against its launch record"
+    ),
+    "refused_ledger": "permission cells refused: the owner ledger could not be updated",
 }
 
 
@@ -512,7 +562,7 @@ def prepare_subcell(
         cell = pc.subcell(subcell_id)
     except ValueError:
         raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL) from None
-    if cell.layer is not pc.Layer.L3_RUNTIME:
+    if cell.layer not in pc.EXECUTABLE_LAYERS:
         raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL)
     now: Callable[[], datetime] = seams["now"]
     admitted = _admit(
@@ -524,6 +574,8 @@ def prepare_subcell(
         declaration_dir=seams.get("declaration_dir", DECLARATION_DIR),
         root_source=seams.get("root_source"),
     )
+    if cell.layer in pc.PROBE_LAYERS:
+        _probe_target(admitted, cell)
     evidence = _evidence(admitted)
     prerequisites = _bound_prerequisites(cell, evidence, admitted.binding)
     stamp = r3.new_stamp(now())
@@ -589,8 +641,12 @@ def execute_subcell(
     env: Mapping[str, str],
     modules: Mapping[str, object],
     seams: dict[str, Any],
-) -> pc.PermissionRecord:
-    """The authorized branch: one subcell, on injected seams."""
+) -> pc.PermissionRecord | ProbeLaunchResult:
+    """The authorized branch: one subcell, on injected seams.
+
+    A runtime subcell returns its record; a probe-layer subcell (proposed ADR-0048)
+    returns the launch it made and, for a held subcell, the record written at once.
+    """
     if running_under_automation(env, modules):
         raise PermissionToolRefusalError(
             "refused_execution_context", EXIT_REFUSED_EXECUTION_CONTEXT
@@ -599,8 +655,10 @@ def execute_subcell(
         cell = pc.subcell(subcell_id)
     except ValueError:
         raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL) from None
-    if cell.layer is not pc.Layer.L3_RUNTIME:
+    if cell.layer not in pc.EXECUTABLE_LAYERS:
         raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL)
+    if cell.layer in pc.PROBE_LAYERS:
+        return _execute_probe(cell, parsed, env=env, seams=seams)
     now: Callable[[], datetime] = seams["now"]
     client_factory: Callable[[str, str], pc.PermissionClient] = seams["client_factory"]
     profile = pc.PRINCIPAL_PROFILE[cell.principal]
@@ -700,6 +758,484 @@ def execute_subcell(
     return record
 
 
+def _probe_target(admitted: _Admitted, cell: pc.Subcell) -> Any:
+    """The registered permission-probe target of the subcell's actor, or refuse."""
+    from kalpamani.data.production.sharadar.launch_records import LaunchKind
+
+    actor = pc.PRINCIPAL_ACTOR[cell.principal]
+    target = (
+        None
+        if actor is None
+        else admitted.context.inputs.targets.get((actor, LaunchKind.PERMISSION_PROBE))
+    )
+    if target is None:
+        raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING)
+    return target
+
+
+class ProbeLaunchResult:
+    """What executing a probe-layer subcell produced: a launch (and, held, a record)."""
+
+    __slots__ = ("attempt", "record", "report", "task_started")
+
+    def __init__(
+        self, *, attempt: pc.PermissionAttempt, report: Any, record: pc.PermissionRecord | None
+    ) -> None:
+        self.attempt = attempt
+        self.report = report
+        self.record = record
+        self.task_started = bool(report.task_started)
+
+
+def _consume_and_attempt(
+    cell: pc.Subcell,
+    parsed: argparse.Namespace,
+    admitted: _Admitted,
+    evidence: Any,
+    *,
+    now: datetime,
+) -> tuple[pc.PermissionAttempt, pc.PermissionStatement, pc.ResolvedTarget, Any]:
+    """The authorization admitted for the prepared statement, consumed; the attempt written."""
+    from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+
+    try:
+        raw = Path(parsed.authorization).read_bytes()
+        if len(raw) > MAX_RECORD_BYTES:
+            raise ValueError("oversize")
+        authorization = pc.parse_permission_authorization(
+            raw, subcell_id=cell.subcell_id, statement_sha256=None, now=now
+        )
+    except Exception:
+        raise PermissionToolRefusalError(
+            "refused_authorization", EXIT_REFUSED_AUTHORIZATION
+        ) from None
+    statement, target, _prerequisites = _prepared_statement(
+        cell, admitted, evidence, authorization.statement_sha256
+    )
+    consumption = pc.PermissionConsumption(
+        subcell_id=cell.subcell_id,
+        statement_sha256=statement.digest,
+        authorization_sha256=authorization.digest,
+        consumed_at=now,
+    )
+    try:
+        admitted.store.consume(CONSUMPTION_KIND, authorization.digest, consumption.document())
+    except StoreError as error:
+        if error.defect is StoreDefect.AUTHORIZATION_CONSUMED:
+            raise PermissionToolRefusalError(
+                "refused_authorization_consumed", EXIT_REFUSED_AUTHORIZATION_CONSUMED
+            ) from None
+        raise PermissionToolRefusalError(
+            "refused_record_write", EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    attempt = pc.PermissionAttempt(
+        subcell_id=cell.subcell_id,
+        principal=cell.principal,
+        stamp=statement.stamp,
+        authorization_sha256=authorization.digest,
+        statement_sha256=statement.digest,
+        bucket=target.bucket if cell.creates else None,
+        key=target.key if cell.creates else None,
+        started_at=now,
+        binding=admitted.binding,
+    )
+    try:
+        admitted.store.write_record("permission-attempt", attempt.document(), at=now)
+    except Exception:
+        raise PermissionToolRefusalError(
+            "refused_record_write", EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    return attempt, statement, target, authorization
+
+
+def _execute_probe(
+    cell: pc.Subcell, parsed: argparse.Namespace, *, env: Mapping[str, str], seams: dict[str, Any]
+) -> ProbeLaunchResult:
+    """A probe-layer subcell: consume, attempt, then the accepted launch sequence.
+
+    The actor's human and launcher identities are proven exactly as the launch tool
+    proves them (the accepted human bootstrap against the actor's private binding, then
+    each path's before-and-after STS proof inside the sequence). The probe input names
+    the subcell, the statement, the attempt, the stamp and the exact target; the
+    ``RunTask`` is the registered probe revision with the session's ``startedBy`` tag and
+    no override. A held subcell makes the launcher's ExecuteCommand check while the task
+    runs and writes its record at once; a task subcell's record waits for the receipt.
+    """
+    from dataclasses import replace
+
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.compute import Ec2InterfaceAdapter, EcsTaskAdapter
+    from kalpamani.data.production.sharadar.identity import (
+        ProvenIdentity,
+        production_identity_refusal,
+    )
+    from kalpamani.data.production.sharadar.inputs import input_digest
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+    from kalpamani.data.production.sharadar.launcher import (
+        LaunchAdapters,
+        LaunchAuthorization,
+        LaunchHandle,
+        launch_authorized_run,
+    )
+    from kalpamani.data.production.sharadar.outcomes import LaunchOutcome
+    from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
+    from kalpamani.data.production.sharadar.runner import HumanBootstrapOutcome, human_bootstrap
+    from kalpamani.data.production.sharadar.vocabulary import IdentityPath, constants_for
+
+    now: Callable[[], datetime] = seams["now"]
+    actor = pc.PRINCIPAL_ACTOR[cell.principal]
+    assert actor is not None
+    constants = constants_for(actor)
+    profile_of = {
+        IdentityPath.HUMAN: constants.profile,
+        IdentityPath.LAUNCHER: constants.launcher_profile,
+    }
+    launch_clients = seams["launch_clients"]
+
+    def caller_identity_under(path: IdentityPath) -> Callable[[], object]:
+        def call() -> object:
+            return launch_clients.sts(profile_of[path]).get_caller_identity()
+
+        return call
+
+    # Identity first, both paths, through the accepted human bootstrap: no parameter and
+    # no ECS call exists before both proofs.
+    binding: Any = None
+    for path in (IdentityPath.HUMAN, IdentityPath.LAUNCHER):
+        try:
+            bootstrap = human_bootstrap(
+                actor=actor,
+                path=path,
+                environment=env.get,
+                caller_identity=caller_identity_under(path),
+                root_source=seams.get("root_source"),
+                security_of=seams.get("security_of"),
+            )
+        except Exception:
+            raise PermissionToolRefusalError("refused_identity", EXIT_REFUSED_IDENTITY) from None
+        if bootstrap.outcome is not HumanBootstrapOutcome.IDENTITY_PROVEN:
+            raise PermissionToolRefusalError("refused_identity", EXIT_REFUSED_IDENTITY)
+        binding = bootstrap.binding
+
+    def identity_proof(path: IdentityPath) -> str | None:
+        verdict = production_identity_refusal(
+            actor, path=path, binding=binding, caller_identity=caller_identity_under(path)
+        )
+        return None if isinstance(verdict, ProvenIdentity) else verdict
+
+    admitted = _admit(
+        parsed,
+        env,
+        expected_account=seams["expected_account"],
+        load_environment_binding=seams["load_environment_binding"],
+        read_private=seams["read_private"],
+        declaration_dir=seams.get("declaration_dir", DECLARATION_DIR),
+        root_source=seams.get("root_source"),
+    )
+    probe_target = _probe_target(admitted, cell)
+    evidence = _evidence(admitted)
+    started_at = now()
+    attempt, statement, target, _authorization = _consume_and_attempt(
+        cell, parsed, admitted, evidence, now=started_at
+    )
+    stamp = statement.stamp
+    try:
+        compiled, _target = lr.compile_launch(
+            admitted.context.inputs, actor=actor, kind=lr.LaunchKind.PERMISSION_PROBE
+        )
+        compiled = replace(compiled, started_by=pc.started_by_of(stamp))
+    except Exception:
+        raise PermissionToolRefusalError("refused_binding", EXIT_REFUSED_BINDING) from None
+    held = cell.layer is pc.Layer.L3_HELD_TASK
+    probe_input = pp.PermissionProbeInput(
+        actor=actor,
+        identity=pp.probe_identity(stamp),
+        subcell_id=cell.subcell_id,
+        statement_sha256=statement.digest,
+        attempt_sha256=attempt.digest,
+        stamp=stamp,
+        target=target.document(),
+        hold_seconds=PROBE_HOLD_SECONDS if held else 0,
+        issued_at=started_at,
+        expires_at=started_at + pp.MAX_PROBE_INPUT_VALIDITY,
+    )
+    try:
+        authorization = LaunchAuthorization(
+            identity=probe_input.identity, input_bytes=canonical_bytes(probe_input.document())
+        )
+        adapters = LaunchAdapters(
+            ecs=EcsTaskAdapter(
+                ecs=launch_clients.ecs(constants.launcher_profile), compiled=compiled
+            ),
+            ec2=Ec2InterfaceAdapter(ec2=launch_clients.ec2(constants.launcher_profile)),
+            human_parameters=SsmParameterAdapter(ssm=launch_clients.ssm(constants.profile)),
+            launcher_parameters=SsmParameterAdapter(
+                ssm=launch_clients.ssm(constants.launcher_profile)
+            ),
+        )
+    except Exception:
+        raise PermissionToolRefusalError("refused_dependency", EXIT_REFUSED_DEPENDENCY) from None
+
+    held_issue: dict[str, Any] = {}
+
+    def while_running(handle: LaunchHandle) -> None:
+        # The launcher's one ExecuteCommand against its own released, running probe task.
+        client_factory: Callable[[str, str], pc.PermissionClient] = seams["client_factory"]
+        client = client_factory(constants.launcher_profile, admitted.environment.region)
+        aimed = replace(target, task_arn=handle.task_arn)
+        held_issue["issue"] = pc.issue_subcell(cell, target=aimed, client=client, stamp=stamp)
+        held_issue["at"] = now()
+
+    report = launch_authorized_run(
+        compiled=compiled,
+        adapters=adapters,
+        authorization=authorization,
+        identity_proof=identity_proof,
+        now=now,
+        monotonic=seams["monotonic"],
+        sleep=seams["sleep"],
+        while_running=while_running if held else None,
+    )
+    recorded_at = now()
+    record: pc.PermissionRecord | None = None
+    if held:
+        issue = held_issue.get("issue")
+        if issue is None:
+            # The sequence never reached its check: no task, a misplacement, a refused
+            # release. Nothing was issued; the attempt stays unanswered (INTERRUPTED)
+            # and the cleanup settles whatever the tag discovers.
+            record = None
+        else:
+            record = pc.record_of(
+                cell,
+                issue=issue,
+                attempt=attempt,
+                prerequisites=statement.prerequisites,
+                identity_verified=True,
+                now=recorded_at,
+            )
+    # The launch record and the owner-ledger row, under the ledger lock, exactly as the
+    # launch tool writes them: every launched identity is in the ledger, probe or not.
+    outcome = lr.provisional_ledger_outcome(
+        kind=lr.LaunchKind.PERMISSION_PROBE,
+        task_started=report.task_started,
+        misplaced=report.outcome is LaunchOutcome.MISPLACED,
+        exit_codes=report.task_exit_codes,
+    )
+    from kalpamani.data.production.sharadar.entry import TaskEntry
+
+    entry = (
+        TaskEntry.ACQUISITION_PROBE
+        if actor is ProductionActor.ACQUISITION
+        else TaskEntry.BUILD_PROBE
+    )
+    launch_record: Any = None
+    if report.handle is not None:
+        launch_record = lr.LaunchRecord(
+            entry=entry,
+            kind=lr.LaunchKind.PERMISSION_PROBE,
+            identity=probe_input.identity,
+            task_arn=report.handle.task_arn,
+            task_definition_arn=compiled.task_definition_arn,
+            image_digest=compiled.image_digest,
+            configuration_digest=compiled.configuration_digest,
+            code_commit=probe_target.code_commit,
+            input_digest=input_digest(authorization.input_bytes),
+            slice=None,
+            plan_digest=None,
+            launched_at=started_at,
+            recorded_at=recorded_at,
+            network_interface_id=report.network_interface_id,
+            subnet_id=report.subnet_id,
+            security_group_ids=report.security_group_ids,
+            specification_digest=attempt.digest,
+            observed_exit_code=report.observed_exit_code,
+        )
+        row = lr.provisional_ledger_row(launch_record, outcome=outcome, completed_at=recorded_at)
+    else:
+        row = lr.OwnerLedgerRow(
+            identity=probe_input.identity,
+            actor=actor,
+            kind=lr.LaunchKind.PERMISSION_PROBE,
+            outcome=outcome,
+            evidence=lr.LedgerEvidence.EXIT_CODE_ONLY,
+            launched_at=started_at,
+            completed_at=recorded_at,
+            slice=None,
+            plan_digest=None,
+        )
+    evidence_document = lr.evidence_document(
+        actor=actor,
+        kind=lr.LaunchKind.PERMISSION_PROBE,
+        outcome=report.outcome.value,
+        counts={
+            "parameter_reads": report.counts.parameter_reads,
+            "parameter_creates": report.counts.parameter_creates,
+            "parameter_deletes": report.counts.parameter_deletes,
+            "run_task": report.counts.run_task,
+            "describe_tasks": report.counts.describe_tasks,
+            "describe_network_interfaces": report.counts.describe_network_interfaces,
+            "stop_task": report.counts.stop_task,
+            "identity_calls": report.counts.identity_calls,
+        },
+        incident=None if report.incident is None else report.incident.value,
+        cleanup_failures=[f"{f.stage.value}:{f.failure}" for f in report.cleanup_failures],
+        task_started=report.task_started,
+        exit_codes=list(report.task_exit_codes),
+        recorded_at=recorded_at,
+    )
+    try:
+        with admitted.store.locked(now=now):
+            ledger, digest = admitted.store.read_ledger()
+            ledger = lr.append_row(ledger, row)
+            admitted.store.write_record("launch-evidence", evidence_document, at=recorded_at)
+            if launch_record is not None:
+                admitted.store.write_record(
+                    "launch-record", launch_record.document(), at=recorded_at
+                )
+            if record is not None:
+                admitted.store.write_record("permission-record", record.document(), at=recorded_at)
+            admitted.store.replace_ledger(ledger, expected_digest=digest)
+    except (StoreError, lr.LaunchRecordError) as error:
+        defect = getattr(error, "defect", None)
+        if defect is StoreDefect.LEDGER_LOCKED:
+            raise PermissionToolRefusalError("refused_ledger", EXIT_REFUSED_LEDGER) from None
+        raise PermissionToolRefusalError(
+            "refused_record_write", EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    return ProbeLaunchResult(attempt=attempt, report=report, record=record)
+
+
+def complete_subcell(
+    subcell_id: str,
+    parsed: argparse.Namespace,
+    *,
+    env: Mapping[str, str],
+    seams: dict[str, Any],
+) -> pc.PermissionRecord:
+    """Complete a launched task subcell from its hand-read receipt. Offline; no client.
+
+    Exactly one unanswered attempt of the subcell under the current binding must have a
+    probe launch record naming it; the receipt verifies against that record through the
+    accepted validator (entry, code commit, configuration digest, the binding digest over
+    task id, revision, image, identity and input digest); its permission block must name
+    this attempt, its statement, its subcell and its stamp; the record is written with
+    ``identity_verified`` exactly when the probe's bootstrap released. A receipt of a
+    probe that refused before its operation completes the record as UNDECIDED
+    (``NOT_EXERCISED``), which is never re-executed here. The owner-ledger row is
+    completed from the same receipt.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+    from kalpamani.data.production.sharadar.receipts import ReceiptError, collect_and_verify
+
+    try:
+        cell = pc.subcell(subcell_id)
+    except ValueError:
+        raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL) from None
+    if cell.layer is not pc.Layer.L3_TASK:
+        raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL)
+    now: Callable[[], datetime] = seams["now"]
+    admitted = _admit(
+        parsed,
+        env,
+        expected_account=seams["expected_account"],
+        load_environment_binding=seams["load_environment_binding"],
+        read_private=seams["read_private"],
+        declaration_dir=seams.get("declaration_dir", DECLARATION_DIR),
+        root_source=seams.get("root_source"),
+    )
+    evidence = _evidence(admitted)
+    answered = {r.attempt_sha256 for r in evidence.records.get(cell.subcell_id, ())}
+    pending = [
+        a
+        for a in evidence.attempts.get(cell.subcell_id, ())
+        if a.binding == admitted.binding
+        and a.digest not in answered
+        and a.digest in evidence.probe_launches
+    ]
+    if len(pending) != 1:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    attempt = pending[0]
+    launch_record: Any = None
+    for path in admitted.store.launch_records():
+        try:
+            candidate = lr.parse_launch_record(path.read_bytes())
+        except (lr.LaunchRecordError, OSError, ValueError):
+            continue
+        if (
+            candidate.kind is lr.LaunchKind.PERMISSION_PROBE
+            and candidate.specification_digest == attempt.digest
+        ):
+            launch_record = candidate
+            break
+    if launch_record is None:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    try:
+        text = Path(parsed.receipt_lines).read_bytes().decode("utf-8")
+        verified = collect_and_verify(text.splitlines(), expectation=launch_record.expectation())
+    except (OSError, UnicodeDecodeError, ReceiptError):
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
+    statements = [
+        s
+        for s in evidence.statements.get(cell.subcell_id, ())
+        if s.digest == attempt.statement_sha256
+    ]
+    if len(statements) != 1:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    observation = verified.permission
+    if observation is None:
+        # The probe refused before its operation: the answer decided nothing, and the
+        # subcell is completed as UNDECIDED rather than left for an automatic retry.
+        observation = pp.PermissionProbeObservation(
+            subcell_id=cell.subcell_id,
+            statement_sha256=attempt.statement_sha256,
+            attempt_sha256=attempt.digest,
+            stamp=attempt.stamp,
+            observed=pc.ObservedClass.NOT_EXERCISED,
+            outcome=pc.SubcellOutcome.UNDECIDED,
+            created=False,
+            possibly_created=False,
+            operations=0,
+            held_seconds=0,
+        )
+    try:
+        record = pc.record_of_probe(
+            cell,
+            observation=observation,
+            attempt=attempt,
+            prerequisites=statements[0].prerequisites,
+            probe_task_id=launch_record.task_id,
+            identity_verified=verified.released,
+            now=now(),
+        )
+    except ValueError:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
+    try:
+        with admitted.store.locked(now=now):
+            ledger, digest = admitted.store.read_ledger()
+            existing = ledger.row(launch_record.identity)
+            if existing is not None and existing.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY:
+                try:
+                    ledger = lr.complete_ledger_row(ledger, record=launch_record, receipt=verified)
+                except lr.LaunchRecordError as error:
+                    if error.defect is not lr.LaunchRecordDefect.ROW_NOT_BUILDABLE:
+                        raise
+            admitted.store.write_record(
+                "permission-record", record.document(), at=record.finished_at
+            )
+            admitted.store.replace_ledger(ledger, expected_digest=digest)
+    except (StoreError, lr.LaunchRecordError) as error:
+        defect = getattr(error, "defect", None)
+        if defect is StoreDefect.LEDGER_LOCKED:
+            raise PermissionToolRefusalError("refused_ledger", EXIT_REFUSED_LEDGER) from None
+        raise PermissionToolRefusalError(
+            "refused_record_write", EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    return record
+
+
 def settlement_targets(
     evidence: Any, admitted: _Admitted
 ) -> tuple[tuple[pc.ObjectToSettle, ...], tuple[pc.TasksToSettle, ...], tuple[str, ...]]:
@@ -718,9 +1254,10 @@ def settlement_targets(
     tasks: dict[str, pc.TasksToSettle] = {}
     deferred: list[str] = []
     prepared_pending: set[str] = set()
+    cluster_arn = admitted.context.inputs.cluster_arn
     for subcell_id, statements in evidence.statements.items():
         cell = pc.subcell(subcell_id)
-        if cell.layer is not pc.Layer.L3_RUNTIME or not cell.requires:
+        if cell.layer not in pc.EXECUTABLE_LAYERS or not cell.requires:
             continue
         if any(s.binding == binding for s in statements) and not any(
             r.binding == binding for r in evidence.records.get(subcell_id, ())
@@ -790,13 +1327,12 @@ def settlement_targets(
                     for c in evidence.cleanups
                 ):
                     continue
-                cell = pc.subcell(subcell_id)
-                launch_target = admitted.resolve(cell, stamp=record.stamp, prerequisites={})
-                assert launch_target.cluster_arn is not None
+                # Every launched task of a record lives on the one registered cluster:
+                # a launching subcell's, a probe task's, a held task's.
                 tasks[record.attempt_sha256] = pc.TasksToSettle(
                     attempt_sha256=record.attempt_sha256,
                     started_by=record.started_by,
-                    cluster_arn=launch_target.cluster_arn,
+                    cluster_arn=cluster_arn,
                     known_task_ids=record.started_task_ids,
                 )
     for subcell_id, attempts in evidence.attempts.items():
@@ -812,13 +1348,16 @@ def settlement_targets(
                         bucket=attempt.bucket, key=attempt.key, attempt_sha256=attempt.digest
                     )
             cell = pc.subcell(subcell_id)
-            if cell.operation in pc._LAUNCHING:
-                launch_target = admitted.resolve(cell, stamp=attempt.stamp, prerequisites={})
-                assert launch_target.cluster_arn is not None
+            # An unanswered launching attempt, or an unanswered probe-layer attempt whose
+            # launch started a task (AWAITING_RECEIPT, or interrupted): its tasks are
+            # discovered by the session's tag and confirmed STOPPED.
+            if cell.operation in pc._LAUNCHING or (
+                cell.layer in pc.PROBE_LAYERS and attempt.digest in evidence.probe_launches
+            ):
                 tasks[attempt.digest] = pc.TasksToSettle(
                     attempt_sha256=attempt.digest,
                     started_by=pc.started_by_of(attempt.stamp),
-                    cluster_arn=launch_target.cluster_arn,
+                    cluster_arn=cluster_arn,
                     known_task_ids=(),
                 )
     return (
@@ -987,13 +1526,17 @@ def _caller_identity(profile: str) -> object:
     return client.get_caller_identity()
 
 
-class _Boto3PermissionClient:
+class _Boto3PermissionClient(SdkPermissionClient):
     """Every permission operation over one profile's boto3 clients. One attempt each.
 
     ``total_max_attempts`` counts the initial request; every operation is exactly one
     transport attempt with finite connect and read timeouts. Each client is built lazily
-    from the one session, so a subcell constructs only the service it uses.
+    from the one session, so a subcell constructs only the service it uses. The
+    operations themselves are the shared :class:`SdkPermissionClient`'s (the probe task
+    issues the same requests over its own credentials, proposed ADR-0048).
     """
+
+    __slots__ = ("_config", "_session")
 
     def __init__(
         self,
@@ -1014,7 +1557,7 @@ class _Boto3PermissionClient:
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
             read_timeout=READ_TIMEOUT_SECONDS,
         )
-        self._clients: dict[str, Any] = {}
+        super().__init__(self._profile_client)
 
     @staticmethod
     def _profile_session(profile: str, region: str) -> Any:
@@ -1022,186 +1565,19 @@ class _Boto3PermissionClient:
 
         return boto3.Session(profile_name=profile, region_name=region)
 
-    def _client(self, service: str) -> Any:
-        if service not in self._clients:
-            self._clients[service] = self._session.client(service, config=self._config)
-        return self._clients[service]
-
-    def _call(self, service: str, operation: str, **kwargs: Any) -> r3.Observation:
-        from botocore.exceptions import (  # type: ignore[import-untyped]
-            ClientError,
-            ConnectTimeoutError,
-            EndpointConnectionError,
-            NoCredentialsError,
-            ReadTimeoutError,
-        )
-
-        try:
-            response = getattr(self._client(service), operation)(**kwargs)
-        except ClientError as error:
-            payload = error.response
-            return r3.Observation(
-                status=payload.get("ResponseMetadata", {}).get("HTTPStatusCode"),
-                code=str(payload.get("Error", {}).get("Code", "")),
-                message=str(payload.get("Error", {}).get("Message", "")),
-            )
-        except (ConnectTimeoutError, ReadTimeoutError):
-            return r3.Observation(status=None, transport_failure="timeout")
-        except EndpointConnectionError:
-            return r3.Observation(status=None, transport_failure="network")
-        except NoCredentialsError:
-            return r3.Observation(status=None, code="NoCredentialsError")
-        except Exception:
-            return r3.Observation(status=None, code="Exception")
-        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if operation == "run_task":
-            tasks = response.get("tasks") or []
-            failures = response.get("failures") or []
-            # Every returned task is accounted for, whatever the failure entries beside
-            # it say: a task in the answer is a task that may be running. A 200 carrying
-            # only failure entries started nothing it told us about; that is an
-            # ambiguous launch (not a denial), and the cleanup lists by the tag.
-            arns = tuple(
-                str(task.get("taskArn", ""))
-                for task in tasks[: pc.MAX_RETURNED_TASKS]
-                if str(task.get("taskArn", ""))
-            )
-            if not arns:
-                return r3.Observation(
-                    status=None, code="RunTaskFailureEntry", failures=len(failures)
-                )
-            return r3.Observation(status=status, task_arns=arns, failures=len(failures))
-        if operation == "list_tasks":
-            arns = tuple(
-                str(arn) for arn in (response.get("taskArns") or [])[: pc.MAX_RETURNED_TASKS]
-            )
-            token = response.get("nextToken")
-            return r3.Observation(
-                status=status,
-                task_arns=arns,
-                next_token=str(token) if isinstance(token, str) and token else None,
-            )
-        if operation == "describe_tasks":
-            statuses = tuple(
-                (str(task.get("taskArn", "")), str(task.get("lastStatus", "")))
-                for task in (response.get("tasks") or [])[: pc.MAX_RETURNED_TASKS]
-            )
-            return r3.Observation(status=status, task_statuses=statuses)
-        return r3.Observation(status=status)
-
-    def put_object(
-        self, bucket: str, key: str, body: bytes, *, if_none_match: bool
-    ) -> r3.Observation:
-        kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": body}
-        if if_none_match:
-            kwargs["IfNoneMatch"] = "*"
-        return self._call("s3", "put_object", **kwargs)
-
-    def get_object(self, bucket: str, key: str) -> r3.Observation:
-        return self._call("s3", "get_object", Bucket=bucket, Key=key)
-
-    def head_object(self, bucket: str, key: str) -> r3.Observation:
-        return self._call("s3", "head_object", Bucket=bucket, Key=key)
-
-    def delete_object(self, bucket: str, key: str) -> r3.Observation:
-        return self._call("s3", "delete_object", Bucket=bucket, Key=key)
-
-    def list_objects(self, bucket: str) -> r3.Observation:
-        return self._call("s3", "list_objects_v2", Bucket=bucket, MaxKeys=1)
-
-    def get_secret_value(self, secret_id: str) -> r3.Observation:
-        # The value, if the service returns one, is never read: the response is
-        # classified by status and dropped.
-        return self._call("secretsmanager", "get_secret_value", SecretId=secret_id)
-
-    def describe_secret(self, secret_id: str) -> r3.Observation:
-        return self._call("secretsmanager", "describe_secret", SecretId=secret_id)
-
-    def get_parameter(self, name: str) -> r3.Observation:
-        return self._call("ssm", "get_parameter", Name=name, WithDecryption=True)
-
-    def put_parameter(self, name: str, value: str) -> r3.Observation:
-        return self._call(
-            "ssm", "put_parameter", Name=name, Value=value, Type="String", Overwrite=False
-        )
-
-    def run_task(
-        self,
-        *,
-        cluster_arn: str,
-        task_definition_arn: str,
-        task_role_arn: str | None,
-        started_by: str,
-        subnet_id: str,
-        security_group_ids: tuple[str, ...],
-        assign_public_ip: bool,
-        platform_version: str,
-    ) -> r3.Observation:
-        # The same request shape the accepted launcher sends (compute.run_task_request):
-        # FARGATE needs an awsvpc placement, and a request without one fails on its
-        # parameters before any policy is evaluated -- not a permission test. The tag
-        # lets the cleanup find a task an ambiguous answer may have started.
-        kwargs: dict[str, Any] = {
-            "cluster": cluster_arn,
-            "taskDefinition": task_definition_arn,
-            "count": 1,
-            "launchType": "FARGATE",
-            "platformVersion": platform_version,
-            "networkConfiguration": {
-                "awsvpcConfiguration": {
-                    "subnets": [subnet_id],
-                    "securityGroups": list(security_group_ids),
-                    "assignPublicIp": "ENABLED" if assign_public_ip else "DISABLED",
-                }
-            },
-            "enableExecuteCommand": False,
-            "startedBy": started_by,
-        }
-        if task_role_arn is not None:
-            kwargs["overrides"] = {"taskRoleArn": task_role_arn}
-        return self._call("ecs", "run_task", **kwargs)
-
-    def stop_task(self, *, cluster_arn: str, task_arn: str) -> r3.Observation:
-        return self._call(
-            "ecs",
-            "stop_task",
-            cluster=cluster_arn,
-            task=task_arn,
-            reason="kalpamani permission subcell: unexpected launch stopped",
-        )
-
-    def list_tasks(
-        self, *, cluster_arn: str, started_by: str, next_token: str | None
-    ) -> r3.Observation:
-        # One page, filtered by startedBy and by nothing else: the ListTasks contract makes
-        # startedBy the only filter when it is used (no desiredStatus, family, serviceName,
-        # launchType or containerInstance beside it). The engine follows the token within
-        # its bound.
-        kwargs: dict[str, Any] = {
-            "cluster": cluster_arn,
-            "startedBy": started_by,
-            "maxResults": pc.MAX_RETURNED_TASKS,
-        }
-        if next_token is not None:
-            kwargs["nextToken"] = next_token
-        return self._call("ecs", "list_tasks", **kwargs)
-
-    def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> r3.Observation:
-        return self._call("ecs", "describe_tasks", cluster=cluster_arn, tasks=list(task_arns))
-
-    def execute_command(self, *, cluster_arn: str, task_arn: str) -> r3.Observation:
-        return self._call(
-            "ecs",
-            "execute_command",
-            cluster=cluster_arn,
-            task=task_arn,
-            command="/bin/true",
-            interactive=False,
-        )
+    def _profile_client(self, service: str) -> Any:
+        return self._session.client(service, config=self._config)
 
 
 def _client_factory(profile: str, region: str) -> pc.PermissionClient:
     return _Boto3PermissionClient(profile, region)
+
+
+def _launch_clients() -> Any:
+    """The launch tool's own profile-pinned clients, for a probe launch."""
+    import production_launch as launch
+
+    return launch._Boto3Clients()
 
 
 # ---------------------------------------------------------------------------
@@ -1218,6 +1594,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--subcell")
     parser.add_argument("--prepare-subcell")
     parser.add_argument("--execute-subcell")
+    parser.add_argument("--complete-subcell")
+    parser.add_argument("--receipt-lines", type=Path)
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--check-record", type=Path)
@@ -1246,9 +1624,13 @@ def main(
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
     declaration_dir: Path = DECLARATION_DIR,
+    launch_clients: Any | None = None,
+    monotonic: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> int:
-    """Plan (default), check a record, execute one subcell, or run the cleanup."""
+    """Plan (default), check a record, execute or complete one subcell, or run the cleanup."""
     import os
+    import time
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     for token in arguments:
@@ -1264,11 +1646,12 @@ def main(
         (
             parsed.execute_subcell is not None,
             parsed.prepare_subcell is not None,
+            parsed.complete_subcell is not None,
             parsed.cleanup,
             parsed.check_record is not None,
         )
     )
-    if modes > 1:
+    if modes > 1 or (parsed.receipt_lines is not None and parsed.complete_subcell is None):
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
     if parsed.check_record is not None:
@@ -1311,6 +1694,14 @@ def main(
     if parsed.cleanup and (not parsed.cleanup_authorized or parsed.authorized):
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
+    if parsed.complete_subcell is not None and (
+        parsed.authorized
+        or parsed.cleanup_authorized
+        or parsed.authorization is not None
+        or parsed.receipt_lines is None
+    ):
+        print(SENTENCES["refused_arguments"])
+        return EXIT_REFUSED_ARGUMENTS
     environment = dict(os.environ) if env is None else dict(env)
     seams: dict[str, Any] = {
         "now": (lambda: datetime.now(tz=UTC)) if now is None else now,
@@ -1330,6 +1721,9 @@ def main(
         "root_source": root_source,
         "security_of": security_of,
         "declaration_dir": declaration_dir,
+        "launch_clients": _launch_clients() if launch_clients is None else launch_clients,
+        "monotonic": time.monotonic if monotonic is None else monotonic,
+        "sleep": time.sleep if sleep is None else sleep,
     }
     try:
         if parsed.prepare_subcell is not None:
@@ -1340,6 +1734,14 @@ def main(
                 print(line)
             print(SENTENCES["prepared"])
             return EXIT_PREPARED
+        if parsed.complete_subcell is not None:
+            completed = complete_subcell(
+                parsed.complete_subcell, parsed, env=environment, seams=seams
+            )
+            for line in result_lines(completed):
+                print(line)
+            print(SENTENCES["completed"])
+            return EXIT_COMPLETED
         if parsed.cleanup:
             cleanup = execute_cleanup(
                 parsed,
@@ -1354,7 +1756,7 @@ def main(
                 return EXIT_CLEANUP_UNRESOLVED
             print(SENTENCES["cleaned"])
             return EXIT_EXECUTED
-        record = execute_subcell(
+        executed = execute_subcell(
             parsed.execute_subcell,
             parsed,
             env=environment,
@@ -1364,6 +1766,23 @@ def main(
     except PermissionToolRefusalError as refusal:
         print(SENTENCES[refusal.key])
         return refusal.exit_code
+    if isinstance(executed, ProbeLaunchResult):
+        launched = executed
+        print(
+            f"probe launch={launched.report.outcome.value} "
+            f"task_started={'yes' if launched.task_started else 'no'} "
+            f"observed_exit_code={launched.report.observed_exit_code} "
+            f"attempt_sha256={launched.attempt.digest}"
+        )
+        if launched.record is None:
+            if not launched.task_started:
+                print(SENTENCES["probe_not_started"])
+                return EXIT_PROBE_NOT_STARTED
+            print(SENTENCES["probe_launched"])
+            return EXIT_PROBE_LAUNCHED
+        record = launched.record
+    else:
+        record = executed
     for line in result_lines(record):
         print(line)
     if record.outcome is pc.SubcellOutcome.MATCHED:
@@ -1385,6 +1804,8 @@ __all__ = [
     "SENTENCES",
     "TARGETS_ENV_VAR",
     "PermissionToolRefusalError",
+    "ProbeLaunchResult",
+    "complete_subcell",
     "current_binding",
     "declaration_paths",
     "execute_cleanup",

@@ -52,6 +52,11 @@ class ActorConstants:
     #: the same task role and placement, the verification image, and a task that
     #: stops at the release barrier. Never the production family.
     verification_task_family: str
+    #: The permission-probe task-definition family (proposed ADR-0048): the same actor,
+    #: the same task role and placement, the verification image, and a task that issues
+    #: exactly one catalogued permission operation after the release barrier, or holds.
+    #: Never the production family.
+    probe_task_family: str
     profile: str
     #: The owner-side launch tool's second profile (proposed ADR-0045): the actor's
     #: launcher permission set. A profile name is routing input, never proof (ADR-0021).
@@ -99,6 +104,7 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         task_role_name="kalpamani-production-acquire-task",
         task_family="kalpamani-production-acquire",
         verification_task_family="kalpamani-production-acquire-verify",
+        probe_task_family="kalpamani-production-acquire-probe",
         profile="kalpamani-production-acquisition",
         launcher_profile="kalpamani-production-acquisition-launcher",
         profile_field="acquisition_profile",
@@ -119,6 +125,7 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         task_role_name="kalpamani-research-build-task",
         task_family="kalpamani-research-build",
         verification_task_family="kalpamani-research-build-verify",
+        probe_task_family="kalpamani-research-build-probe",
         profile="kalpamani-research-build",
         launcher_profile="kalpamani-research-build-launcher",
         profile_field="build_profile",
@@ -135,9 +142,13 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
 
 
 def is_known_family(actor: ProductionActor, family: object) -> bool:
-    """Whether ``family`` is ``actor``'s production or verification family."""
+    """Whether ``family`` is ``actor``'s production, verification or probe family."""
     constants = constants_for(actor)
-    return family in (constants.task_family, constants.verification_task_family)
+    return family in (
+        constants.task_family,
+        constants.verification_task_family,
+        constants.probe_task_family,
+    )
 
 
 def constants_for(actor: object) -> ActorConstants:

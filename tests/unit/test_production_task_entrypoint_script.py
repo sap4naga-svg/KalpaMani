@@ -12,6 +12,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Final
@@ -91,7 +92,7 @@ def test_the_four_entry_names_are_the_task_definitions_command_tokens() -> None:
         REPO_ROOT / "infra" / "aws" / "research-data-plane" / "production_compute.tf"
     ).read_text(encoding="utf-8")
     for entry in TaskEntry:
-        assert f'command   = ["{entry.value}"]' in compute
+        assert re.search(rf'command\s+= \["{re.escape(entry.value)}"\]', compute), entry
 
 
 # ---------------------------------------------------------------------------
@@ -537,9 +538,10 @@ def test_the_working_root_is_the_task_definitions_tmpfs() -> None:
         encoding="utf-8"
     )
     assert entrypoint.TASK_WORKING_ROOT == "/work"
-    # Two production containers and two verification containers (proposed ADR-0045).
-    assert compute.count('containerPath = "/work"') == 4
-    assert compute.count("readonlyRootFilesystem = true") == 4
+    # Two production containers, two verification containers (ADR-0045) and two
+    # permission-probe containers (proposed ADR-0048).
+    assert compute.count('containerPath = "/work"') == 6
+    assert compute.count("readonlyRootFilesystem = true") == 6
     assert "dir=TASK_WORKING_ROOT" in EXECUTABLE and "mkdtemp(" in EXECUTABLE
     assert EXECUTABLE.count("mkdtemp(") == 1
 

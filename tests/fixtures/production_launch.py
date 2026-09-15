@@ -62,6 +62,8 @@ GENERATION_RECORD_DIGESTS = {
     (BLD, False): "2a" * 32,
     (BLD, True): "2b" * 32,
 }
+#: The image gate's generation-record digest of each actor's probe target (synthetic).
+PROBE_GENERATION_RECORD_DIGESTS: dict[ProductionActor, str] = {ACQ: "1c" * 32, BLD: "2c" * 32}
 
 
 def ledger_row(
@@ -101,11 +103,17 @@ def ledger_document(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
 
 
 def task_definition_document(
-    actor: ProductionActor, *, verification: bool = False, **overrides: Any
+    actor: ProductionActor, *, verification: bool = False, probe: bool = False, **overrides: Any
 ) -> dict[str, Any]:
     """The owner's transcription of one registered revision (synthetic)."""
     constants = constants_for(actor)
-    family = constants.verification_task_family if verification else constants.task_family
+    family = (
+        constants.probe_task_family
+        if probe
+        else constants.verification_task_family
+        if verification
+        else constants.task_family
+    )
     document: dict[str, Any] = {
         "family": family,
         "revision": REVISION,
@@ -130,26 +138,40 @@ def target_document(
     actor: ProductionActor,
     *,
     verification: bool = False,
+    probe: bool = False,
     configuration_digest: str = CONFIGURATION_DIGEST,
     **overrides: Any,
 ) -> dict[str, Any]:
     """One registered revision with its image-gate values and task-definition evidence."""
+    from fixtures.production_runtime import probe_revision_arn
+
     document: dict[str, Any] = {
         "task_definition_arn": (
-            verification_revision_arn(actor) if verification else revision_arn(actor)
+            probe_revision_arn(actor)
+            if probe
+            else verification_revision_arn(actor)
+            if verification
+            else revision_arn(actor)
         ),
         "image_digest": IMAGE_DIGEST,
         "configuration_digest": configuration_digest,
         "code_commit": COMMIT,
-        "generation_record_digest": GENERATION_RECORD_DIGESTS[(actor, verification)],
-        "task_definition": task_definition_document(actor, verification=verification),
+        "generation_record_digest": (
+            PROBE_GENERATION_RECORD_DIGESTS[actor]
+            if probe
+            else GENERATION_RECORD_DIGESTS[(actor, verification)]
+        ),
+        "task_definition": task_definition_document(actor, verification=verification, probe=probe),
     }
     document.update(overrides)
     return document
 
 
-def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> dict[str, Any]:
-    """A synthetic launch-inputs record for both actors, verification targets optional."""
+def launch_inputs_document(
+    *, verification: bool = True, probe: bool = False, **overrides: Any
+) -> dict[str, Any]:
+    """A synthetic launch-inputs record for both actors; verification and (proposed
+    ADR-0048) permission-probe targets optional."""
     document: dict[str, Any] = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "contract_id": LAUNCH_INPUTS_CONTRACT_ID,
@@ -167,6 +189,7 @@ def launch_inputs_document(*, verification: bool = True, **overrides: Any) -> di
                 "verification": (
                     target_document(actor, verification=True) if verification else None
                 ),
+                **({"permission_probe": target_document(actor, probe=True)} if probe else {}),
             }
             for actor in ProductionActor
         },
@@ -312,6 +335,7 @@ __all__ = [
     "BLD",
     "BUILD_ID",
     "GENERATION_RECORD_DIGESTS",
+    "PROBE_GENERATION_RECORD_DIGESTS",
     "R3_DIGEST",
     "FakeClients",
     "FakeSts",

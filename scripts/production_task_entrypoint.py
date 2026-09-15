@@ -6,8 +6,10 @@ One process per task, selected by exactly one closed argument -- the task defini
 ```text
 kalpamani-production-acquire         the acquisition actor's entry
 kalpamani-research-build             the build actor's entry
-kalpamani-production-acquire-verify  the acquisition actor's VERIFICATION entry (proposed ADR-0045)
-kalpamani-research-build-verify      the build actor's VERIFICATION entry (proposed ADR-0045)
+kalpamani-production-acquire-verify  the acquisition actor's VERIFICATION entry (ADR-0045)
+kalpamani-research-build-verify      the build actor's VERIFICATION entry (ADR-0045)
+kalpamani-production-acquire-probe   the acquisition actor's PERMISSION-PROBE entry (prop. ADR-0048)
+kalpamani-research-build-probe       the build actor's PERMISSION-PROBE entry (prop. ADR-0048)
 ```
 
 A verification entry composes the accepted bootstrap and stops at the release barrier
@@ -319,7 +321,11 @@ def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> An
     import time
     from datetime import UTC, datetime
 
-    from kalpamani.data.production.sharadar.entry import VERIFICATION_ENTRIES, TaskEntry
+    from kalpamani.data.production.sharadar.entry import (
+        PROBE_ENTRIES,
+        VERIFICATION_ENTRIES,
+        TaskEntry,
+    )
     from kalpamani.data.production.sharadar.task_clients import TaskService
 
     def now() -> datetime:
@@ -327,6 +333,33 @@ def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> An
 
     if clients is None:
         clients = _IsolatedClients(os.environ)
+
+    if entry in PROBE_ENTRIES:
+        from kalpamani.data.production.sharadar.permission_client import single_service_client
+        from kalpamani.data.production.sharadar.permission_probe_entry import (
+            PermissionProbeFactories,
+        )
+
+        def operation_client(operation: Any) -> Any:
+            # The one service the subcell's operation names, over the task's isolated,
+            # container-credentialed session; any other service is refused before a
+            # client exists (proposed ADR-0048).
+            return single_service_client(
+                operation, lambda service: _client(TaskService(service), clients)
+            )
+
+        return PermissionProbeFactories(
+            environment_names=_environment_names,
+            environment=_environment,
+            metadata_fetch=_metadata_fetch,
+            ssm=lambda: _client(TaskService.SSM, clients),
+            sts=lambda: _client(TaskService.STS, clients),
+            operation_client=operation_client,
+            now=now,
+            monotonic=time.monotonic,
+            sleep=time.sleep,
+            cleanup=_working_directory_cleanup(working_directory),
+        )
 
     if entry in VERIFICATION_ENTRIES:
         from kalpamani.data.production.sharadar.verification_entry import VerificationFactories

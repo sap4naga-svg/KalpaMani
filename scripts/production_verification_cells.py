@@ -318,13 +318,19 @@ def permission_evidence(store: Any, context: Any) -> Any:
     """
     from kalpamani.data.production.sharadar import permission_cells as pc
     from kalpamani.data.production.sharadar.documents import decode_document
-    from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
+    from kalpamani.data.production.sharadar.launch_records import (
+        MAX_RECORD_BYTES,
+        LaunchKind,
+        LaunchRecordError,
+        parse_launch_record,
+    )
 
     records: dict[str, list[Any]] = {}
     attempts: dict[str, list[Any]] = {}
     statements: dict[str, list[Any]] = {}
     consumptions: dict[str, Any] = {}
     cleanups: list[Any] = []
+    probe_launches: dict[str, Any] = {}
     malformed = 0
     for digest, raw in store.consumptions(_permission_tool().CONSUMPTION_KIND).items():
         try:
@@ -360,7 +366,23 @@ def permission_evidence(store: Any, context: Any) -> Any:
                 cleanups.append(parsed)
             else:
                 sink.setdefault(parsed.subcell_id, []).append(parsed)
+    # The probe launches the permission tool made (proposed ADR-0048): a launch record
+    # of the permission-probe kind names, as its specification digest, the attempt it
+    # answers. A launch record exists only when a task started.
+    for path in store.launch_records():
+        try:
+            launch = parse_launch_record(path.read_bytes())
+        except (LaunchRecordError, OSError, ValueError):
+            continue  # not permission evidence; the R-1 cells report their own records
+        if launch.kind is not LaunchKind.PERMISSION_PROBE:
+            continue
+        probe_launches[launch.specification_digest] = pc.ProbeLaunch(
+            attempt_sha256=launch.specification_digest,
+            task_started=True,
+            observed_exit_code=launch.observed_exit_code,
+        )
     return pc.PermissionEvidence(
+        probe_launches=probe_launches,
         records={k: tuple(sorted(v, key=lambda r: r.started_at)) for k, v in records.items()},
         attempts={k: tuple(sorted(v, key=lambda a: a.started_at)) for k, v in attempts.items()},
         statements={

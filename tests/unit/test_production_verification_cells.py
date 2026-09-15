@@ -178,7 +178,7 @@ class _Chain:
     """A complete, bound evidence chain for one runtime cell on the fixtures' records.
 
     With a negative ``release_mode`` it is the chain of the corresponding negative cell
-    (proposed ADR-0047): the reservation's specification carries the mode, the launch
+    (ADR-0047): the reservation's specification carries the mode, the launch
     record carries it and the launcher's observed exit code, the ledger row reads
     ``REFUSED``, and one negative launch evidence record names the expected refusal.
     """
@@ -425,11 +425,14 @@ def test_the_r3_cell_passes_only_with_attesting_verified_evidence_named_by_the_i
     states = vc.derive_states(_evidence(r3_record=record, inputs_digest=record.digest), {})
     assert states["R3"].status is vc.CellStatus.PASSED
     assert states["R1-ACQ-BOOTSTRAP"].status is vc.CellStatus.UNEXECUTED
-    # R-4 carries task-role subcells no accepted mechanism can execute: BLOCKED, with the
-    # dependency named (proposed ADR-0047 s.5).
-    assert states["R4-ACQUISITION"].status is vc.CellStatus.BLOCKED
-    assert "task-side permission probe" in states["R4-ACQUISITION"].reason
-    # The negative cells wait behind their bootstrap cell (proposed ADR-0047).
+    # R-4's task-role subcells are executed by the permission-probe launch (proposed
+    # ADR-0048): with nothing recorded the cell is UNEXECUTED, never BLOCKED and never
+    # PASSED; R-8, whose deletion role has no execution path, stays BLOCKED with the
+    # dependency named.
+    assert states["R4-ACQUISITION"].status is vc.CellStatus.UNEXECUTED
+    assert states["R8-DELETION"].status is vc.CellStatus.BLOCKED
+    assert "no execution path" in states["R8-DELETION"].reason
+    # The negative cells wait behind their bootstrap cell (ADR-0047).
     for cell_id in ("R1-ACQ-NO-RELEASE", "R1-BLD-RELEASE-MISMATCH"):
         assert states[cell_id].status is vc.CellStatus.BLOCKED
         assert "prerequisite R1-" in states[cell_id].reason
@@ -1220,7 +1223,7 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
 
 
 class TestNegativeCells:
-    """The negative R-1 cells (proposed ADR-0047): the expected refusal passes, nothing else."""
+    """The negative R-1 cells (ADR-0047): the expected refusal passes, nothing else."""
 
     @pytest.mark.parametrize(
         ("actor", "mode"),

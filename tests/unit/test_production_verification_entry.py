@@ -94,7 +94,10 @@ def _production_configuration(actor: Any) -> EntryConfiguration:
 
 class TestVocabulary:
     def test_four_entries_two_actors_and_the_verification_families(self) -> None:
+        # Six entries since proposed ADR-0048: the two probe entries beside the four.
         assert set(TaskEntry) == {
+            TaskEntry.ACQUISITION_PROBE,
+            TaskEntry.BUILD_PROBE,
             TaskEntry.ACQUISITION,
             TaskEntry.BUILD,
             TaskEntry.ACQUISITION_VERIFY,
@@ -448,7 +451,8 @@ class TestReceiptEvidence:
             ),
         }
         assert document["schema_observation"] is None
-        assert document["contract_id"] == "kalpamani-task-receipt/v2"
+        assert document["permission"] is None
+        assert document["contract_id"] == "kalpamani-task-receipt/v3"
 
     def test_a_verification_receipt_with_a_data_plane_count_is_refused(self) -> None:
         receipt = VerificationHarness(entry=TaskEntry.ACQUISITION_VERIFY).run()

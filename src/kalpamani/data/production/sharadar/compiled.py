@@ -46,6 +46,7 @@ from kalpamani.data.production.sharadar.build_manifest import (
 from kalpamani.data.production.sharadar.documents import contains_surrogate_text
 from kalpamani.data.production.sharadar.entry import (
     ENTRY_ACTOR,
+    PROBE_ENTRIES,
     EntryConfiguration,
     TaskEntry,
     entry_family,
@@ -89,11 +90,17 @@ _BUILD_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"build_configuration"}
 #: actor-specific beyond it -- no secret name, no build configuration -- so a
 #: verification image carries no capability its entry must not hold.
 _VERIFICATION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"origin_addresses"}
+#: A permission-probe entry's file (proposed ADR-0048): the common fields and nothing
+#: else -- no secret name, no origin address set, no build configuration. The subcell a
+#: probe issues comes from its input, never from the image.
+_PROBE_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS
 ENTRY_FIELDS: Final[dict[TaskEntry, frozenset[str]]] = {
     TaskEntry.ACQUISITION: _ACQUISITION_FIELDS,
     TaskEntry.BUILD: _BUILD_FIELDS,
     TaskEntry.ACQUISITION_VERIFY: _VERIFICATION_FIELDS,
     TaskEntry.BUILD_VERIFY: _VERIFICATION_FIELDS,
+    TaskEntry.ACQUISITION_PROBE: _PROBE_FIELDS,
+    TaskEntry.BUILD_PROBE: _PROBE_FIELDS,
 }
 _BUILD_CONFIGURATION_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -459,6 +466,8 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
             entry=entry, compiled=compiled, build_configuration=build
         )
         return configuration, digest
+    if entry in PROBE_ENTRIES:
+        return EntryConfiguration(entry=entry, compiled=compiled), digest
     addresses = document["origin_addresses"]
     if type(addresses) is not list or not addresses:
         raise _refuse(CompiledConfigurationDefect.ORIGIN_ADDRESSES_MALFORMED)
@@ -511,6 +520,8 @@ def build_compiled_configuration(
         document["build_configuration"] = (
             build_configuration.document() if build_configuration is not None else None
         )
+    elif entry in PROBE_ENTRIES:
+        pass  # the common fields and nothing else
     else:
         document["origin_addresses"] = (
             sorted(compiled_origin_addresses(origin_addresses)) if origin_addresses else []
