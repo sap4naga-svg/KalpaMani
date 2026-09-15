@@ -922,21 +922,33 @@ task's `enableExecuteCommand` state is not established offline — if not, the h
   derived from the bound launch record's task id and the **registered** `log_destination` block of the
   task-definition evidence (one optional block; a registration without it refuses the collection; a
   block for another entry refuses; no caller-supplied stream is ever read); `GetLogEvents` from the head
-  with the forward token, ended by the repeated token, polled for delayed delivery — **16 pages per
-  pass, 40 requests, 20,000 events, 15 s polls within 300 s; effective SDK retries zero** (one attempt in
-  total, finite timeouts, the workstation client configuration); closed outcomes that are never receipt
-  verdicts (`COLLECTED`, `NO_RECEIPT_WITHIN_BUDGET`, `STREAM_NOT_FOUND_WITHIN_BUDGET`,
-  `CONTRADICTORY_RECEIPTS`, `DENIED`, `THROTTLED`, `FAILED`); a collection record
-  (`kalpamani-receipt-collection/v1`) keeping the receipt line and no other event; the line handed to
+  with the forward token in 16-page passes — **40 requests, 20,000
+  events, 300 s elapsed, each checked before a request is issued; 15 s polls; effective SDK retries
+  zero** (one attempt in total, finite timeouts, the workstation client configuration; a request in
+  flight is the one limit the collector cannot cut, and the record's `elapsed_ms` says so); **a
+  complete scan and only a complete scan establishes one line** (the end token observed, one poll
+  interval, a re-read delivering nothing new closes the observation window the record carries), the
+  candidate **decoded and verified against the launch record before anything of it is kept**; closed
+  outcomes that are never receipt verdicts (`COLLECTED`, `RECEIPT_REJECTED` — closed defect and byte
+  count, never the text — `SCAN_INCOMPLETE`, `NO_RECEIPT_WITHIN_BUDGET`, `STREAM_NOT_FOUND_WITHIN_BUDGET`,
+  `CONTRADICTORY_RECEIPTS`, `DENIED`, `THROTTLED`, `FAILED`); a closed collection record
+  (`kalpamani-receipt-collection/v1`, one parser) keeping the verified receipt line and no other
+  event; **one cache-admission rule for both tools** (every record about the launch read, bound to the
+  launch record and the destination, contradictions and unverifiable lines refusing whatever the
+  filename order, rejected and exhausted attempts never blocking the next read); the line handed to
   **exactly the hand-read completion** — `production_launch.py --complete-row --collect-receipt` and
   `production_permission_cells.py --collect-receipt <subcell>`, each behind
-  `--i-am-the-owner-authorizing-receipt-collection` and the actor's launcher identity, the logs client
-  built only there. A recorded `COLLECTED` line is reused (no second read); a completion interrupted
-  after the collection record repairs itself; a FAILED or INCONCLUSIVE subcell keeps its reading.
-  **An exhausted budget proves only that no receipt was obtained within it; a successful read is not
-  a successful verification.** The SDK client's serialized `GetLogEvents` (`Logs_20140328.GetLogEvents`,
-  `startFromHead`, `nextToken`) and its one-attempt behaviour on a throttle, a 5xx and a denial are
-  asserted at an intercepted transport with invented credentials.
+  `--i-am-the-owner-authorizing-receipt-collection` and the actor's launcher identity, refused until
+  the launcher observed the terminal state, the logs client built only there. A verified `COLLECTED`
+  line is reused (no second read); a completion interrupted after the collection record repairs
+  itself; a FAILED or INCONCLUSIVE subcell keeps its reading. **An exhausted or incomplete scan proves
+  only that no receipt was established within it; a successful read is not a successful
+  verification; delayed delivery is the stated limitation.** The SDK client's serialized `GetLogEvents`
+  (`Logs_20140328.GetLogEvents`, `startFromHead`, `nextToken`) and its one-attempt behaviour on a
+  throttle, a 5xx and a denial are asserted at an intercepted transport with invented credentials.
+  Correction 1 (ADR-0049 §6): the three review findings — an incomplete scan establishing
+  uniqueness, unvalidated content persisted before refusal, cached records chosen by filename order
+  with no recovery — reproduced on the reviewed head and closed.
 - **The deletion rehearsal path** (`deletion_rehearsal.py`, proposed ADR-0049 §3; ADR-0048 §4's
   design): the target derived from the one bound, MATCHED R-4 human `PutObject` record whose key is the
   synthetic marker's content address and whose object no cleanup has settled — nothing else is ever a

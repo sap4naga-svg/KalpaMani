@@ -319,17 +319,27 @@ permission is unchanged.
 **Disposition: implemented offline, proposed; the rehearsal path CLOSED and its decision presented.**
 The **receipt collector** reads a launch's receipt line from the stream derived from the bound launch
 record and the registered `log_destination` block of the task-definition evidence — never from a
-caller — under stated bounds (16 pages per pass, 40 requests, 20,000 events, 15 s polls within 300 s,
-effective SDK retries zero), keeps the line and no other event in a collection record, and hands it to
-exactly the hand-read completion path (`--complete-row --collect-receipt`, `--collect-receipt
+caller — under stated bounds (40 requests, 20,000 events, 300 s, each checked before a request; 16-page
+passes; 15 s polls; effective SDK retries zero; the in-flight request the one limit it cannot cut),
+establishes one line only from a **complete scan** (end token, one poll interval, a re-read delivering
+nothing new — the observation window the record carries; delayed delivery the stated limitation),
+verifies the candidate against the launch record **before** keeping it (a refused line leaves its closed
+defect and byte count, never text), keeps the verified line and no other event in a closed collection
+record, admits recorded collections in both tools through one rule (bound to the launch and the
+destination; contradictions refuse whatever the filename order; rejected attempts never block the next
+read), and hands the line to exactly the hand-read completion path (`--complete-row --collect-receipt`, `--collect-receipt
 <subcell>`; the receipt verifier, the reservation binding, the observed-exit rule, the receipt evidence
 and the ledger row unchanged), behind its own flag and the launcher identity. Pagination, repeated
 tokens, delayed delivery, bounded polling, missing / malformed / duplicate / contradictory receipts,
 wrong statement, attempt, registration and destination, denial, throttling, timeout, an interrupted
 completion after the collection record, and the preservation of an INVERTED reading are each tested
 through the real tools, store and runner; the SDK client's serialized request and its one-attempt
-behaviour at an intercepted transport. **An exhausted budget proves only that no receipt was obtained
-within it, and a successful read is not a successful verification.** `logs:GetLogEvents` for the
+behaviour at an intercepted transport. **An exhausted or incomplete scan proves only that no receipt
+was established within it, and a successful read is not a successful verification.** Correction 1
+(ADR-0049 §6): the review's three findings — an incomplete scan establishing uniqueness, unvalidated
+content persisted before refusal, cached records chosen by filename order with no recovery — were
+reproduced on the reviewed head through the real collector and both public paths and closed, with
+controls beside each regression. `logs:GetLogEvents` for the
 launcher sets is **recorded and not granted**. The **deletion rehearsal** ADR-0048 §4 designed is
 implemented offline over the actual deletion-role execution model — target, statement, consumed
 authorization, sequence, engine, record, reading — and **CLOSED**: `REHEARSAL_PATH_OPEN` false, both

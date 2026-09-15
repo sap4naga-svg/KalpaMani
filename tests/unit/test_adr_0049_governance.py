@@ -40,18 +40,29 @@ def test_the_adr_exists_is_proposed_and_names_its_gates() -> None:
 
 
 def test_the_collector_bounds_and_contract_match_the_text() -> None:
-    assert rc.COLLECT_MAX_PAGES == 16 and "16 pages per pass" in ADR_PLAIN
+    assert rc.COLLECT_MAX_PAGES == 16 and "at most 16 pages" in ADR_PLAIN
     assert rc.COLLECT_MAX_REQUESTS == 40 and "40 requests per collection" in ADR_PLAIN
     assert rc.COLLECT_MAX_EVENTS == 20_000 and "20,000 events scanned" in ADR_PLAIN
     assert rc.COLLECT_POLL_SECONDS == 15.0 and "15 s" in ADR_PLAIN
-    assert rc.COLLECT_CEILING_SECONDS == 300.0 and "300 s" in ADR_PLAIN
+    assert rc.COLLECT_CEILING_SECONDS == 300.0 and "300 s elapsed" in ADR_PLAIN
+    # Correction 1: a complete scan, verification before persistence, one admission rule.
+    assert "A complete scan, and only a complete scan, establishes one line" in ADR_PLAIN
+    assert "verified before anything of it is kept" in ADR_PLAIN
+    assert "nothing is chosen by filename order" in ADR_PLAIN
+    assert "## 6. Corrections after review" in ADR_TEXT
+    for member in rc.CollectionOutcome:
+        assert member.value in ADR_TEXT, member
+    for defect in rc.CollectionRecordDefect:
+        assert defect.value in ADR_TEXT, defect
+    assert rc.admit_collection_records.__name__ in ADR_TEXT
+    assert rc.parse_collection_record.__name__ in ADR_TEXT
     assert rc.LOGS_TOTAL_MAX_ATTEMPTS == 1 and "total_max_attempts = 1" in ADR_PLAIN
     assert rc.COLLECTION_CONTRACT_ID == "kalpamani-receipt-collection/v1"
     assert rc.COLLECTION_CONTRACT_ID in ADR_TEXT
     # A caller never names the stream: the destination is derived from the registered block.
     assert "never supplied" in ADR_PLAIN
     assert "the budget was exhausted before a line was obtained" in ADR_PLAIN
-    assert "a successful log read is not a successful verification" in ADR_PLAIN
+    assert "A successful log read is not a successful verification" in ADR_PLAIN
 
 
 def test_the_permission_is_recorded_and_not_granted() -> None:

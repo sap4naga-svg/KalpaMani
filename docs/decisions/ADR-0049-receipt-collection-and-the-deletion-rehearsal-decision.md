@@ -61,22 +61,49 @@ registers the destination.
 
 ### 2.2 The read: bounds, and what they mean
 
-`GetLogEvents` from the head with the forward token; a page whose token equals the one it was asked
-with is the end of the stream as delivered so far (the documented signal), and every further poll
-continues from that token. Bounds: at most **16 pages per pass** and **40 requests per collection**,
-each page the service's own ceiling (10,000 events or 1 MiB); at most **20,000 events scanned**;
-delivery lag polled at **15 s** for at most **300 s** on an injected monotonic clock. **Effective SDK
-retries: zero** — the logs client is built with `total_max_attempts = 1` in `standard` mode and finite
-socket timeouts, the same configuration as every workstation client; a throttled or failed request is
-recorded, never retried inside the SDK, and the collector re-issues nothing within a pass.
+`GetLogEvents` from the head with the forward token, in passes of at most **16 pages**; a page whose
+token equals the one it was asked with is the end of the stream as delivered so far (the documented
+signal). Bounds: **40 requests per collection**, each page the service's own ceiling (10,000 events or
+1 MiB); **20,000 events scanned**; **300 s elapsed** on an injected monotonic clock, delivery lag
+polled at **15 s**. **Every bound is checked before a request is issued** — the request count, the
+event count and the elapsed time each refuse the next request when reached, and a page whose events
+would cross the event ceiling is scanned only up to it (§6, correction 1). **The one limit the
+collector cannot enforce is a request already in flight**: an issued request completes, or fails,
+within the client's own connect and read timeouts (the workstation client configuration — finite,
+one attempt in total), so a collection's elapsed time may exceed the ceiling by at most one request's
+in-flight time, and the record's `elapsed_ms` says by how much. **Effective SDK retries: zero** — the
+logs client is built with `total_max_attempts = 1` in `standard` mode; a throttled or failed request
+is recorded, never retried inside the SDK, and the collector re-issues nothing.
 
-Outcomes (`CollectionOutcome`, closed, **never a receipt verdict**): `COLLECTED` (exactly one distinct
-receipt line); `NO_RECEIPT_WITHIN_BUDGET` and `STREAM_NOT_FOUND_WITHIN_BUDGET` — **the budget was
+**A complete scan, and only a complete scan, establishes one line.** The stream is read to its end
+(the repeated token) and, after one poll interval, re-read from that token; a re-read that delivers
+nothing new closes the **observation window**, which every record carries (`started_at`,
+`finished_at`, `scan_complete`). Exactly one distinct receipt-shaped line in a complete scan is the
+candidate; a receipt-shaped line seen in a scan the budget cut short is `SCAN_INCOMPLETE` — nothing is
+established, and the line is not kept; two distinct receipt-shaped lines are `CONTRADICTORY_RECEIPTS`
+at once, whether or not the scan completed. **Delayed delivery is the stated limitation**: the
+`awslogs` driver delivers with lag, and the window closes on the stream *as delivered* by
+`finished_at` — an event delivered after that was not observed. That is why a collection is refused
+until the launcher observed the task's terminal state (a stopped task writes nothing more), and why
+`COLLECTED` means *unique within the observed window*, not unique on the stream for all time.
+
+**The candidate is verified before anything of it is kept.** It must decode as the closed receipt
+document and verify against the launch record's expectation (the binding digest over task id,
+revision, image, identity and input digest; the configuration digest; the commit) inside the
+collector; a line that does not is `RECEIPT_REJECTED`, and its record carries the closed
+`ReceiptDefect` and the line's byte count — **never the text**. A closed receipt document that verifies
+but contradicts the launch in what only the completion can see (the observed terminal exit; for a
+probe, the permission block's attempt, statement and stamp) is `COLLECTED` — it is closed evidence
+of that contradiction and holds no arbitrary text — and the completion refuses it exactly as a
+hand-read one, repeatably.
+
+Outcomes (`CollectionOutcome`, closed, **never a receipt verdict**): `COLLECTED`; `RECEIPT_REJECTED`;
+`SCAN_INCOMPLETE`; `NO_RECEIPT_WITHIN_BUDGET` and `STREAM_NOT_FOUND_WITHIN_BUDGET` — **the budget was
 exhausted before a line was obtained, which proves nothing about whether one exists**; a later
-collection may still find it; `CONTRADICTORY_RECEIPTS` (two distinct receipt lines: refused, never
-chosen between; the same line delivered twice is one line); `DENIED`, `THROTTLED`, `FAILED` (one request,
-its own class, no retry). A malformed line is *collected* and then refused by the verifier: **a
-successful log read is not a successful verification.**
+collection may still find it; `CONTRADICTORY_RECEIPTS` (refused, never chosen between; the same line
+delivered twice is one line); `DENIED`, `THROTTLED`, `FAILED` (one request, its own class, no retry).
+**A successful log read is not a successful verification**: the completion re-verifies the kept line
+as a hand-read one.
 
 ### 2.3 The same verifier, the same completion, no weaker route
 
@@ -92,17 +119,31 @@ evidence and changes no verdict.
 
 ### 2.4 Evidence, and what is never kept
 
-One **collection record** (`kalpamani-receipt-collection/v1`) per collection, whatever its outcome:
-identity, the launch record's digest, the log group and stream, the outcome, the request, page and
-event counts, the count of distinct receipt lines, and — only when `COLLECTED` — the receipt line
-itself, which is the closed receipt document (tokens, counts, digests). **No other event is stored**;
-every other line is counted and discarded, so no arbitrary log content leaves the stream through the
-collector. The record lives under the governed private root beside the launch records.
+One **collection record** (`kalpamani-receipt-collection/v1`, closed: `parse_collection_record`
+admits exactly its fields) per collection, whatever its outcome: identity, the launch record's
+digest, the log group and stream, the outcome, the request, page and event counts, the count of
+distinct receipt-shaped lines, `scan_complete`, the observation window (`started_at`, `finished_at`,
+`elapsed_ms`), and — only when `COLLECTED` — the verified receipt line itself, which is the closed
+receipt document (tokens, counts, digests); only when `RECEIPT_REJECTED`, the closed defect and the
+byte count. **No other event and no rejected text is stored**; every other line is counted and
+discarded, so no arbitrary log content leaves the stream through the collector. The record lives
+under the governed private root beside the launch records, and nothing is ever removed from there.
 
 ### 2.5 Repeatable, and where the real client lives
 
-A collection recorded `COLLECTED` for a launch is reused and the stream is not read again; a
-completion interrupted after the collection record repairs itself on the next run without a read. The
+Both tools admit the recorded collections of a launch through **one rule**
+(`admit_collection_records`): every `receipt-collection` record about the identity is read, each is
+held to the launch record's digest and to the derived group and stream, a kept line is re-verified
+against the expectation, and two different kept lines are a contradiction — `RECORD_MALFORMED`,
+`LAUNCH_MISMATCH`, `DESTINATION_MISMATCH`, `RECEIPT_UNVERIFIABLE`, `CONTRADICTORY_RECORDS` each refuse
+the completion (`refused_collection_records`), **and nothing is chosen by filename order or by any
+other order**. A verified `COLLECTED` record is reused and the stream is not read again; a completion
+interrupted after the collection record repairs itself on the next run without a read. **Recovery
+from a rejected attempt is explicit and automatic**: a `RECEIPT_REJECTED`, `SCAN_INCOMPLETE`,
+exhausted, denied, throttled, failed or contradictory record never blocks — the next collection
+reads the stream again and its record is written beside the earlier ones. Contradictory or
+unverifiable `COLLECTED` records are the one state no collection resolves: they name a conflict in
+the evidence the owner reviews, and no tool picks between them. The
 logs client is built **only inside the collection flag** (`--i-am-the-owner-authorizing-receipt-
 collection`, with `--complete-row --collect-receipt` in the launch tool and `--collect-receipt
 <subcell>` in the permission tool), after the record, its reservation, the registered destination and
@@ -240,3 +281,36 @@ publication, **no** Terraform plan or apply, **no** IAM, permission-set or bucke
 grants **no** permission. Each tool refuses by default; a collection needs its own flag and the launcher
 identity; the rehearsal path stays CLOSED and D-1 stays the owner's. **G2 stays OPEN, CONTROL stays
 DEFERRED, Phase 3 stays NOT COMPLETE, live trading stays HARD-DISABLED.**
+
+## 6. Corrections after review (correction 1; the ADR stays PROPOSED)
+
+The independent review of the pull request reproduced three findings through the real collector and
+both public completion paths, on synthetic files and fakes; each is corrected in the same pull
+request, and this section records what changed against the text above.
+
+1. **An incomplete scan established uniqueness.** A pass that ended on the 16-page bound, the
+   request budget or the event ceiling with one receipt-shaped line seen was `COLLECTED` — a valid
+   line on page 1 and a contradictory line on page 17 completed a row and a subcell; a page crossing
+   the event ceiling was scanned whole; the elapsed ceiling was checked only between passes, so slow
+   requests ran a pass far past it. Now: `COLLECTED` and `RECEIPT_REJECTED` require a **complete scan**
+   (end token observed, one poll interval, a re-read delivering nothing new); a line seen in a cut
+   scan is `SCAN_INCOMPLETE` and is not kept; a second distinct line refuses at once; every bound is
+   checked **before** each request and a page is scanned only up to the event ceiling; the in-flight
+   request is documented as the one limit the collector cannot cut, and `elapsed_ms` records it.
+2. **Unvalidated content was persisted before the completion refused it.** Receipt-prefixed
+   malformed text, and a closed document with one unexpected field, were written into a `COLLECTED`
+   record and refused only afterwards. Now the candidate is decoded and verified against the launch
+   record's expectation **inside the collector**, before any record is written; a refused line leaves
+   `RECEIPT_REJECTED` with the closed defect and a byte count only.
+3. **Cached records were chosen by filename order, and a cached rejection had no recovery.** The
+   first `COLLECTED` record in sorted order was reused; two contradicting records completed or
+   refused depending on their names; a `COLLECTED` record carrying a malformed line was reused
+   forever and the stream never read again. Now one closed parser and one admission rule (§2.5)
+   serve both tools: every record about the launch is read and bound to the launch record and the
+   destination, contradictions and unverifiable lines refuse whatever the order, and rejected or
+   exhausted attempts never block a new collection.
+
+Also corrected with them: a collection is refused until the launcher observed the task's terminal
+state (§2.2); the tools print one closed summary line (outcome, counts, `scan_complete`); the two R-8
+subcells stay BLOCKED, the rehearsal path stays CLOSED, and no permission or runtime authorization
+moves.
