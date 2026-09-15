@@ -831,7 +831,7 @@ def test_a_task_subcell_is_launched_completed_from_its_receipt_and_cleaned_up(
     assert code == tool.EXIT_PROBE_LAUNCHED, out
     assert tool.SENTENCES["probe_launched"] in out and "task_started=yes" in out
     assert "observed_exit_code=41" in out
-    for canary in CANARIES + ("arn:aws:ecs", "objects/sha256"):
+    for canary in (*CANARIES, "arn:aws:ecs", "objects/sha256"):
         assert canary not in out
     # The attempt, the launch record, the evidence and the ledger row exist; no permission
     # record yet; the authorization is consumed; no workstation client was built.
