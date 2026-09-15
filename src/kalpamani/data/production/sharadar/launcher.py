@@ -58,6 +58,7 @@ from kalpamani.data.production.sharadar.outcomes import (
     CLEANUP_IDENTITY_UNAVAILABLE,
     CleanupFailure,
     CleanupStage,
+    HeldCheckOutcome,
     LaunchOutcome,
     OperationCounts,
     PlacementIncident,
@@ -85,6 +86,13 @@ PLACEMENT_POLL_INTERVAL_SECONDS: Final = 5.0
 PLACEMENT_CEILING_SECONDS: Final = 120.0
 OBSERVE_POLL_INTERVAL_SECONDS: Final = 15.0
 OBSERVE_CEILING_SECONDS: Final = 3600.0
+#: The held-task precondition (proposed ADR-0048 s.3): after the release is written, the
+#: launched probe task is described afresh until it reports RUNNING, at this interval and
+#: for at most this long, before the one ExecuteCommand check is issued. The ceiling sits
+#: inside the probe's own hold (180 s after its bootstrap, ceiling 600 s), so a task that
+#: reaches RUNNING inside it is still holding when the check arrives.
+HELD_READY_POLL_INTERVAL_SECONDS: Final = 5.0
+HELD_READY_CEILING_SECONDS: Final = 120.0
 
 #: The lifecycle ``Expiration`` each parameter rides with: input 24 h, release 1 h.
 INPUT_EXPIRATION: Final = MAX_INPUT_VALIDITY
@@ -149,6 +157,28 @@ class LaunchHandle:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class HeldTask:
+    """What a fresh ``DescribeTasks`` established about the launched probe task at the
+    moment the launcher's check was admitted (proposed ADR-0048 s.3): the task, the
+    revision and image it reported, its ``lastStatus`` and when it was observed. This is
+    what proves the probe task was *available* -- running, on the registered revision and
+    image, released by this sequence -- and nothing more: whether the service evaluates
+    the caller's authorization before the task's ``enableExecuteCommand`` state stays an
+    evaluation-order limitation. The ARN is held and never rendered."""
+
+    task_arn: str
+    task_definition_arn: str
+    image_digest: str
+    last_status: str
+    observed_at: datetime
+    describe_calls: int
+
+    def __repr__(self) -> str:
+        """Status only."""
+        return f"HeldTask(last_status={self.last_status!r})"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LaunchReport:
     """The sanitized result: one outcome, counts, incident and cleanup failures.
 
@@ -178,6 +208,10 @@ class LaunchReport:
     #: ``WITHHELD`` no release was written; under ``MISMATCHED`` the release named a
     #: task ARN derived from, and never equal to, the launched task's.
     release_mode: ReleaseMode = ReleaseMode.NORMAL
+    #: The held-task precondition's outcome (proposed ADR-0048 s.3), and the fresh
+    #: description the check was admitted on -- present exactly when ``INVOKED``.
+    held_check: HeldCheckOutcome = HeldCheckOutcome.NOT_APPLICABLE
+    held_task: HeldTask | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers only; a handle exactly when a task started."""
@@ -185,6 +219,16 @@ class LaunchReport:
             raise TypeError("outcome must be an exact LaunchOutcome member")
         if type(self.release_mode) is not ReleaseMode:
             raise TypeError("release_mode must be an exact ReleaseMode member")
+        if type(self.held_check) is not HeldCheckOutcome:
+            raise TypeError("held_check must be an exact HeldCheckOutcome member")
+        if (self.held_check is HeldCheckOutcome.INVOKED) != (self.held_task is not None):
+            raise ValueError(
+                "a held task description is present exactly when the check was invoked"
+            )
+        if self.held_task is not None and (
+            type(self.held_task) is not HeldTask or self.handle is None
+        ):
+            raise ValueError("a held task is the started task's fresh description")
         if type(self.counts) is not OperationCounts:
             raise TypeError("counts must be an exact OperationCounts")
         if self.incident is not None and type(self.incident) is not PlacementIncident:
@@ -345,17 +389,26 @@ def launch_authorized_run(
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
     release_mode: ReleaseMode = ReleaseMode.NORMAL,
-    while_running: Callable[[LaunchHandle], None] | None = None,
+    while_running: Callable[[HeldTask], None] | None = None,
 ) -> LaunchReport:
     """Run the whole launch sequence for one authorized run; one sanitized report.
 
-    ``while_running`` (proposed ADR-0048) is invoked exactly once, after the release is
-    written and before observation begins, with the handle of the task this sequence
-    started -- the one moment a permission-probe launch has an attributable, released,
-    running task of its own actor to make the launcher's ``ExecuteCommand`` refusal check
-    against. It is admitted for a permission-probe launch only, its own exception is
-    swallowed (the check records its own answer), and it never changes the sequence: the
-    task is observed to its terminal state and the prescribed cleanup runs as always.
+    ``while_running`` (proposed ADR-0048) is invoked at most once, after the release is
+    written and before observation begins, and only once the **held-task precondition**
+    holds: a fresh ``DescribeTasks`` of the task this sequence started reports it
+    ``RUNNING`` on the registered revision with the registered image, polled at
+    :data:`HELD_READY_POLL_INTERVAL_SECONDS` for at most
+    :data:`HELD_READY_CEILING_SECONDS`. That is the one moment a permission-probe launch
+    has an attributable, released, running task of its own actor to make the launcher's
+    ``ExecuteCommand`` refusal check against, and the check receives that description
+    (:class:`HeldTask`) as its evidence. A task that stops first, that has not reached
+    ``RUNNING`` at the ceiling, that cannot be described, or that reports another
+    revision or image is **not checked** -- the report says which
+    (:class:`~kalpamani.data.production.sharadar.outcomes.HeldCheckOutcome`) and the
+    sequence continues unchanged. The check is admitted for a permission-probe launch
+    only, its own exception is swallowed (the check records its own answer), and it never
+    changes the sequence: the task is observed to its terminal state and the prescribed
+    cleanup runs as always.
 
     ``identity_proof`` is invoked with ``HUMAN`` before the input is materialized and
     before it is deleted, and with ``LAUNCHER`` before the launch and before the
@@ -400,6 +453,8 @@ def launch_authorized_run(
     cleanup: list[CleanupFailure] = []
     input_materialized = False
     release_written = False
+    held_check = HeldCheckOutcome.NOT_APPLICABLE
+    held_task: HeldTask | None = None
     released_interface: str | None = None
     released_subnet: str | None = None
     released_groups: tuple[str, ...] | None = None
@@ -597,14 +652,55 @@ def launch_authorized_run(
                 raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
             release_written = True
 
-        # Step 8a (proposed ADR-0048): the launcher's one check against its own released,
-        # running probe task. Its answer is the check's own record; a failure inside it
-        # changes nothing here.
+        # Step 8a (proposed ADR-0048 s.3): the held-task precondition, then the
+        # launcher's one check against its own released, running probe task. The task is
+        # described afresh until it reports RUNNING on the registered revision with the
+        # registered image; anything else -- stopped first, not yet running at the
+        # ceiling, undescribable, another revision or image -- is recorded and the check
+        # is not made. Its answer is the check's own record; a failure inside it changes
+        # nothing here.
         if while_running is not None and release_written:
-            try:
-                while_running(LaunchHandle(task_arn=task_arn))
-            except Exception:  # noqa: S110 - the check records its own outcome
-                pass
+            ready_started = monotonic()
+            describe_calls = 0
+            while True:
+                try:
+                    task = adapters.ecs.describe_task(task_arn)
+                except ComputeError:
+                    held_check = HeldCheckOutcome.OBSERVATION_FAILED
+                    break
+                describe_calls += 1
+                if task.stopped:
+                    held_check = HeldCheckOutcome.TASK_STOPPED
+                    break
+                if task.last_status == "RUNNING":
+                    if (
+                        task.task_definition_arn != compiled.task_definition_arn
+                        or _image_incident(compiled, task) is not None
+                    ):
+                        held_check = HeldCheckOutcome.TASK_MISMATCH
+                        break
+                    held_task = HeldTask(
+                        task_arn=task_arn,
+                        task_definition_arn=task.task_definition_arn,
+                        image_digest=compiled.image_digest,
+                        last_status=task.last_status,
+                        observed_at=now(),
+                        describe_calls=describe_calls,
+                    )
+                    held_check = HeldCheckOutcome.INVOKED
+                    break
+                if (
+                    elapsed_since(ready_started) + HELD_READY_POLL_INTERVAL_SECONDS
+                    > HELD_READY_CEILING_SECONDS
+                ):
+                    held_check = HeldCheckOutcome.READINESS_TIMEOUT
+                    break
+                sleep(HELD_READY_POLL_INTERVAL_SECONDS)
+            if held_task is not None:
+                try:
+                    while_running(held_task)
+                except Exception:  # noqa: S110 - the check records its own outcome
+                    pass
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
@@ -657,10 +753,14 @@ def launch_authorized_run(
         subnet_id=released_subnet,
         security_group_ids=released_groups,
         release_mode=release_mode,
+        held_check=held_check,
+        held_task=held_task,
     )
 
 
 __all__ = [
+    "HELD_READY_CEILING_SECONDS",
+    "HELD_READY_POLL_INTERVAL_SECONDS",
     "INPUT_EXPIRATION",
     "OBSERVE_CEILING_SECONDS",
     "OBSERVE_POLL_INTERVAL_SECONDS",
@@ -669,6 +769,7 @@ __all__ = [
     "RELEASE_EXPIRATION",
     "STOP_REASON_MISPLACED",
     "STOP_REASON_RELEASE_EXISTS",
+    "HeldTask",
     "LaunchAdapters",
     "LaunchAuthorization",
     "LaunchHandle",

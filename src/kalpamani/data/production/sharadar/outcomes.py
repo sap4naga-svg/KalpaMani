@@ -70,6 +70,25 @@ class PlacementIncident(StrEnum):
     IMAGE_UNRESOLVED = "IMAGE_UNRESOLVED"
 
 
+class HeldCheckOutcome(StrEnum):
+    """What the launcher established about its held probe task before its one check
+    (proposed ADR-0048 s.3). Closed."""
+
+    #: Not a held probe launch, or the sequence never reached the release.
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    #: A fresh ``DescribeTasks`` reported the launched task RUNNING on the registered
+    #: revision with the registered image, and the check was invoked exactly once.
+    INVOKED = "INVOKED"
+    #: The task was already STOPPED before it was ever observed RUNNING; no check.
+    TASK_STOPPED = "TASK_STOPPED"
+    #: The task had not reached RUNNING at the readiness ceiling; no check.
+    READINESS_TIMEOUT = "READINESS_TIMEOUT"
+    #: ``DescribeTasks`` failed before RUNNING was observed; no check.
+    OBSERVATION_FAILED = "OBSERVATION_FAILED"
+    #: The fresh description named another revision or image; no check.
+    TASK_MISMATCH = "TASK_MISMATCH"
+
+
 class CleanupStage(StrEnum):
     """Which prescribed cleanup operation failed. Closed.
 
@@ -216,6 +235,7 @@ __all__ = [
     "RUNNER_SENTENCES",
     "CleanupFailure",
     "CleanupStage",
+    "HeldCheckOutcome",
     "LaunchOutcome",
     "OperationCounts",
     "PlacementIncident",

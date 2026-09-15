@@ -61,6 +61,7 @@ from kalpamani.data.production.sharadar.documents import (
     hex_digest,
     instant,
 )
+from kalpamani.data.production.sharadar.entry import EXIT_STATUS, PROBE_ENTRIES, TaskOutcome
 from kalpamani.data.production.sharadar.keys import (
     production_acquisition_key_for_digest,
     production_claim_key,
@@ -71,10 +72,16 @@ from kalpamani.data.production.sharadar.launch_records import (
     RECORD_SCHEMA_VERSION,
     LaunchInputs,
     LaunchKind,
+    LaunchRecord,
+    LedgerEvidence,
+    OwnerLedgerRow,
 )
+from kalpamani.data.production.sharadar.launch_store import RecordBinding, Reservation
+from kalpamani.data.production.sharadar.outcomes import HeldCheckOutcome
 from kalpamani.data.production.sharadar.permission_probe import (
     PermissionProbeObservation,
     SubcellOutcome,
+    probe_identity,
 )
 from kalpamani.data.production.sharadar.r3_verification import (
     CONTROL_PROFILE,
@@ -82,6 +89,12 @@ from kalpamani.data.production.sharadar.r3_verification import (
     ObservedClass,
 )
 from kalpamani.data.production.sharadar.r3_verification import classify as _classify_s3
+from kalpamani.data.production.sharadar.receipts import (
+    LEDGER_OUTCOME_OF,
+    ReceiptError,
+    VerifiedReceipt,
+    verify_receipt,
+)
 from kalpamani.data.production.sharadar.release import TASK_ARN_RE
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 from kalpamani.data.qualify.sharadar.runtime_binding import (
@@ -1430,6 +1443,13 @@ PERMISSION_CONSUMPTION_CONTRACT_ID: Final = "kalpamani-permission-consumption/v1
 PERMISSION_ATTEMPT_CONTRACT_ID: Final = "kalpamani-permission-attempt/v1"
 PERMISSION_RECORD_CONTRACT_ID: Final = "kalpamani-permission-record/v1"
 PERMISSION_CLEANUP_CONTRACT_ID: Final = "kalpamani-permission-cleanup/v1"
+#: The verified receipt of one probe launch, kept beside the permission record it
+#: completed (proposed ADR-0048 s.2.5): the receipt document as collected, bound to the
+#: launch record by that record's digest, re-verified by the validator on every read.
+PROBE_RECEIPT_CONTRACT_ID: Final = "kalpamani-probe-receipt-evidence/v1"
+#: The held-task precondition one launcher check was admitted on (proposed ADR-0048 s.3):
+#: the fresh description of the launched probe task, or why no check was made.
+HELD_TASK_CONTRACT_ID: Final = "kalpamani-held-task-evidence/v1"
 MAX_PERMISSION_RECORD_BYTES: Final = 32 * 1024
 #: An authorization is for now: it expires, and a stale one is refused.
 MAX_AUTHORIZATION_VALIDITY: Final = timedelta(hours=24)
@@ -2043,6 +2063,92 @@ class PermissionCleanup:
         )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProbeReceiptEvidence:
+    """One probe launch's hand-read receipt, as the completion verified it.
+
+    ``receipt`` is the receipt document exactly as the task emitted it (closed fields,
+    classes and counts -- no value), ``launch_record_sha256`` the digest of the launch
+    record it was verified against. The validator re-verifies the document against that
+    record's expectation on every read: a substituted, altered or missing receipt never
+    passes on the strength of this file's existence.
+    """
+
+    subcell_id: str
+    attempt_sha256: str
+    identity: str
+    launch_record_sha256: str
+    receipt: dict[str, Any]
+    received_at: datetime
+    binding: PermissionBinding
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": PROBE_RECEIPT_CONTRACT_ID,
+            "subcell_id": self.subcell_id,
+            "attempt_sha256": self.attempt_sha256,
+            "identity": self.identity,
+            "launch_record_sha256": self.launch_record_sha256,
+            "receipt": dict(self.receipt),
+            "received_at": self.received_at.isoformat(),
+            "binding": self.binding.document(),
+        }
+
+    @property
+    def digest(self) -> str:
+        return sha256_hex(canonical_bytes(self.document()))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HeldTaskEvidence:
+    """What the launcher established about its held probe task before its one check.
+
+    ``check`` is the precondition's outcome; the task fields are the fresh description
+    the check was admitted on (``INVOKED``) or the last one taken (anything else), with
+    ``image_digest`` the registered digest the description matched, or ``None`` when no
+    description was ever read. ``describe_calls`` counts the fresh descriptions.
+    """
+
+    subcell_id: str
+    attempt_sha256: str
+    identity: str
+    task_id: str
+    task_definition_arn: str
+    image_digest: str | None
+    last_status: str | None
+    check: HeldCheckOutcome
+    describe_calls: int
+    observed_at: datetime
+    binding: PermissionBinding
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": HELD_TASK_CONTRACT_ID,
+            "subcell_id": self.subcell_id,
+            "attempt_sha256": self.attempt_sha256,
+            "identity": self.identity,
+            "task_id": self.task_id,
+            "task_definition_arn": self.task_definition_arn,
+            "image_digest": self.image_digest,
+            "last_status": self.last_status,
+            "check": self.check.value,
+            "describe_calls": self.describe_calls,
+            "observed_at": self.observed_at.isoformat(),
+            "binding": self.binding.document(),
+        }
+
+    @property
+    def digest(self) -> str:
+        return sha256_hex(canonical_bytes(self.document()))
+
+
+def launch_record_digest(record: LaunchRecord) -> str:
+    """The digest a receipt evidence names: the launch record's canonical document."""
+    return sha256_hex(canonical_bytes(record.document()))
+
+
 def _issue(
     cell: Subcell, target: ResolvedTarget, client: PermissionClient, stamp: str
 ) -> Observation:
@@ -2573,6 +2679,38 @@ _CLEANUP_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 _TASK_ID_RE: Final = re.compile(r"[0-9a-f]{32}|unknown")
+_PROBE_RECEIPT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "subcell_id",
+        "attempt_sha256",
+        "identity",
+        "launch_record_sha256",
+        "receipt",
+        "received_at",
+        "binding",
+    }
+)
+_HELD_TASK_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "subcell_id",
+        "attempt_sha256",
+        "identity",
+        "task_id",
+        "task_definition_arn",
+        "image_digest",
+        "last_status",
+        "check",
+        "describe_calls",
+        "observed_at",
+        "binding",
+    }
+)
+_PROBE_IDENTITY_RE: Final = re.compile(r"probe-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}")
+_HELD_STATUS_RE: Final = re.compile(r"[A-Z_]{1,32}")
 
 
 def _document(raw: object, contract_id: str, fields_: frozenset[str]) -> dict[str, Any]:
@@ -2682,13 +2820,18 @@ def parse_permission_record(raw: object) -> PermissionRecord:
         # A probe-layer record (proposed ADR-0048): the one started task is the probe
         # task itself, under the session's tag, never possibly started; a task subcell's
         # one operation (or none, when the probe refused before it); a held subcell's one
-        # ExecuteCommand plus the stop an unexpected session provoked.
+        # ExecuteCommand plus the stop an unexpected session provoked (or none, when the
+        # held-task precondition did not hold and no check was made).
         if (
             started_by is None
             or len(started_task_ids) != 1
             or d["possibly_started"]
             or (cell.layer is Layer.L3_TASK and (acknowledged or d["operations"] > 1))
-            or (cell.layer is Layer.L3_HELD_TASK and d["operations"] != 1 + len(acknowledged))
+            or (
+                cell.layer is Layer.L3_HELD_TASK
+                and d["operations"] != 1 + len(acknowledged)
+                and not (d["operations"] == 0 and not acknowledged)
+            )
             or (d["operations"] == 0) != (observed is ObservedClass.NOT_EXERCISED)
         ):
             raise ValueError("permission record: field")
@@ -2815,6 +2958,86 @@ def parse_permission_statement(raw: object) -> PermissionStatement:
         targets_sha256=_digest_field(d["targets_sha256"]),
         prerequisites=prerequisites,
         prepared_at=prepared_at,
+    )
+
+
+def parse_probe_receipt_evidence(raw: object) -> ProbeReceiptEvidence:
+    """A probe receipt evidence record, parsed closed; the receipt itself is re-verified
+    by the validator, never here."""
+    d = _document(raw, PROBE_RECEIPT_CONTRACT_ID, _PROBE_RECEIPT_FIELDS)
+    cell_id = exact_str(d["subcell_id"])
+    if cell_id is None or cell_id not in SUBCELL_BY_ID:
+        raise ValueError("probe receipt evidence: subcell")
+    if SUBCELL_BY_ID[cell_id].layer not in PROBE_LAYERS:
+        raise ValueError("probe receipt evidence: layer")
+    identity = exact_str(d["identity"])
+    received_at = instant(d["received_at"])
+    receipt = d["receipt"]
+    if (
+        identity is None
+        or _PROBE_IDENTITY_RE.fullmatch(identity) is None
+        or received_at is None
+        or type(receipt) is not dict
+        or not all(type(name) is str for name in receipt)
+    ):
+        raise ValueError("probe receipt evidence: field")
+    return ProbeReceiptEvidence(
+        subcell_id=cell_id,
+        attempt_sha256=_digest_field(d["attempt_sha256"]),
+        identity=identity,
+        launch_record_sha256=_digest_field(d["launch_record_sha256"]),
+        receipt=receipt,
+        received_at=received_at,
+        binding=_binding_from(d["binding"]),
+    )
+
+
+def parse_held_task_evidence(raw: object) -> HeldTaskEvidence:
+    """A held-task evidence record, parsed closed."""
+    d = _document(raw, HELD_TASK_CONTRACT_ID, _HELD_TASK_FIELDS)
+    cell_id = exact_str(d["subcell_id"])
+    if cell_id is None or cell_id not in SUBCELL_BY_ID:
+        raise ValueError("held task evidence: subcell")
+    if SUBCELL_BY_ID[cell_id].layer is not Layer.L3_HELD_TASK:
+        raise ValueError("held task evidence: layer")
+    identity = exact_str(d["identity"])
+    task_id = exact_str(d["task_id"])
+    definition = exact_str(d["task_definition_arn"])
+    observed_at = instant(d["observed_at"])
+    check = _member(HeldCheckOutcome, d["check"])
+    image = d["image_digest"]
+    status = d["last_status"]
+    calls = d["describe_calls"]
+    if (
+        identity is None
+        or _PROBE_IDENTITY_RE.fullmatch(identity) is None
+        or task_id is None
+        or re.fullmatch(r"[0-9a-f]{32}", task_id) is None
+        or definition is None
+        or not definition
+        or observed_at is None
+        or (image is not None and (type(image) is not str or not image.startswith("sha256:")))
+        or (
+            status is not None
+            and (type(status) is not str or _HELD_STATUS_RE.fullmatch(status) is None)
+        )
+        or type(calls) is not int
+        or calls < 0
+        or (check is HeldCheckOutcome.INVOKED) != (status == "RUNNING" and image is not None)
+    ):
+        raise ValueError("held task evidence: field")
+    return HeldTaskEvidence(
+        subcell_id=cell_id,
+        attempt_sha256=_digest_field(d["attempt_sha256"]),
+        identity=identity,
+        task_id=task_id,
+        task_definition_arn=definition,
+        image_digest=image,
+        last_status=status,
+        check=check,
+        describe_calls=calls,
+        observed_at=observed_at,
+        binding=_binding_from(d["binding"]),
     )
 
 
@@ -2999,9 +3222,17 @@ class PermissionEvidence:
     malformed: int = 0
     context: PermissionContext | None = None
     #: The probe launches the tool made (proposed ADR-0048), by the digest of the
-    #: attempt each answers: the launch record's specification digest names the attempt.
-    #: A launched attempt with no record yet is AWAITING_RECEIPT, not INTERRUPTED.
+    #: attempt each answers -- read from the **reservation** beside the ledger (the
+    #: durable pre-launch attribution), with the launch record that names it, the ledger
+    #: row of its identity, and how many further launch records name the same identity.
     probe_launches: dict[str, ProbeLaunch] = field(default_factory=dict)
+    #: Probe launch records that no reservation attributes to an attempt: unattributable
+    #: launch evidence, reported like malformed evidence and never ignored.
+    unattributed_launches: int = 0
+    #: The receipt evidence completion wrote, by attempt (every one, so a duplicate is seen).
+    probe_receipts: dict[str, tuple[ProbeReceiptEvidence, ...]] = field(default_factory=dict)
+    #: The held-task precondition evidence, by attempt (every one, so a duplicate is seen).
+    held_tasks: dict[str, tuple[HeldTaskEvidence, ...]] = field(default_factory=dict)
 
     @property
     def binding(self) -> PermissionBinding | None:
@@ -3010,12 +3241,43 @@ class PermissionEvidence:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProbeLaunch:
-    """What the runner needs of one probe launch record: the attempt it answers, and
-    whether a task started (an identifier is never carried here)."""
+    """One probe launch as the evidence attributes it: the reservation written before
+    ``RunTask`` (its workload names the attempt, the stamp and the tag; its placement
+    the cluster), the launch record that names the reservation's specification -- absent
+    when the launch was interrupted before its record -- how that record binds to the
+    reservation, the owner-ledger row of the identity, and the count of further launch
+    records naming the same identity (a duplicate is a defect, never a choice)."""
 
     attempt_sha256: str
-    task_started: bool
-    observed_exit_code: int | None
+    identity: str
+    reservation: Reservation
+    record: LaunchRecord | None
+    binding: RecordBinding | None
+    row: OwnerLedgerRow | None
+    duplicates: int = 0
+
+    @property
+    def workload(self) -> dict[str, Any]:
+        return self.reservation.specification.workload
+
+    @property
+    def started_by(self) -> str:
+        started_by: str = self.workload["started_by"]
+        return started_by
+
+    @property
+    def cluster_arn(self) -> str:
+        cluster_arn: str = self.reservation.specification.placement["cluster_arn"]
+        return cluster_arn
+
+    @property
+    def task_started(self) -> bool:
+        """A launch record exists only when a task started."""
+        return self.record is not None
+
+    @property
+    def known_task_ids(self) -> tuple[str, ...]:
+        return () if self.record is None else (self.record.task_id,)
 
 
 class ChainDefect(StrEnum):
@@ -3032,6 +3294,23 @@ class ChainDefect(StrEnum):
     TARGET_MISMATCH = "TARGET_MISMATCH"
     CONSUMPTION_MISSING = "CONSUMPTION_MISSING"
     CONSUMPTION_MISMATCH = "CONSUMPTION_MISMATCH"
+    # A probe-layer result (proposed ADR-0048) binds through its launch, its receipt and
+    # its ledger row as well; each is required, exact, and never chosen among several.
+    LAUNCH_MISSING = "LAUNCH_MISSING"
+    LAUNCH_DUPLICATE = "LAUNCH_DUPLICATE"
+    LAUNCH_UNBOUND = "LAUNCH_UNBOUND"
+    LAUNCH_MISMATCH = "LAUNCH_MISMATCH"
+    LEDGER_MISSING = "LEDGER_MISSING"
+    LEDGER_MISMATCH = "LEDGER_MISMATCH"
+    RECEIPT_MISSING = "RECEIPT_MISSING"
+    RECEIPT_DUPLICATE = "RECEIPT_DUPLICATE"
+    RECEIPT_INVALID = "RECEIPT_INVALID"
+    RECEIPT_MISMATCH = "RECEIPT_MISMATCH"
+    PROBE_NOT_HELD = "PROBE_NOT_HELD"
+    HELD_EVIDENCE_MISSING = "HELD_EVIDENCE_MISSING"
+    HELD_EVIDENCE_DUPLICATE = "HELD_EVIDENCE_DUPLICATE"
+    HELD_EVIDENCE_MISMATCH = "HELD_EVIDENCE_MISMATCH"
+    HELD_TASK_NOT_RUNNING = "HELD_TASK_NOT_RUNNING"
 
 
 class ChainError(ValueError):
@@ -3052,6 +3331,159 @@ class BoundChain:
     consumption: PermissionConsumption
     target: ResolvedTarget
     prerequisites: dict[str, PermissionRecord]
+    #: A probe-layer result's launch, receipt and (held) precondition evidence.
+    launch: ProbeLaunch | None = None
+    receipt: VerifiedReceipt | None = None
+    held: HeldTaskEvidence | None = None
+
+
+def _exit_code_of(receipt: VerifiedReceipt) -> int | None:
+    return EXIT_STATUS.get(receipt.outcome)
+
+
+def _bind_probe_evidence(
+    cell: Subcell,
+    record: PermissionRecord,
+    attempt: PermissionAttempt,
+    evidence: PermissionEvidence,
+) -> tuple[ProbeLaunch, VerifiedReceipt, HeldTaskEvidence | None]:
+    """The probe-layer half of the one validator (proposed ADR-0048).
+
+    Required, and held to each other and to the permission chain: exactly one probe
+    launch attributed to this attempt by its reservation, with exactly one launch record
+    that binds to that reservation (specification, workload, target, placement) and whose
+    workload names this subcell, statement, attempt, stamp and tag, the actor's probe
+    entry and identity, the hold of this layer, and the task the record started; exactly
+    one ledger row for that identity, of the probe kind and actor, launched when the
+    record says; exactly one receipt evidence, re-verified now against that launch
+    record's expectation, naming that record by digest, whose outcome is the exit code
+    the launcher observed at the terminal state and whose disposition the ledger row
+    carries as RECEIPT_VERIFIED; for a task subcell, a permission block equal to the
+    record's observation (or none, exactly for a probe that refused before its
+    operation); for a held subcell, a held receipt from a released bootstrap and exactly
+    one held-task evidence naming the same task, revision and image, ``INVOKED`` on a
+    RUNNING task whenever the record says a check was issued.
+    """
+    launch = evidence.probe_launches.get(record.attempt_sha256)
+    if launch is None or launch.record is None:
+        raise ChainError(ChainDefect.LAUNCH_MISSING)
+    if launch.duplicates:
+        raise ChainError(ChainDefect.LAUNCH_DUPLICATE)
+    if launch.binding is not RecordBinding.BOUND:
+        raise ChainError(ChainDefect.LAUNCH_UNBOUND)
+    actor = PRINCIPAL_ACTOR[cell.principal]
+    workload = launch.workload
+    launched = launch.record
+    if (
+        workload["subcell_id"] != record.subcell_id
+        or workload["statement_sha256"] != attempt.statement_sha256
+        or workload["attempt_sha256"] != attempt.digest
+        or workload["stamp"] != record.stamp
+        or workload["started_by"] != record.started_by
+        or record.started_by != started_by_of(record.stamp)
+        or (workload["hold_seconds"] > 0) != (cell.layer is Layer.L3_HELD_TASK)
+        or workload["input_digest"] != launched.input_digest
+        or launch.reservation.actor is not actor
+        or launch.identity != probe_identity(record.stamp)
+        or launched.identity != launch.identity
+        or launched.kind is not LaunchKind.PERMISSION_PROBE
+        or launched.entry not in PROBE_ENTRIES
+        or launched.actor is not actor
+        or record.started_task_ids != (launched.task_id,)
+        or record.possibly_started
+    ):
+        raise ChainError(ChainDefect.LAUNCH_MISMATCH)
+    row = launch.row
+    if row is None:
+        raise ChainError(ChainDefect.LEDGER_MISSING)
+    if (
+        row.identity != launch.identity
+        or row.kind is not LaunchKind.PERMISSION_PROBE
+        or row.actor is not actor
+        or row.launched_at != launched.launched_at
+    ):
+        raise ChainError(ChainDefect.LEDGER_MISMATCH)
+    receipts = evidence.probe_receipts.get(record.attempt_sha256, ())
+    if not receipts:
+        raise ChainError(ChainDefect.RECEIPT_MISSING)
+    if len(receipts) != 1:
+        raise ChainError(ChainDefect.RECEIPT_DUPLICATE)
+    evidence_record = receipts[0]
+    if (
+        evidence_record.binding != record.binding
+        or evidence_record.subcell_id != record.subcell_id
+        or evidence_record.identity != launch.identity
+        or evidence_record.launch_record_sha256 != launch_record_digest(launched)
+        or evidence_record.received_at < launched.recorded_at
+    ):
+        raise ChainError(ChainDefect.RECEIPT_MISMATCH)
+    try:
+        verified = verify_receipt(evidence_record.receipt, expectation=launched.expectation())
+    except ReceiptError:
+        raise ChainError(ChainDefect.RECEIPT_INVALID) from None
+    except Exception:
+        raise ChainError(ChainDefect.RECEIPT_INVALID) from None
+    observed_exit = launched.observed_exit_code
+    if (
+        verified.entry is not launched.entry
+        or observed_exit is None
+        or _exit_code_of(verified) != observed_exit
+        # A task subcell's identity attestation is the probe's own release; a held
+        # subcell's is the launcher's proof, and the probe's release is held below.
+        or (cell.layer is Layer.L3_TASK and verified.released != record.identity_verified)
+    ):
+        raise ChainError(ChainDefect.RECEIPT_MISMATCH)
+    disposition = LEDGER_OUTCOME_OF.get(verified.outcome, "REFUSED")
+    if row.evidence is not LedgerEvidence.RECEIPT_VERIFIED or row.outcome != disposition:
+        raise ChainError(ChainDefect.LEDGER_MISMATCH)
+    held: HeldTaskEvidence | None = None
+    if cell.layer is Layer.L3_TASK:
+        observation = verified.permission
+        if observation is None:
+            refused_before_operation = (
+                record.observed is ObservedClass.NOT_EXERCISED
+                and record.outcome is SubcellOutcome.UNDECIDED
+                and record.operations == 0
+                and not record.identity_verified
+            )
+            if not refused_before_operation:
+                raise ChainError(ChainDefect.RECEIPT_MISMATCH)
+        elif (
+            observation.subcell_id != record.subcell_id
+            or observation.statement_sha256 != attempt.statement_sha256
+            or observation.attempt_sha256 != attempt.digest
+            or observation.stamp != record.stamp
+            or observation.observed is not record.observed
+            or observation.outcome is not record.outcome
+            or observation.created != (record.created_key is not None)
+            or observation.possibly_created != record.possibly_created
+            or observation.operations != record.operations
+        ):
+            raise ChainError(ChainDefect.RECEIPT_MISMATCH)
+    else:
+        if verified.outcome is not TaskOutcome.PROBE_HELD or not verified.released:
+            raise ChainError(ChainDefect.PROBE_NOT_HELD)
+        helds = evidence.held_tasks.get(record.attempt_sha256, ())
+        if not helds:
+            raise ChainError(ChainDefect.HELD_EVIDENCE_MISSING)
+        if len(helds) != 1:
+            raise ChainError(ChainDefect.HELD_EVIDENCE_DUPLICATE)
+        held = helds[0]
+        if (
+            held.binding != record.binding
+            or held.subcell_id != record.subcell_id
+            or held.identity != launch.identity
+            or held.task_id != launched.task_id
+            or held.task_definition_arn != launched.task_definition_arn
+            or (held.image_digest is not None and held.image_digest != launched.image_digest)
+            or held.observed_at > record.finished_at
+        ):
+            raise ChainError(ChainDefect.HELD_EVIDENCE_MISMATCH)
+        if record.operations > 0 and (
+            held.check is not HeldCheckOutcome.INVOKED or held.last_status != "RUNNING"
+        ):
+            raise ChainError(ChainDefect.HELD_TASK_NOT_RUNNING)
+    return launch, verified, held
 
 
 def bind_result(
@@ -3069,7 +3501,10 @@ def bind_result(
     target recomputed NOW from the context and equal to the statement's digest, with
     the attempt's and the record's object the target's; and the durable consumption of
     the authorization, naming this subcell and statement, consumed no later than the
-    attempt started. A digest-shaped field alone binds nothing.
+    attempt started. A digest-shaped field alone binds nothing. A probe-layer
+    result (proposed ADR-0048) binds through :func:`_bind_probe_evidence` as well: its
+    reservation-attributed launch, its re-verified receipt, its ledger row and, held, its
+    precondition evidence.
     """
     context = evidence.context
     if context is None:
@@ -3157,6 +3592,11 @@ def bind_result(
         or consumption.consumed_at > attempt.started_at
     ):
         raise ChainError(ChainDefect.CONSUMPTION_MISMATCH)
+    launch: ProbeLaunch | None = None
+    receipt: VerifiedReceipt | None = None
+    held: HeldTaskEvidence | None = None
+    if cell.layer in PROBE_LAYERS:
+        launch, receipt, held = _bind_probe_evidence(cell, record, attempt, evidence)
     return BoundChain(
         record=record,
         attempt=attempt,
@@ -3164,6 +3604,9 @@ def bind_result(
         consumption=consumption,
         target=target,
         prerequisites=prerequisites,
+        launch=launch,
+        receipt=receipt,
+        held=held,
     )
 
 
@@ -3274,22 +3717,55 @@ def derive_subcell(
             status=SubcellStatus.UNBOUND,
             reason="malformed or unreadable permission evidence in the records",
         )
+    if evidence.unattributed_launches and cell.layer in PROBE_LAYERS:
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.UNBOUND,
+            reason="a permission-probe launch record that no reservation attributes to an "
+            "attempt is present; launch evidence is never chosen among candidates",
+        )
     records = [r for r in evidence.records.get(cell.subcell_id, ()) if r.binding == binding]
     stale = [r for r in evidence.records.get(cell.subcell_id, ()) if r.binding != binding]
     attempts = [a for a in evidence.attempts.get(cell.subcell_id, ()) if a.binding == binding]
     answered = {r.attempt_sha256 for r in records}
     unanswered = [a for a in attempts if a.digest not in answered]
     if unanswered:
-        launched = [a for a in unanswered if a.digest in evidence.probe_launches]
-        if cell.layer in PROBE_LAYERS and launched and len(launched) == len(unanswered):
-            if all(evidence.probe_launches[a.digest].task_started for a in launched):
-                return SubcellState(
-                    subcell_id=cell.subcell_id,
-                    status=SubcellStatus.AWAITING_RECEIPT,
-                    reason="the probe task was launched and its receipt is not yet verified "
-                    "(scripts/production_permission_cells.py --complete-subcell "
-                    "--receipt-lines); the cleanup settles the object the attempt named",
-                )
+        launched = [
+            a
+            for a in unanswered
+            if a.digest in evidence.probe_launches
+            and evidence.probe_launches[a.digest].task_started
+        ]
+        reserved = [
+            a
+            for a in unanswered
+            if a.digest in evidence.probe_launches and evidence.probe_launches[a.digest].row is None
+        ]
+        if reserved:
+            return SubcellState(
+                subcell_id=cell.subcell_id,
+                status=SubcellStatus.INTERRUPTED,
+                reason="a probe launch was reserved for the attempt and never recorded in the "
+                "ledger (scripts/production_permission_cells.py --recover-probe-launch); "
+                "the cleanup discovers any started task by the reservation's tag, and the "
+                "subcell is not re-executed automatically",
+            )
+        if cell.layer is Layer.L3_TASK and launched and len(launched) == len(unanswered):
+            return SubcellState(
+                subcell_id=cell.subcell_id,
+                status=SubcellStatus.AWAITING_RECEIPT,
+                reason="the probe task was launched and its receipt is not yet verified "
+                "(scripts/production_permission_cells.py --complete-subcell "
+                "--receipt-lines); the cleanup settles the object the attempt named",
+            )
+        if cell.layer is Layer.L3_HELD_TASK and launched:
+            return SubcellState(
+                subcell_id=cell.subcell_id,
+                status=SubcellStatus.INTERRUPTED,
+                reason="the held probe was launched and no check result names the attempt; "
+                "the cleanup discovers the task by the tag, and the subcell is not "
+                "re-executed automatically",
+            )
         return SubcellState(
             subcell_id=cell.subcell_id,
             status=SubcellStatus.INTERRUPTED,
@@ -3353,16 +3829,55 @@ def derive_subcell(
             status=SubcellStatus.UNBOUND,
             reason="the record does not attest that the principal's identity was verified",
         )
+    if (
+        cell.layer is Layer.L3_HELD_TASK
+        and latest.outcome is SubcellOutcome.UNDECIDED
+        and latest.observed is ObservedClass.NOT_EXERCISED
+        and latest.operations == 0
+    ):
+        # The held-task precondition did not hold, so no check was made: the record
+        # decides nothing, and its held-task evidence says why.
+        helds = evidence.held_tasks.get(latest.attempt_sha256, ())
+        why = helds[0].check.value if len(helds) == 1 else "no held-task evidence"
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.UNDECIDED,
+            reason=f"the held probe task was not available for the check ({why}); "
+            "prepare and authorize again",
+        )
+    if cell.layer in PROBE_LAYERS and latest.outcome is SubcellOutcome.UNDECIDED:
+        # An answer that decided nothing decides nothing whatever its receipt says.
+        return SubcellState(
+            subcell_id=cell.subcell_id,
+            status=SubcellStatus.UNDECIDED,
+            reason=f"the last answer decided nothing ({latest.observed.value})",
+        )
     chains: list[BoundChain] = []
     for record in records:
         try:
             chains.append(bind_result(record, evidence))
         except ChainError as error:
+            if error.defect is ChainDefect.RECEIPT_MISSING and record is latest:
+                return SubcellState(
+                    subcell_id=cell.subcell_id,
+                    status=SubcellStatus.AWAITING_RECEIPT,
+                    reason="the result is recorded and the probe's receipt is not yet "
+                    "verified against its launch (scripts/production_permission_cells.py "
+                    "--complete-subcell --receipt-lines)",
+                )
+            if error.defect is ChainDefect.PROBE_NOT_HELD and record is latest:
+                return SubcellState(
+                    subcell_id=cell.subcell_id,
+                    status=SubcellStatus.UNDECIDED,
+                    reason="the probe task's receipt does not attest a released, held probe "
+                    "(its bootstrap refused or it did not hold); the check decided nothing",
+                )
             return SubcellState(
                 subcell_id=cell.subcell_id,
                 status=SubcellStatus.UNBOUND,
                 reason=f"the recorded result does not bind to its attempt, statement, "
-                f"target and consumed authorization ({error.defect.value})",
+                f"target, consumed authorization and (probe) launch, receipt and ledger "
+                f"evidence ({error.defect.value})",
             )
     for chain in chains:
         unsettled = unsettled_reason(chain, evidence.cleanups)
@@ -3391,6 +3906,7 @@ __all__ = [
     "DELETION_DEPENDENCY",
     "DISCOVERY_MAX_PAGES",
     "EXECUTABLE_LAYERS",
+    "HELD_TASK_CONTRACT_ID",
     "MAX_AUTHORIZATION_VALIDITY",
     "MAX_PERMISSION_RECORD_BYTES",
     "MAX_PERMISSION_TARGETS_BYTES",
@@ -3405,6 +3921,7 @@ __all__ = [
     "PRINCIPAL_ACTOR",
     "PRINCIPAL_PROFILE",
     "PROBE_LAYERS",
+    "PROBE_RECEIPT_CONTRACT_ID",
     "SUBCELLS",
     "SUBCELL_BY_ID",
     "SUBCELL_OPERATION_BUDGET",
@@ -3417,6 +3934,7 @@ __all__ = [
     "CleanupKey",
     "CleanupTasks",
     "Expectation",
+    "HeldTaskEvidence",
     "Layer",
     "ObjectToSettle",
     "ObservedClass",
@@ -3434,6 +3952,7 @@ __all__ = [
     "PermissionTargets",
     "Principal",
     "ProbeLaunch",
+    "ProbeReceiptEvidence",
     "ResolvedTarget",
     "Subcell",
     "SubcellIssue",
@@ -3449,6 +3968,8 @@ __all__ = [
     "declaration_digest",
     "derive_subcell",
     "issue_subcell",
+    "launch_record_digest",
+    "parse_held_task_evidence",
     "parse_permission_attempt",
     "parse_permission_authorization",
     "parse_permission_cleanup",
@@ -3456,6 +3977,7 @@ __all__ = [
     "parse_permission_record",
     "parse_permission_statement",
     "parse_permission_targets",
+    "parse_probe_receipt_evidence",
     "record_of",
     "record_of_probe",
     "resolve_target",

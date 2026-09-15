@@ -88,6 +88,57 @@ def test_the_entries_families_and_contracts_match_the_document() -> None:
     assert "fake HTTP 200 had accepted" in ADR_PLAIN
 
 
+def test_the_corrections_are_stated_and_the_code_carries_them() -> None:
+    """Correction 1: the reservation before RunTask, recovery, the complete evidence
+    binding, the held-task precondition -- each named in the ADR and present in the code."""
+    from kalpamani.data.production.sharadar.launch_records import (
+        PROBE_STARTED_BY_PREFIX,
+        probe_specification,
+    )
+    from kalpamani.data.production.sharadar.launcher import (
+        HELD_READY_CEILING_SECONDS,
+        HELD_READY_POLL_INTERVAL_SECONDS,
+        HeldTask,
+    )
+    from kalpamani.data.production.sharadar.outcomes import HeldCheckOutcome
+
+    assert "## 8. Corrections after review" in ADR_TEXT
+    for token in (
+        "--recover-probe-launch",
+        "kalpamani-launch-reservation/v1",
+        "kalpamani-probe-receipt-evidence/v1",
+        "kalpamani-held-task-evidence/v1",
+        "held-task precondition",
+        "re-verified on every read",
+        "No post-launch record is needed",
+        "Completion is repeatable",
+        "evaluation-order limitation",
+    ):
+        assert token in ADR_PLAIN, token
+    assert pc.PROBE_RECEIPT_CONTRACT_ID == "kalpamani-probe-receipt-evidence/v1"
+    assert pc.HELD_TASK_CONTRACT_ID == "kalpamani-held-task-evidence/v1"
+    assert callable(probe_specification) and PROBE_STARTED_BY_PREFIX == "kalpamani-permission-"
+    assert HELD_READY_POLL_INTERVAL_SECONDS == 5.0 and HELD_READY_CEILING_SECONDS == 120.0
+    assert "at 5 s intervals for at most 120 s" in ADR_PLAIN
+    assert HELD_READY_CEILING_SECONDS < pp.PROBE_HOLD_CEILING_SECONDS
+    for member in HeldCheckOutcome:
+        if member is not HeldCheckOutcome.NOT_APPLICABLE and member is not HeldCheckOutcome.INVOKED:
+            assert member.value in ADR_TEXT, member
+    assert HeldTask.__slots__  # the fresh description is a closed value
+    for defect in (
+        pc.ChainDefect.LAUNCH_MISSING,
+        pc.ChainDefect.LAUNCH_DUPLICATE,
+        pc.ChainDefect.LAUNCH_UNBOUND,
+        pc.ChainDefect.LEDGER_MISMATCH,
+        pc.ChainDefect.RECEIPT_INVALID,
+        pc.ChainDefect.HELD_TASK_NOT_RUNNING,
+    ):
+        assert defect.value in pc.ChainDefect.__members__
+    assert "'--recover-probe-launch'" in (
+        REPO_ROOT / "scripts" / "production_permission_cells.py"
+    ).read_text(encoding="utf-8").replace('"', "'")
+
+
 def test_the_layers_and_counts_are_the_catalogue_s() -> None:
     by_layer = {layer: sum(1 for s in pc.SUBCELLS if s.layer is layer) for layer in pc.Layer}
     assert len(pc.SUBCELLS) == 98
