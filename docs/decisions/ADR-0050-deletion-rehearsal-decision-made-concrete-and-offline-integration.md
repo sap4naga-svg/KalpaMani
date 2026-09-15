@@ -10,7 +10,7 @@ becomes **ACCEPTED / IN FORCE** as **the concrete statement of Decision D-1 (§2
 permissions, principals, target restriction, limits, interruption handling, cleanup and residual risk
 the owner accepts or declines by taking it, presented for the owner's separate acceptance; the offline
 integration of the deletion rehearsal path (§3) — the task under the actual deletion role, the launcher,
-the completion, the collector's reuse and the owner tool's four modes, exercised only on fakes; the
+the completion, the collector's reuse and the owner tool's modes, exercised only on fakes; the
 inert declaration of the rehearsal resources (§4), closed by default; and the owner checklist (§5) —
 and nothing else**, effective together with the offline code and the inert declaration merged beside it.
 **Acceptance decides D-1 in neither direction**: D-1 is taken only by the owner's own explicit written
@@ -21,6 +21,11 @@ execution** (§7): no rehearsal, no deletion, no launch, no log read, no image b
 Terraform plan or apply, no IAM, permission-set, key-policy or bucket-policy change; and **acceptance
 grants no permission** — every permission named here is declared behind a variable that is false, and
 none is applied.
+
+**Correction 1 (§8) is part of this proposal.** After review of the pull request, three findings
+were reproduced through the public tool on synthetic files and fakes and corrected in the same open
+pull request; the corrected behaviour is stated in §2.7, §2.8, §3.3, §3.5, §3.6 and §8, and the ADR
+stays PROPOSED — the correction takes no decision and authorizes nothing.
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no log read, no S3 operation,
 no `RunTask`, no `ExecuteCommand`, no deletion, no container image built or pulled, no registry
@@ -156,13 +161,16 @@ Every outcome is recorded, none is retried, and nothing is resolved by assumptio
 | Interruption | Outcome recorded | The authorization | What follows |
 |---|---|---|---|
 | launcher identity refused | `REFUSED_IDENTITY` | **not consumed** | nothing written; prepare and authorize again under the right profile |
+| an earlier launch of any subcell is still unresolved beside the ledger (§8.1) | `REFUSED_RECOVERY_PENDING` | **not consumed** | nothing written, no client call — whatever the records directory or the authorization; recover, then let the cleanup settle it |
 | authorization already consumed | `REFUSED_CONSUMED` | already spent | nothing written, no client call |
+| the identity is already reserved beside the ledger | `REFUSED_RESERVED` | consumed | nothing written, no client call — the earlier reservation stands |
 | a stale input parameter exists | `REFUSED_INPUT_EXISTS` | consumed, reserved | nothing launched; the stale parameter is the owner's to remove |
 | `RunTask` refused definitively | `LAUNCH_REFUSED` | consumed, reserved | input deleted; no retry |
 | `RunTask` answered ambiguously (transient, throttled, unknown, malformed) | `LAUNCH_AMBIGUOUS` | consumed, reserved | input deleted; **never retried**; a task may exist and the cleanup discovers it by the session tag |
 | placement mismatch (subnet, groups, public IP, revision, image) | `MISPLACED` | consumed, reserved | task **stopped**, never released; no record |
 | a stale release exists | `STALE_RELEASE` | consumed, reserved | task stopped; no record |
-| task not observed terminal within the bounds | `OBSERVATION_EXHAUSTED` | consumed | launch record written **without an exit**; **completes nothing** (`LAUNCH_NOT_TERMINAL`) |
+| task not observed terminal within the bounds | `OBSERVATION_EXHAUSTED` | consumed | launch record written **without an exit**; **completes nothing** (`LAUNCH_NOT_TERMINAL`); the resolution records `STARTED_NOT_TERMINAL` and the launch stays unsettled until the cleanup stops the task |
+| the launcher process is interrupted after the reservation (§8.1) | no resolution — the reservation stands alone | consumed, reserved | every launch refused (`REFUSED_RECOVERY_PENDING`); `--recover-rehearsal-launch` records `RECOVERED_INTERRUPTED` with the task state `UNKNOWN` **offline, from the reservation alone**; still unsettled until the cleanup |
 | task terminal without an exit code | `LAUNCHED`, exit `null` | consumed | completes nothing |
 | a parameter cleanup fails | reported beside the outcome (`cleanup_failures`) | as above | never hidden |
 | the task refuses (entry, credential environment, metadata, binding, input, target, identity, release) | a bound receipt with the closed refusal and its exit 51–58 | consumed | `TASK_REFUSED` — the launch completes nothing |
@@ -179,7 +187,13 @@ exact key `confirmed_absent`. **Cleanup by the control principal is never proof 
 succeeded**: a record whose delete was denied stays `FAILED` however the control cleaned up afterwards,
 and a record whose delete answered ambiguously stays `INCONCLUSIVE` even once the control has removed
 the object. A started task the launcher lost is discovered by the cleanup through the session tag
-`kalpamani-rehearsal-<stamp>`, as for every probe launch.
+`kalpamani-rehearsal-<stamp>`, as for every probe launch — under the **accepted cleanup rule and no rule
+of its own** (§8.1): the cleanup parser admits the rehearsal tag beside the permission tag
+(`CLEANUP_STARTED_BY_PREFIXES`), the reservation's cluster and tag are what it lists, and a reservation
+whose resolution is `UNKNOWN` or `STARTED_NOT_TERMINAL` is settled only by a verified cleanup recorded
+after the resolution that discovered at least one task and stopped every one. **A listing that finds
+nothing settles nothing**; uncertain cleanup is preserved as unresolved, and every unresolved
+reservation keeps every launch refused.
 
 ### 2.9 Residual risk the owner accepts by taking D-1
 
@@ -287,17 +301,28 @@ no public IP, `startedBy` = `kalpamani-rehearsal-<stamp>`.
 `launch_rehearsal` reuses the accepted mechanisms as libraries — the launch store's durable
 `consume` and record naming, the compute adapter's task parser and failure classification, the EC2
 interface adapter, the SSM parameter adapter — in this order: the launcher's identity → the
-authorization consumed (`deletion_rehearsal_authorization`) → the **reservation** beside the ledger
-(`kalpamani-deletion-rehearsal-reservation/v1`: identity, subcell, statement, authorization and
-compiled-launch digests) → the create-only input → **one `RunTask`** (a definitive refusal is
-`LAUNCH_REFUSED`; a transient, throttled, unknown or malformed answer is `LAUNCH_AMBIGUOUS`; neither is
-retried) → placement verified from `DescribeTasks` and `DescribeNetworkInterfaces` (subnet, groups, no
+**no unsettled reservation beside the ledger** (`REFUSED_RECOVERY_PENDING`, before anything is
+consumed; §8.1) → the authorization consumed (`deletion_rehearsal_authorization`) → the **reservation
+anchored beside the canonical ledger** (`<ledger>.rehearsal_reservations/<identity>.json`, exclusive
+create, `REFUSED_RESERVED` when the identity is already reserved;
+`kalpamani-deletion-rehearsal-reservation/v1`: identity, subcell, statement and authorization digests and
+the **whole compiled specification** — the `RunTask` request and its stamp — so an interrupted or
+ambiguous launch is recoverable from the ledger alone) → the create-only input → **one `RunTask`** (a
+definitive refusal is `LAUNCH_REFUSED`; a transient, throttled, unknown or malformed answer is
+`LAUNCH_AMBIGUOUS`; neither is retried) → placement verified from `DescribeTasks` and `DescribeNetworkInterfaces` (subnet, groups, no
 public IP, the compiled revision, the compiled image; a mismatch stops the task and never releases it)
 → the create-only release → observation to the terminal state within 120 reads / 600 s → the two
 parameters deleted (every failure reported beside the outcome) → the **launch record**
 (`kalpamani-deletion-rehearsal-launch-record/v1`: the task, revision, image, input digest, interface,
-subnet, groups, the observed exit, the instants, the statement, authorization and specification
-digests, the binding).
+subnet, groups, the observed exit, the instants, the statement, authorization, specification and
+**reservation** digests, the binding) → the **resolution anchored beside the reservation**
+(`<ledger>.rehearsal_resolutions/<identity>.json`, `kalpamani-deletion-rehearsal-resolution/v1`: the
+reservation digest, the outcome, the task state, the task and the launch record when there is one). Every
+terminal outcome resolves: a refusal before `RunTask` is `NOT_STARTED`; an ambiguous answer is
+`UNKNOWN`; a misplaced or stale-release task is `STOPPED`, or `STARTED_NOT_TERMINAL` when the stop
+itself failed; an exhausted observation is `STARTED_NOT_TERMINAL`; a terminal task is
+`OBSERVED_TERMINAL`. `NOT_STARTED`, `STOPPED` and `OBSERVED_TERMINAL` settle themselves; the other two,
+and a reservation with no resolution at all, are **unsettled** (§2.8, §8.1).
 
 `complete_rehearsal(launch, receipt_document, statement)` rebuilds the rehearsal record from the
 verified receipt and nothing else: the launch must be `LAUNCHED` with an observed exit
@@ -311,6 +336,21 @@ supplied result or an identity boolean alone**: the result binds the statement, 
 authorization, the reservation, the launch record, the verified receipt and — for the deletion — the
 control principal's later confirmation.
 
+**One evidence-binding rule serves completion and prerequisite admission alike** (§8.2).
+`bind_rehearsal_result(record, target=…, consumptions=…, reservations=…, launches=…, receipts=…)` admits a
+rehearsal record only when: the record names **exactly the target** asked for (`TARGET_MISMATCH`); its
+identity was verified (`IDENTITY_NOT_VERIFIED`); exactly one durable consumption names the record's
+subcell and statement (`CONSUMPTION_MISSING` / `CONSUMPTION_CONFLICTS`); exactly one reservation carries
+that identity and the launch names it by digest with the specification the reservation retained
+(`RESERVATION_MISSING` / `RESERVATION_CONFLICTS` / `SPECIFICATION_MISMATCH`); exactly one launch record is
+`LAUNCHED` with an observed exit (`LAUNCH_MISSING` / `LAUNCH_CONFLICTS` / `LAUNCH_NOT_TERMINAL`); exactly
+one **retained verified receipt** (`kalpamani-deletion-rehearsal-receipt-evidence/v1`, written beside
+every completion) re-verifies against that launch (`RECEIPT_MISSING` / `RECEIPT_CONFLICTS` /
+`RECEIPT_REFUSED`); and the record rebuilt from that receipt is the record presented
+(`RESULT_CONTRADICTS`). Missing, substituted or conflicting evidence qualifies nothing — a completion
+that cannot bind writes no record, and an R8-GET record that does not bind, or names another target,
+admits no R8-LIST-AND-DELETE.
+
 ### 3.4 The collector, reused
 
 `collect_receipt` and `admit_collection_records` take either the task receipt's expectation (the
@@ -319,25 +359,34 @@ over the launch record's expectation, and the rehearsal container is a known des
 the complete-scan rule, the confirmation re-read, the closed outcomes, the collection record and the
 one admission rule — contradictions, dispositions, the receipt binding — are ADR-0049's unchanged.
 
-### 3.5 The owner tool's four modes, and the closed gate
+### 3.5 The owner tool's modes, and the closed gate
 
 `production_permission_cells.py` gains `--prepare-rehearsal <subcell>`, `--rehearse-deletion <subcell>
 --rehearsal-inputs <file> --authorization <file> <AUTHORIZATION_FLAG>`, `--collect-rehearsal-receipt
-<subcell> --rehearsal-inputs <file> <COLLECT_FLAG>` and `--complete-rehearsal <subcell> --receipt-lines
-<file>`; naming any of them, or `--rehearsal-inputs` alone, while `REHEARSAL_PATH_OPEN` is `False`
+<subcell> --rehearsal-inputs <file> <COLLECT_FLAG>`, `--complete-rehearsal <subcell> --receipt-lines
+<file>` and, since correction 1, `--recover-rehearsal-launch <subcell>` (§8.1; no flag, no path, no
+client); naming any of them, or `--rehearsal-inputs` alone, while `REHEARSAL_PATH_OPEN` is `False`
 prints the closed sentence and exits **27** before any path, flag or client is read and before the
 rehearsal tool module is imported. The open branch (`production_deletion_rehearsal_tool.py`, exercised
 in tests with the constant monkeypatched) reuses the tool's admission, evidence, records directory and
 sentences: preparation writes a `rehearsal-statement` record and prints its digest; the launch recomputes
 the statement the authorization names against what is admitted now, holds the launch inputs to the bound
 account, proves the launcher's identity under `kalpamani-deletion-rehearse` before any client, refuses
-while an earlier launch of the subcell is still uncompleted, and prints the outcome (`LAUNCHED` exits 0;
-every other sequence outcome exits 31, `rehearsal_not_launched`; identity 4; consumed 16); collection
-reuses the one admission rule, reads the stream under the launcher, records the collection and completes;
-completion from hand-read lines takes exactly one receipt line; every completion writes the
-`rehearsal-record` and prints the reading derived with the control principal's cleanups (PASSED 0,
-FAILED 9, INCONCLUSIVE 10, CLEANUP_UNRESOLVED / RESIDUE 12). A malformed rehearsal record refuses every
-mode (32).
+while an earlier launch of the subcell is still uncompleted and while any reservation beside the ledger
+is unsettled, and prints the outcome (`LAUNCHED` exits 0; every other sequence outcome exits 31,
+`rehearsal_not_launched`; identity 4; recovery pending 21; consumed 16; reserved 22); recovery records
+the interrupted launch's attribution offline and prints `rehearsal recovery subcell= outcome=
+task_state=UNKNOWN started_by= reservation_sha256=` (exit 0; nothing to recover 23); collection reuses
+the one admission rule, reads the stream under the launcher, records the collection and completes;
+completion from hand-read lines takes exactly one receipt line **under ADR-0049's disposition rule**
+(§8.3: a recorded contradiction needs `--acknowledge-collection-contradiction`, 29; a line other than
+the one the disposition binds is 30; the acknowledgement is admitted on the hand path only); every
+completion binds the evidence (§3.3; a defect prints `rehearsal evidence does not bind: <defect>`, 19),
+writes the `rehearsal-record` **and the `rehearsal-receipt` evidence**, and prints the reading derived
+with the control principal's cleanups (PASSED 0, FAILED 9, INCONCLUSIVE 10, CLEANUP_UNRESOLVED / RESIDUE
+12); a completion that is already whole says so and writes nothing (`rehearsal_completion_recorded`,
+24), and one that would differ from the recorded one refuses (19). A malformed rehearsal record,
+reservation, resolution or receipt evidence refuses every mode (32).
 
 ### 3.6 The holds, and where each is tested
 
@@ -351,7 +400,10 @@ mode (32).
 | result binds statement, authorization, attempt, execution evidence, receipt and confirmation | `TestCompletionAndReading` (the launcher's own record refuses the receipt until the input bytes bind; `CLEANUP_UNRESOLVED` until the control's later verified cleanup) |
 | deletion acknowledgement ≠ confirmed absence; cleanup by the control is not the role's success | `derive_rehearsal` with a denied delete stays `FAILED` after the control's cleanup; an ambiguous delete stays `INCONCLUSIVE` |
 | interrupted or conflicting evidence stays unresolved | `OBSERVATION_EXHAUSTED` and a `null` exit complete nothing; the collector's `RECEIPT_REJECTED` and contradictions refuse |
-| public path closed before any client | the closed test with a refusing client factory over all four modes |
+| public path closed before any client | the closed test with a refusing client factory over all five modes |
+| an unresolved launch blocks every launch, across records directories and authorizations; recovery is offline; uncertain cleanup stays unresolved | `test_production_deletion_rehearsal_correction_1.py::TestFinding1AnchoredReservationsAndRecovery` (§8.1) |
+| one binding rule; missing, substituted or conflicting evidence qualifies nothing; the prerequisite concerns the exact target; completion recovery is repeatable | `…::TestFinding2OneBindingRule` (§8.2) |
+| a hand receipt never silently supersedes a recorded contradiction; the disposition binds the receipt across interruptions | `…::TestFinding3DispositionsOnTheHandPath` (§8.3) |
 
 ## 4. Decision — the inert declaration
 
@@ -401,3 +453,65 @@ permission. It does not take D-1. `REHEARSAL_PATH_OPEN` stays `False`, `deletion
 `false`, the two R-8 subcells stay BLOCKED, every executable subcell stays UNEXECUTED, and every owner
 value stays MISSING. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE, live trading
 stays HARD-DISABLED.**
+
+## 8. Corrections after review (correction 1; the ADR stays PROPOSED)
+
+Review of the pull request introducing this ADR raised three findings. Each was **reproduced first
+through the public tool** — `production_permission_cells.py` with `REHEARSAL_PATH_OPEN` monkeypatched in
+the process, synthetic temporary files, counting fakes, no AWS — and corrected in the same open pull
+request, with a regression control for each failure. The correction changes no accepted request, key
+builder, bucket policy, assignment, production actor or deletion S3 authority; the declaration (§4) is
+untouched; `REHEARSAL_PATH_OPEN` stays `False`, `deletion_rehearsal_open` stays `false`, D-1 stays not
+taken and the two R-8 subcells stay BLOCKED.
+
+### 8.1 Reservations and unresolved-launch recovery beside the canonical ledger
+
+**Finding.** The reservation was a `rehearsal-reservation` record under the records directory, so a
+second records directory or a new authorization saw no earlier attempt: an ambiguous or interrupted
+launch blocked nothing, and there was no way to recover an interrupted launch's attribution.
+
+**Correction.** The launch store gains generic anchors beside the canonical ledger
+(`<ledger>.<kind>/<name>.json`, exclusive create; `StoreDefect.ANCHOR_EXISTS`). The reservation is
+anchored there (`rehearsal_reservations`) **before the launch, retaining the whole compiled
+specification** — the `RunTask` request and its stamp — and a **resolution** is anchored beside it
+(`rehearsal_resolutions`) at every terminal outcome with the closed task state `NOT_STARTED`, `STOPPED`,
+`OBSERVED_TERMINAL`, `STARTED_NOT_TERMINAL` or `UNKNOWN`. A reservation without a resolution, or whose
+resolution is `UNKNOWN` or `STARTED_NOT_TERMINAL`, is **unsettled**; `launch_rehearsal` refuses
+`REFUSED_RECOVERY_PENDING` while any is, **before anything is consumed**, whatever the records directory
+and whatever the authorization. `--recover-rehearsal-launch <subcell>` records `RECOVERED_INTERRUPTED`
+with the state `UNKNOWN` for exactly one interrupted reservation of the subcell, **offline** — from the
+reservation alone, with no client and no `RunTask`, which is never retried. Settlement is the **accepted
+cleanup rule's**: the rehearsal's unsettled reservations are settlement targets of the control
+principal's cleanup (`rehearsal_tasks_to_settle`, keyed by the reservation digest; the cleanup parser
+admits the rehearsal tag beside the permission tag), and a verified cleanup recorded after the
+resolution that discovered at least one task under the tag and stopped every one settles it; **a
+listing that finds nothing settles nothing**, so uncertain cleanup stays unresolved and keeps every
+launch refused. The records-directory `rehearsal-reservation` record is no longer written; a malformed
+anchor refuses every mode.
+
+### 8.2 One evidence-binding rule for completion and prerequisite admission
+
+**Finding.** Completion admitted a record whose consumption or reservation had been removed, retained no
+verified receipt (so a completion could not be recovered or repeated from evidence), and the
+R8-LIST-AND-DELETE prerequisite accepted an R8-GET record naming another target.
+
+**Correction.** `bind_rehearsal_result` (§3.3) is the one rule; `_RehearsalEvidence.bind` applies it on
+the hand-read and collector completion paths **before any record is written**, and on prerequisite
+admission, where the R8-GET record must bind and must name **the exact deletion target**. Every
+completion writes the retained verified receipt (`kalpamani-deletion-rehearsal-receipt-evidence/v1`:
+identity, subcell, statement and launch-record digests, the verified receipt document, the binding)
+beside the record, so a completion interrupted after the record or after the receipt is recovered by
+running it again: the missing half is written from the same evidence, a whole completion is reported as
+recorded (24) and changes nothing, and a completion that would differ from the recorded one refuses (19).
+
+### 8.3 ADR-0049's contradiction and disposition rules on the hand path
+
+**Finding.** A hand-read completion (`--complete-rehearsal --receipt-lines`) ignored a recorded collection
+contradiction and the disposition that binds a receipt, so a hand receipt silently superseded what the
+collector had recorded.
+
+**Correction.** The hand path reuses the accepted `_dispositions_for`: a recorded `CONTRADICTORY_RECEIPTS`
+collection refuses without `--acknowledge-collection-contradiction` (29), the disposition binds the
+receipt line by digest (a different line is 30, on the hand path and in the collector's cache reuse
+alike), the acknowledgement is admitted only on `--complete-rehearsal --receipt-lines` with hex digests,
+and the disposition is written with the record so the binding survives an interruption.

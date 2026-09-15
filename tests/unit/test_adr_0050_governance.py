@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Final
 
 import production_deletion_rehearsal_tool as rehearsal_tool
+from test_production_permission_cells import tool as cells
 
 from kalpamani.data.production.sharadar import deletion_rehearsal as dr
 from kalpamani.data.production.sharadar import deletion_rehearsal_launch as dl
 from kalpamani.data.production.sharadar import deletion_rehearsal_task as dt
+from kalpamani.data.production.sharadar import permission_cells as pc
 from kalpamani.data.production.sharadar.permission_cells import SUBCELL_BY_ID, Layer
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -94,6 +96,11 @@ def test_the_contracts_and_bounds_match_the_text() -> None:
         dl.REHEARSAL_LAUNCH_INPUTS_CONTRACT_ID,
         dl.REHEARSAL_RESERVATION_CONTRACT_ID,
         dl.REHEARSAL_LAUNCH_RECORD_CONTRACT_ID,
+        dl.REHEARSAL_RESOLUTION_CONTRACT_ID,
+        dl.REHEARSAL_RECEIPT_EVIDENCE_CONTRACT_ID,
+        dl.REHEARSAL_RESERVATIONS_ANCHOR,
+        dl.REHEARSAL_RESOLUTIONS_ANCHOR,
+        dl.RECOVERED_INTERRUPTED,
         dr.REHEARSAL_STATEMENT_CONTRACT_ID,
         dr.REHEARSAL_LAUNCHER_PROFILE,
         dr.REHEARSAL_CONSUMPTION_KIND,
@@ -112,6 +119,17 @@ def test_the_contracts_and_bounds_match_the_text() -> None:
         assert outcome.value in ADR_TEXT, outcome
     for defect in dl.RehearsalCompletionDefect:
         assert defect.value in ADR_TEXT, defect
+    # Correction 1: the anchored states, the binding defects and the accepted cleanup rule.
+    for state in dl.RehearsalTaskState:
+        assert state.value in ADR_TEXT, state
+    for binding_defect in dl.RehearsalBindingDefect:
+        assert binding_defect.value in ADR_TEXT, binding_defect
+    assert "## 8. Corrections after review (correction 1; the ADR stays PROPOSED)" in ADR_TEXT
+    assert "A listing that finds nothing settles nothing" in ADR_PLAIN
+    assert "CLEANUP_STARTED_BY_PREFIXES" in ADR_TEXT and pc.CLEANUP_STARTED_BY_PREFIXES == (
+        "kalpamani-permission-",
+        dl.REHEARSAL_STARTED_BY_PREFIX,
+    )
     assert dt.RehearsalTaskOutcome.REFUSED_TARGET.value in ADR_TEXT
     assert "kalpamani-rehearsal-<stamp>" in ADR_TEXT and dl.REHEARSAL_STARTED_BY_PREFIX == (
         "kalpamani-rehearsal-"
@@ -125,8 +143,17 @@ def test_the_tool_modes_and_exits_match_the_text() -> None:
         "--collect-rehearsal-receipt",
         "--complete-rehearsal",
         "--rehearsal-inputs",
+        "--recover-rehearsal-launch",
+        "--acknowledge-collection-contradiction",
     ):
         assert mode in ADR_TEXT, mode
+    for exit_code, sentence in (
+        (cells.EXIT_REFUSED_RECOVERY_PENDING, "recovery pending 21"),
+        (cells.EXIT_REFUSED_RESERVATION, "reserved 22"),
+        (cells.EXIT_REFUSED_RECOVERY, "nothing to recover 23"),
+        (cells.EXIT_COMPLETION_RECORDED, "rehearsal_completion_recorded, 24"),
+    ):
+        assert str(exit_code) in sentence and sentence in ADR_PLAIN, sentence
     assert rehearsal_tool.EXIT_REHEARSAL_NOT_LAUNCHED == 31 and "exits 31" in ADR_PLAIN
     assert rehearsal_tool.EXIT_REFUSED_REHEARSAL_RECORDS == 32 and "(32)" in ADR_PLAIN
     assert "exits 27" in ADR_PLAIN or "exit 27" in ADR_PLAIN
@@ -166,6 +193,9 @@ def test_the_status_register_carries_the_proposal() -> None:
         REPO_ROOT / "docs" / "operations" / "production-readiness-dispositions.md"
     ).read_text(encoding="utf-8")
     assert "## F-14 — the deletion rehearsal made concrete" in dispositions
+    assert "Correction 1 (PR #109 review; ADR-0050 §8)" in dispositions
+    assert "### 14.2 Implemented offline (never run)" in readiness
+    assert "--recover-rehearsal-launch" in readiness
     inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
         encoding="utf-8"
     )

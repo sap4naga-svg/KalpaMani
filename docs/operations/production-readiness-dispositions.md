@@ -445,3 +445,20 @@ client; the declaration's defaults preserving the closed state — and Terraform
 -backend=false`, `validate` and `test` (20 runs) in a task-owned external copy. **Synthetic tests do not
 establish AWS verification**; no rehearsal, deletion, launch, log read, image, plan, apply or AWS call
 occurred; no permission was granted; D-1 stays the owner's.
+
+**Correction 1 (PR #109 review; ADR-0050 §8).** Three findings were reproduced through the public tool on
+synthetic files and fakes before any change, and corrected in the same open pull request, each with a
+regression control (`test_production_deletion_rehearsal_correction_1.py`): **(1)** the reservation and
+the unresolved-launch resolution are anchored beside the canonical ledger, the reservation retaining the
+whole compiled specification, so an ambiguous or interrupted launch blocks every launch — across records
+directories and new authorizations — until `--recover-rehearsal-launch` records its attribution offline
+and the control principal's verified cleanup settles it under the accepted rule (a listing that finds
+nothing settles nothing; `RunTask` is never retried); **(2)** one evidence-binding rule
+(`bind_rehearsal_result`) admits a completion and an R8 prerequisite only when the consumption, the
+reservation, the registered specification, the launch, the retained verified receipt and the result form
+one chain for the exact deletion target — missing, substituted or conflicting evidence qualifies
+nothing, and completion is repeatable from the retained receipt evidence; **(3)** the hand-read completion
+applies ADR-0049's contradiction and disposition rules — a recorded contradiction needs the
+acknowledgement, the disposition binds the receipt, and the binding survives an interruption. The
+after-correction reproduction reports every check NOT REPRODUCED; the ADR stays PROPOSED, D-1 not taken,
+the path CLOSED, the declaration inert, both R-8 subcells BLOCKED.

@@ -1022,14 +1022,25 @@ taken here or by ADR-0050's acceptance**; the path stays CLOSED and R-8 BLOCKED.
   disjoint from every other table.
 - **The launcher and the completion** (`deletion_rehearsal_launch.py`): the launch inputs held to the
   rehearsal family, the deletion role and one account; a `RunTask` with no overrides; the sequence —
-  identity, durable consumption, reservation, create-only input, one never-retried `RunTask`, placement,
-  create-only release, observation, cleanup failures beside the outcome, the launch record; the record
-  rebuilt only from a verified `REHEARSED` receipt whose exit the launcher observed.
+  identity, no unsettled reservation beside the ledger, durable consumption, the reservation **anchored
+  beside the canonical ledger with the whole compiled specification**, create-only input, one
+  never-retried `RunTask`, placement, create-only release, observation, cleanup failures beside the
+  outcome, the launch record, the **resolution** anchored beside the reservation with the closed task
+  state (correction 1, ADR-0050 §8.1); the record rebuilt only from a verified `REHEARSED` receipt whose
+  exit the launcher observed, admitted by **one evidence-binding rule** — consumption, reservation,
+  registered specification, launch, retained verified receipt and result for the exact target — that
+  prerequisite admission applies too (§8.2).
 - **The collector, reused** with an injected verifier; the rehearsal container a known destination.
-- **The owner tool's four modes** (`--prepare-rehearsal`, `--rehearse-deletion`,
-  `--collect-rehearsal-receipt`, `--complete-rehearsal`; `production_deletion_rehearsal_tool.py`), each
-  refused with exit 27 before any path, flag or client while `REHEARSAL_PATH_OPEN` is `False` — which it
-  is — and exercised end to end on fakes with the constant monkeypatched in tests only.
+- **The owner tool's five modes** (`--prepare-rehearsal`, `--rehearse-deletion`,
+  `--collect-rehearsal-receipt`, `--complete-rehearsal`, and since correction 1
+  `--recover-rehearsal-launch`; `production_deletion_rehearsal_tool.py`), each refused with exit 27
+  before any path, flag or client while `REHEARSAL_PATH_OPEN` is `False` — which it is — and exercised
+  end to end on fakes with the constant monkeypatched in tests only. An unresolved launch (no
+  resolution, `UNKNOWN`, `STARTED_NOT_TERMINAL`) blocks every launch across records directories and
+  authorizations until the control principal's verified cleanup settles it under the accepted rule —
+  a listing that finds nothing settles nothing; the hand-read completion is held to ADR-0049's
+  contradiction and disposition rules (§8.3); every completion retains the verified receipt beside the
+  record and is repeatable from that evidence.
 - **The inert declaration** (`production_deletion_rehearsal.tf`, `production_variables.tf`,
   `production_bindings.tf`): every rehearsal resource gated on stage a/b **and** `deletion_rehearsal_open`
   (**false by default**) **and** a `deletion_rehearsal` image digest, the assignment on stage b too;
