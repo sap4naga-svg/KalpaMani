@@ -728,9 +728,10 @@ def settlement_targets(
             prepared_pending.update(cell.requires)
 
     def settled_object(attempt_sha256: str, bucket: str, key: str, after: datetime) -> bool:
+        # The one admissibility rule (binding, timing, verified identity): an unverified
+        # cleanup suppresses nothing -- the object is settled again by a verified pass.
         return any(
-            c.binding == binding
-            and c.recorded_at >= after
+            c.admissible_for(binding, not_before=after)
             and c.settles_object(attempt_sha256, bucket, key)
             for c in evidence.cleanups
         )
@@ -784,8 +785,7 @@ def settlement_targets(
                 )
             if record.launch_open and record.started_by is not None:
                 if any(
-                    c.binding == binding
-                    and c.recorded_at >= record.finished_at
+                    c.admissible_for(binding, not_before=record.finished_at)
                     and c.settles_tasks(record.attempt_sha256, record.started_task_ids)
                     for c in evidence.cleanups
                 ):
@@ -1171,13 +1171,15 @@ class _Boto3PermissionClient:
         )
 
     def list_tasks(
-        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
+        self, *, cluster_arn: str, started_by: str, next_token: str | None
     ) -> r3.Observation:
-        # One page of one desired status; the engine follows the token within its bound.
+        # One page, filtered by startedBy and by nothing else: the ListTasks contract makes
+        # startedBy the only filter when it is used (no desiredStatus, family, serviceName,
+        # launchType or containerInstance beside it). The engine follows the token within
+        # its bound.
         kwargs: dict[str, Any] = {
             "cluster": cluster_arn,
             "startedBy": started_by,
-            "desiredStatus": desired_status,
             "maxResults": pc.MAX_RETURNED_TASKS,
         }
         if next_token is not None:

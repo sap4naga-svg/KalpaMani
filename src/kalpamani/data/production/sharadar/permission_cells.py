@@ -1232,7 +1232,7 @@ class PermissionClient(Protocol):
     ) -> Observation: ...
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
     def list_tasks(
-        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
+        self, *, cluster_arn: str, started_by: str, next_token: str | None
     ) -> Observation: ...
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Observation: ...
     def execute_command(self, *, cluster_arn: str, task_arn: str) -> Observation: ...
@@ -1301,18 +1301,20 @@ SUBCELL_OPERATION_BUDGET: Final = 1 + MAX_RETURNED_TASKS
 #: Cleanup operations per created key: one DeleteObject and one HeadObject.
 CLEANUP_OPERATIONS_PER_KEY: Final = 2
 #: Bounded discovery of a launching attempt's tasks: the cluster is listed by the attempt's
-#: ``startedBy`` tag under each of these desired statuses (ECS lists RUNNING by default and
-#: keeps STOPPED tasks listable for a bounded time), following ``nextToken`` for at most
-#: this many pages per status. A page bound reached with a token remaining is an
-#: INCOMPLETE discovery; a listing that did not answer is a FAILED discovery; a complete
-#: discovery that found nothing is NOT proof of absence -- the launch stays unresolved.
-DISCOVERY_DESIRED_STATUSES: Final[tuple[str, ...]] = ("RUNNING", "STOPPED")
+#: ``startedBy`` tag and by nothing else -- the ``ListTasks`` contract makes ``startedBy``
+#: the only filter when it is used, so no ``desiredStatus``, ``family``, ``serviceName``,
+#: ``launchType`` or ``containerInstance`` accompanies it -- following ``nextToken`` for at
+#: most this many pages. A page bound reached with a token remaining is an INCOMPLETE
+#: discovery; a listing that did not answer is a FAILED discovery; a complete discovery
+#: that found nothing is NOT proof of absence -- the launch stays unresolved. **A task that
+#: stopped before discovery is discoverable only while ECS still returns it** (recently
+#: stopped tasks may appear; older ones do not, and listing them by status would need a
+#: second filter the contract refuses beside ``startedBy``): such a launch stays
+#: unresolved, and the mechanism that would settle it is outside this decision (s.5).
 DISCOVERY_MAX_PAGES: Final = 3
 #: Cleanup operations per launching attempt: the discovery listings, then per task one
 #: DescribeTasks and, when it is not STOPPED, one StopTask.
-CLEANUP_OPERATIONS_PER_TASK_MAX: Final = (
-    len(DISCOVERY_DESIRED_STATUSES) * DISCOVERY_MAX_PAGES + 2 * MAX_RETURNED_TASKS
-)
+CLEANUP_OPERATIONS_PER_TASK_MAX: Final = DISCOVERY_MAX_PAGES + 2 * MAX_RETURNED_TASKS
 #: The ECS ``lastStatus`` that alone confirms a task is no longer running.
 TASK_STOPPED_STATUS: Final = "STOPPED"
 
@@ -1917,6 +1919,16 @@ class PermissionCleanup:
     def confirmed_keys(self) -> frozenset[str]:
         return frozenset(k.key for k in self.keys if k.confirmed_absent)
 
+    def admissible_for(self, binding: PermissionBinding, *, not_before: datetime) -> bool:
+        """Whether this pass can settle anything recorded under ``binding`` at ``not_before``.
+
+        The one rule every consumer of cleanup evidence applies: the same binding, recorded
+        no earlier than the result it would settle, and **the control principal's identity
+        verified** -- a cleanup record that does not attest to its principal's identity is
+        preserved for reporting and settles nothing, whatever keys or tasks it names.
+        """
+        return self.binding == binding and self.identity_verified and self.recorded_at >= not_before
+
     def settles_object(self, attempt_sha256: str, bucket: str, key: str) -> bool:
         """Whether this pass confirmed THIS attempt's object absent."""
         return any(
@@ -2161,33 +2173,27 @@ def run_cleanup(
         worst = ObservedClass.OK_200
         failed = False
         incomplete = False
-        for desired in DISCOVERY_DESIRED_STATUSES:
-            token: str | None = None
-            for _page in range(DISCOVERY_MAX_PAGES):
-                listed = client.list_tasks(
-                    cluster_arn=launch.cluster_arn,
-                    started_by=launch.started_by,
-                    desired_status=desired,
-                    next_token=token,
-                )
-                operations += 1
-                listings += 1
-                observed = classify(listed)
-                if observed is not ObservedClass.OK_200:
-                    failed = True
-                    worst = observed
-                    break
-                for task_arn in tuple(listed.task_arns)[:MAX_RETURNED_TASKS]:
-                    task_id = _task_id(task_arn)
-                    if task_id not in known and len(known) < MAX_RETURNED_TASKS:
-                        known.append(task_id)
-                token = listed.next_token
-                if token is None:
-                    break
-            else:
-                incomplete = True
-            if failed:
+        token: str | None = None
+        for _page in range(DISCOVERY_MAX_PAGES):
+            listed = client.list_tasks(
+                cluster_arn=launch.cluster_arn, started_by=launch.started_by, next_token=token
+            )
+            operations += 1
+            listings += 1
+            observed = classify(listed)
+            if observed is not ObservedClass.OK_200:
+                failed = True
+                worst = observed
                 break
+            for task_arn in tuple(listed.task_arns)[:MAX_RETURNED_TASKS]:
+                task_id = _task_id(task_arn)
+                if task_id not in known and len(known) < MAX_RETURNED_TASKS:
+                    known.append(task_id)
+            token = listed.next_token
+            if token is None:
+                break
+        else:
+            incomplete = True
         stopped: list[str] = []
         left: list[str] = []
         for task_id in known:
@@ -2622,7 +2628,7 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
         stopped = _task_ids(block["stopped_ids"])
         left = _task_ids(block["residue_ids"])
         listings = block["listings"]
-        max_listings = len(DISCOVERY_DESIRED_STATUSES) * DISCOVERY_MAX_PAGES
+        max_listings = DISCOVERY_MAX_PAGES
         if (
             started_by is None
             or not started_by.startswith("kalpamani-permission-")
@@ -2888,13 +2894,20 @@ def unsettled_reason(chain: BoundChain, cleanups: Iterable[PermissionCleanup]) -
     A cleanup settles a bound result only by naming its attempt and its exact object --
     the bucket and key the chain's target names -- or its exact launch (the attempt and
     its ``startedBy`` tag, every task the record started confirmed STOPPED, discovery
-    complete and answered), under the same binding, recorded no earlier than the record.
-    A cleanup that found no task settles nothing.
+    complete and answered), and only when it is admissible
+    (:meth:`PermissionCleanup.admissible_for`: the same binding, recorded no earlier than
+    the record, the control principal's identity verified). A cleanup that found no task
+    settles nothing; a cleanup whose identity is not verified settles nothing.
     """
     record = chain.record
-    later = [
-        c for c in cleanups if c.binding == record.binding and c.recorded_at >= record.finished_at
-    ]
+    later = [c for c in cleanups if c.admissible_for(record.binding, not_before=record.finished_at)]
+    unverified = any(
+        c.binding == record.binding
+        and c.recorded_at >= record.finished_at
+        and not c.identity_verified
+        for c in cleanups
+    )
+    note = " (an unverified cleanup record is present and settles nothing)" if unverified else ""
     if record.object_open:
         bucket, key = chain.target.bucket, chain.target.key
         if bucket is None or key is None:
@@ -2902,7 +2915,7 @@ def unsettled_reason(chain: BoundChain, cleanups: Iterable[PermissionCleanup]) -
         if not any(c.settles_object(chain.attempt.digest, bucket, key) for c in later):
             return (
                 "an object this attempt created or may have created is not confirmed removed "
-                "by a later cleanup naming this attempt and this exact object"
+                "by a later cleanup naming this attempt and this exact object" + note
             )
     if record.launch_open:
         settled = any(
@@ -2917,11 +2930,11 @@ def unsettled_reason(chain: BoundChain, cleanups: Iterable[PermissionCleanup]) -
             if record.started_task_ids:
                 return (
                     "a task this attempt started is not confirmed STOPPED by a later cleanup "
-                    "naming this attempt (a stop acknowledgement is not a termination)"
+                    "naming this attempt (a stop acknowledgement is not a termination)" + note
                 )
             return (
                 "no task of the ambiguous launch has been discovered and confirmed STOPPED; "
-                "an empty, failed or incomplete discovery is not proof of absence"
+                "an empty, failed or incomplete discovery is not proof of absence" + note
             )
     return None
 
@@ -3018,6 +3031,11 @@ def derive_subcell(
                 f"; {len(inverted.started_task_ids)} task(s) started, "
                 f"{len(inverted.stop_acknowledged_ids)} stop(s) acknowledged, termination "
                 + ("confirmed by a later cleanup" if unsettled is None else "NOT confirmed")
+                + (
+                    " (an unverified cleanup record is present and settles nothing)"
+                    if unsettled is not None and "unverified cleanup" in unsettled
+                    else ""
+                )
             )
         return SubcellState(
             subcell_id=cell.subcell_id,
@@ -3067,7 +3085,6 @@ __all__ = [
     "CLEANUP_OPERATIONS_PER_KEY",
     "CLEANUP_OPERATIONS_PER_TASK_MAX",
     "DELETION_DEPENDENCY",
-    "DISCOVERY_DESIRED_STATUSES",
     "DISCOVERY_MAX_PAGES",
     "EXECUTE_COMMAND_DEPENDENCY",
     "MAX_AUTHORIZATION_VALIDITY",

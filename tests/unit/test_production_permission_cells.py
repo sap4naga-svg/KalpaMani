@@ -176,15 +176,9 @@ class FakePermissionClient:
     def stop_task(self, *, cluster_arn: str, task_arn: str) -> Any:
         return self._next("stop_task", cluster_arn=cluster_arn, task_arn=task_arn)
 
-    def list_tasks(
-        self, *, cluster_arn: str, started_by: str, desired_status: str, next_token: str | None
-    ) -> Any:
+    def list_tasks(self, *, cluster_arn: str, started_by: str, next_token: str | None) -> Any:
         return self._next(
-            "list_tasks",
-            cluster_arn=cluster_arn,
-            started_by=started_by,
-            desired_status=desired_status,
-            next_token=next_token,
+            "list_tasks", cluster_arn=cluster_arn, started_by=started_by, next_token=next_token
         )
 
     def describe_tasks(self, *, cluster_arn: str, task_arns: tuple[str, ...]) -> Any:
@@ -391,6 +385,7 @@ def _cleanup_for(
     confirmed: bool = True,
     tasks_stopped: bool = True,
     discovered: tuple[str, ...] = (),
+    identity_verified: bool = True,
 ) -> pc.PermissionCleanup:
     """A cleanup settling every open object and launch of ``records`` by identity.
 
@@ -420,7 +415,7 @@ def _cleanup_for(
         if r.launch_open:
             assert r.started_by is not None
             ids = r.started_task_ids or discovered
-            listings = len(pc.DISCOVERY_DESIRED_STATUSES)
+            listings = 1
             block = pc.CleanupTasks(
                 attempt_sha256=r.attempt_sha256,
                 started_by=r.started_by,
@@ -446,7 +441,7 @@ def _cleanup_for(
         residue=tuple(residue),
         operations=2 * len(keys) + sum(b.operations for b in task_blocks),
         budget_exhausted=False,
-        identity_verified=True,
+        identity_verified=identity_verified,
         recorded_at=(NOW + timedelta(hours=1)) if recorded_at is None else recorded_at,
         binding=BINDING,
     )
@@ -929,22 +924,23 @@ class TestEngine:
                 budget=60,
             )
 
-        # Known task, discovery lists nothing new under either status, described STOPPED.
-        client = FakePermissionClient(LISTED_NONE, LISTED_NONE, STOPPED)
+        # Known task, discovery (one listing by the tag alone) lists nothing new, the task
+        # described STOPPED.
+        client = FakePermissionClient(LISTED_NONE, STOPPED)
         cleanup = cleanup_with(client, launch)
         calls = [c[0] for c in client.calls]
-        assert calls == ["list_tasks", "list_tasks", "describe_tasks"]
-        assert [c[1]["desired_status"] for c in client.calls[:2]] == ["RUNNING", "STOPPED"]
-        assert all(c[1]["started_by"] == launch.started_by for c in client.calls[:2])
-        assert all(c[1]["next_token"] is None for c in client.calls[:2])
+        assert calls == ["list_tasks", "describe_tasks"]
+        listing = client.calls[0][1]
+        assert set(listing) == {"cluster_arn", "started_by", "next_token"}
+        assert listing["started_by"] == launch.started_by and listing["next_token"] is None
         block = cleanup.tasks[0]
-        assert block.listings == 2 and block.stopped_ids == ("a" * 32,) and block.settled
+        assert block.listings == 1 and block.stopped_ids == ("a" * 32,) and block.settled
         assert not block.discovery_failed and not block.discovery_incomplete
         assert cleanup.settles_tasks("d4" * 32, ("a" * 32,)) and cleanup.residue == ()
-        assert cleanup.operations == 3
+        assert cleanup.operations == 2
         assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
         # Still RUNNING: stopped once more, residue, not settled.
-        client = FakePermissionClient(LISTED_NONE, LISTED_NONE, RUNNING, OK)
+        client = FakePermissionClient(LISTED_NONE, RUNNING, OK)
         cleanup = cleanup_with(client, launch)
         assert [c[0] for c in client.calls][-2:] == ["describe_tasks", "stop_task"]
         assert cleanup.tasks[0].residue_ids == ("a" * 32,)
@@ -958,24 +954,27 @@ class TestEngine:
             cluster_arn=CLUSTER_ARN,
             known_task_ids=(),
         )
-        client = FakePermissionClient(LISTED_NONE, LISTED_NONE)
+        client = FakePermissionClient(LISTED_NONE)
         cleanup = cleanup_with(client, unknown)
         block = cleanup.tasks[0]
+        assert len(client.calls) == 1
         assert block.undiscovered and not block.settled and block.residue_ids == ()
         assert cleanup.residue == (f"launch:{unknown.started_by}:undiscovered",)
         assert not cleanup.settles_tasks("e5" * 32, ())
         assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
-        # Empty, then visible: a later pass discovers the task under STOPPED and settles it.
-        client = FakePermissionClient(LISTED_NONE, LISTED_ONE, STOPPED)
+        # Empty, then visible: a later pass discovers the task (ECS still returning it by
+        # the tag) and settles it on STOPPED evidence.
+        client = FakePermissionClient(LISTED_ONE, STOPPED)
         cleanup = cleanup_with(client, unknown)
         assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.tasks[0].settled
         assert cleanup.settles_tasks("e5" * 32, ()) and cleanup.residue == ()
-        # Persistent empty discovery across passes stays unresolved every time.
+        # Persistent empty discovery across passes stays unresolved every time -- a task
+        # that stopped before ECS returned it by the tag is never discovered here, and
+        # the launch is never settled by that absence (the limitation is documented).
         for _ in range(3):
-            cleanup = cleanup_with(FakePermissionClient(LISTED_NONE, LISTED_NONE), unknown)
+            cleanup = cleanup_with(FakePermissionClient(LISTED_NONE), unknown)
             assert not cleanup.tasks[0].settled and cleanup.residue
-        # A listing that does not answer is a failed discovery: residue, never an absence,
-        # and the second status is not asked.
+        # A listing that does not answer is a failed discovery: residue, never an absence.
         client = FakePermissionClient(DENIED)
         cleanup = cleanup_with(client, unknown)
         assert len(client.calls) == 1 and cleanup.tasks[0].discovery_failed
@@ -984,11 +983,16 @@ class TestEngine:
         # A paginated listing is followed within its bound; a token remaining beyond it is
         # an incomplete discovery: the tasks found are still described, nothing is settled.
         paged = r3.Observation(status=200, task_arns=(), next_token="more")  # noqa: S106 - a page token
-        client = FakePermissionClient(paged, paged, paged, LISTED_ONE, STOPPED)
+        paged_task = r3.Observation(
+            status=200,
+            task_arns=(TASK_ARN,),
+            next_token="more",  # noqa: S106 - a page token
+        )
+        client = FakePermissionClient(paged, paged_task, paged, STOPPED)
         cleanup = cleanup_with(client, unknown)
         listing_calls = [c for c in client.calls if c[0] == "list_tasks"]
-        assert len(listing_calls) == pc.DISCOVERY_MAX_PAGES + 1
-        assert [c[1]["next_token"] for c in listing_calls[:3]] == [None, "more", "more"]
+        assert len(listing_calls) == pc.DISCOVERY_MAX_PAGES
+        assert [c[1]["next_token"] for c in listing_calls] == [None, "more", "more"]
         assert cleanup.tasks[0].discovery_incomplete and not cleanup.tasks[0].settled
         assert cleanup.tasks[0].stopped_ids == ("a" * 32,)
         assert cleanup.residue == (f"launch:{unknown.started_by}:incomplete",)
@@ -1011,15 +1015,16 @@ class TestEngine:
         )
         # A cleanup record cannot claim a task both stopped and residue, nor a settled
         # discovery that found nothing off the residue, nor a failed discovery beside OK.
-        good = cleanup_with(FakePermissionClient(LISTED_NONE, LISTED_NONE, STOPPED), launch)
+        good = cleanup_with(FakePermissionClient(LISTED_NONE, STOPPED), launch)
+        assert good.tasks[0].settled and good.residue == ()
         for mutate in (
             lambda d: d["tasks"][0].__setitem__("stopped_ids", []),
             lambda d: d["tasks"][0].__setitem__("discovery_failed", True),
             lambda d: (
                 d["tasks"][0].__setitem__("task_ids", []),
                 d["tasks"][0].__setitem__("stopped_ids", []),
-                d["tasks"][0].__setitem__("operations", 2),
-                d.__setitem__("operations", 2),
+                d["tasks"][0].__setitem__("operations", 1),
+                d.__setitem__("operations", 1),
             ),
         ):
             broken = good.document()
@@ -1475,6 +1480,61 @@ class TestDerivation:
         )
         state = pc.derive_subcell(put, _evidence(open_chain, cleanups=(settled,)), r1_passed=R1)
         assert state.status is pc.SubcellStatus.UNDECIDED and "TIMEOUT" in state.reason
+
+    def test_an_unverified_cleanup_settles_nothing(self) -> None:
+        """PR #106 correction 3, finding 2: identity_verified=false confirms no cleanup."""
+        put = pc.subcell("R4-PUT-PAYLOAD-HUMAN")
+        chain = _bound(put.subcell_id)
+        verified = _cleanup_for(chain.record)
+        unverified = _cleanup_for(chain.record, identity_verified=False)
+        assert verified.document() | {"identity_verified": False} == unverified.document()
+        assert pc.derive_subcell(
+            put, _evidence(chain, cleanups=(verified,)), r1_passed=R1
+        ).status is (pc.SubcellStatus.PASSED)
+        state = pc.derive_subcell(put, _evidence(chain, cleanups=(unverified,)), r1_passed=R1)
+        assert state.status is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        assert "unverified cleanup record is present and settles nothing" in state.reason
+        assert not unverified.admissible_for(BINDING, not_before=chain.record.finished_at)
+        assert verified.admissible_for(BINDING, not_before=chain.record.finished_at)
+        # The unverified record is preserved: it parses, it is listed, it settles nothing;
+        # a verified pass beside it settles as before.
+        assert pc.parse_permission_cleanup(canonical_bytes(unverified.document())) == unverified
+        assert (
+            pc.derive_subcell(
+                put, _evidence(chain, cleanups=(unverified, verified)), r1_passed=R1
+            ).status
+            is pc.SubcellStatus.PASSED
+        )
+        # A dependent's prerequisite is still available after an unverified cleanup (the
+        # object was never confirmed removed), and unavailable after a verified one.
+        get = pc.subcell("R5-GET-PAYLOAD-HUMAN")
+        available = _evidence(chain, cleanups=(unverified,))
+        assert pc.unsettled_reason(pc.bind_result(chain.record, available), available.cleanups)
+        gone = _evidence(chain, cleanups=(verified,))
+        assert pc.unsettled_reason(pc.bind_result(chain.record, gone), gone.cleanups) is None
+        del get
+        # The launch case: an unverified cleanup confirms no termination.
+        launch = pc.subcell("R6-ACQ-RUN-OTHER-REVISION")
+        launched = _bound(
+            launch.subcell_id,
+            observed=pc.ObservedClass.OK_200,
+            outcome=pc.SubcellOutcome.INVERTED,
+            started_task_ids=("a" * 32,),
+            stop_acknowledged_ids=("a" * 32,),
+            operations=2,
+        )
+        unverified_launch = _cleanup_for(launched.record, identity_verified=False)
+        state = pc.derive_subcell(
+            launch, _evidence(launched, cleanups=(unverified_launch,)), r1_passed=R1
+        )
+        assert state.status is pc.SubcellStatus.FAILED
+        assert "termination NOT confirmed" in state.reason and "unverified cleanup" in state.reason
+        assert (
+            "termination confirmed"
+            in pc.derive_subcell(
+                launch, _evidence(launched, cleanups=(_cleanup_for(launched.record),)), r1_passed=R1
+            ).reason
+        )
 
     def test_a_started_task_is_settled_only_by_a_confirmed_stop(self) -> None:
         """PR #106 correction 1 (finding 4) and 2 (finding 2): termination evidence only."""
@@ -2158,7 +2218,33 @@ def test_a_dependent_subcell_reads_the_exact_object_and_the_cleanup_defers_it(
         assert pc.derive_subcell(pc.subcell(subcell), evidence, r1_passed=R1).status is (
             pc.SubcellStatus.PASSED
         ), subcell
-    # Once removed, the dependent cannot be prepared or executed against it again.
+    # An unverified copy of that cleanup record beside the verified one changes nothing;
+    # with ONLY an unverified record (PR #106 correction 3), the object is not confirmed
+    # removed: the creator stays CLEANUP_UNRESOLVED, the dependent can be prepared against
+    # the object again, and the next verified pass settles it again rather than skipping it.
+    settled_path = next(
+        f for f in t.files("permission-cleanup") if pc.parse_permission_cleanup(f.read_bytes()).keys
+    )
+    original = settled_path.read_bytes()
+    document = json.loads(original)
+    document["identity_verified"] = False
+    settled_path.write_bytes(encode(document))
+    try:
+        unverified_evidence = t.evidence()
+        assert (
+            pc.derive_subcell(
+                pc.subcell("R4-PUT-PAYLOAD-HUMAN"), unverified_evidence, r1_passed=R1
+            ).status
+            is pc.SubcellStatus.CLEANUP_UNRESOLVED
+        )
+        assert t.main("--prepare-subcell", "R5-GET-PAYLOAD-HUMAN", *t.base()) == tool.EXIT_PREPARED
+        control.client.by_operation = {"delete_object": [NO_CONTENT], "head_object": [NOT_FOUND]}
+        assert t.cleanup(control, []) == tool.EXIT_EXECUTED
+        assert "keys=0 confirmed=0" not in capsys.readouterr().out
+    finally:
+        settled_path.write_bytes(original)
+    # Once removed (by a verified pass), the dependent cannot be prepared or executed
+    # against it again.
     assert t.main("--prepare-subcell", "R5-GET-PAYLOAD-HUMAN", *t.base()) == (
         tool.EXIT_REFUSED_PREREQUISITE
     )
@@ -2230,19 +2316,19 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     capsys.readouterr()
     control = t.control(tmp_path)
     # Three objects (created, possibly created, interrupted), then two launches: the
-    # recorded task discovered under neither status (two listings), described STOPPED;
-    # the ambiguous launch listed under both statuses, nothing found -- which settles
-    # NOTHING: an empty discovery is not proof of absence, and the pass is UNRESOLVED.
+    # recorded task listed by its tag (nothing new), described STOPPED; the ambiguous
+    # launch listed by its tag, nothing found -- which settles NOTHING: an empty
+    # discovery is not proof of absence, and the pass is UNRESOLVED.
     control.client.by_operation = {
         "delete_object": [NO_CONTENT] * 3,
         "head_object": [NOT_FOUND] * 3,
-        "list_tasks": [LISTED_NONE] * 4,
+        "list_tasks": [LISTED_NONE] * 2,
         "describe_tasks": [STOPPED],
     }
     assert t.cleanup(control, []) == tool.EXIT_CLEANUP_UNRESOLVED
     out = capsys.readouterr().out
     assert "keys=3 confirmed=3 launches=2 tasks_known=1 tasks_stopped=1" in out
-    assert "deferred=0 residue=1 operations=11" in out
+    assert "deferred=0 residue=1 operations=9" in out
     assert control.gate_calls == ["foundation"] and control.identity_calls == []
     assert control.constructions == [(r3.CONTROL_PROFILE, "us-east-1")]
     deleted = sorted(c[1]["key"] for c in control.client.calls if c[0] == "delete_object")
@@ -2257,11 +2343,12 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     assert index_attempt.key in deleted and index_attempt.key is not None
     assert index_attempt.key.startswith("bronze/sharadar/_indexes/")
     listed = [c[1]["started_by"] for c in control.client.calls if c[0] == "list_tasks"]
-    assert len(listed) == 4 and all(s.startswith("kalpamani-permission-") for s in listed)
-    assert {c[1]["desired_status"] for c in control.client.calls if c[0] == "list_tasks"} == {
-        "RUNNING",
-        "STOPPED",
-    }
+    assert len(listed) == 2 and all(s.startswith("kalpamani-permission-") for s in listed)
+    assert all(
+        set(c[1]) == {"cluster_arn", "started_by", "next_token"}
+        for c in control.client.calls
+        if c[0] == "list_tasks"
+    )
     described = [c for c in control.client.calls if c[0] == "describe_tasks"]
     assert len(described) == 1 and described[0][1]["task_arns"] == (TASK_ARN,)
     cleanup = pc.parse_permission_cleanup(t.files("permission-cleanup")[-1].read_bytes())
@@ -2296,7 +2383,7 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     # left alone; the ambiguous launch is discovered again -- this time the task is
     # visible under STOPPED (delayed visibility) and its termination is confirmed.
     control.client.by_operation = {
-        "list_tasks": [LISTED_NONE, LISTED_ONE],
+        "list_tasks": [LISTED_ONE],
         "describe_tasks": [STOPPED],
     }
     assert t.cleanup(control, []) == tool.EXIT_EXECUTED
@@ -2315,7 +2402,7 @@ def test_cleanup_settles_objects_ambiguous_writes_interrupted_attempts_and_tasks
     control.client.by_operation = {
         "delete_object": [DENIED],
         "head_object": [OK],
-        "list_tasks": [LISTED_NONE, LISTED_NONE],
+        "list_tasks": [LISTED_NONE],
         "describe_tasks": [RUNNING],
         "stop_task": [OK],
     }
@@ -2457,6 +2544,51 @@ def test_the_matrix_passes_r7_only_through_complete_bound_chains(
     finally:
         first.targets.with_suffix(".aside").rename(first.targets)
     assert status_of() == "PASSED"
+    # A cleanup whose identity is not verified confirms nothing through the runner either
+    # (PR #106 correction 3): the R-7 writes were refused, so no object is open there --
+    # exercise the rule on an object the acquisition human is allowed to create.
+    creator = _Tool(tmp_path / "creator", pc.Principal.ACQUISITION_HUMAN)
+    creator.scenario, creator.root = scenario, scenario.root
+    creator.client.records_dir = scenario.records
+    creator.declarations, creator.targets = first.declarations, first.targets
+    creator.env[rb.ENVIRONMENT_BINDING_ENV_VAR] = str(scenario.root / "environment.json")
+    creator.env[tool.TARGETS_ENV_VAR] = str(first.targets)
+    from fixtures.production_runtime import binding_document
+
+    (scenario.root / "binding-acq.json").write_bytes(encode(binding_document(ACQ)))
+    creator.env[constants_for(ACQ).binding_env_var] = str(scenario.root / "binding-acq.json")
+    assert creator.execute("R4-PUT-PAYLOAD-HUMAN", [OK]) == tool.EXIT_EXECUTED
+    capsys.readouterr()
+
+    def subcell_status(subcell_id: str) -> str:
+        code = cells.main(*matrix, permission_context_source=context_source)
+        assert code == runner.EXIT_MATRIX
+        text = capsys.readouterr().out
+        line = next(
+            ln for ln in text.splitlines() if ln.strip().startswith(f"subcell={subcell_id} ")
+        )
+        return line.split("status=")[1].split()[0]
+
+    assert subcell_status("R4-PUT-PAYLOAD-HUMAN") == "CLEANUP_UNRESOLVED"
+    control = creator.control(tmp_path)
+    control.client.by_operation = {"delete_object": [NO_CONTENT], "head_object": [NOT_FOUND]}
+    assert creator.cleanup(control, []) == tool.EXIT_EXECUTED
+    capsys.readouterr()
+    assert subcell_status("R4-PUT-PAYLOAD-HUMAN") == "PASSED"  # created, confirmed removed
+    cleanup_path = next(
+        f
+        for f in sorted(scenario.records.glob("permission-cleanup-*.json"))
+        if pc.parse_permission_cleanup(f.read_bytes()).keys
+    )
+    original = cleanup_path.read_bytes()
+    document = json.loads(original)
+    document["identity_verified"] = False
+    cleanup_path.write_bytes(encode(document))
+    try:
+        assert subcell_status("R4-PUT-PAYLOAD-HUMAN") == "CLEANUP_UNRESOLVED"
+    finally:
+        cleanup_path.write_bytes(original)
+    assert subcell_status("R4-PUT-PAYLOAD-HUMAN") == "PASSED"
     # Records alone -- the shape the earlier test supplied -- never pass.
     for path in [*statements, *attempts]:
         path.rename(path.with_suffix(".aside"))
@@ -2558,10 +2690,7 @@ class TestBoto3Adapter:
             lambda: adapter.put_parameter("/kalpamani/production/x", "marker"),
             lambda: adapter.execute_command(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN),
             lambda: adapter.list_tasks(
-                cluster_arn=CLUSTER_ARN,
-                started_by="kalpamani-permission-x",
-                desired_status="RUNNING",
-                next_token=None,
+                cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x", next_token=None
             ),
             lambda: adapter.describe_tasks(cluster_arn=CLUSTER_ARN, task_arns=(TASK_ARN,)),
         )
@@ -2577,6 +2706,25 @@ class TestBoto3Adapter:
         for service in ("s3", "secretsmanager", "ssm", "ecs"):
             client = adapter._clients[service]
             assert client.meta.config.retries["total_max_attempts"] == 1
+
+    #: ListTasks request members that are filters: startedBy must be the only one used.
+    LIST_TASKS_OTHER_FILTERS: Final[frozenset[str]] = frozenset(
+        {"desiredStatus", "family", "serviceName", "launchType", "containerInstance"}
+    )
+
+    def _assert_list_tasks_contract(self, request: Any, *, next_token: str | None) -> None:
+        """The documented, compatible ListTasks request: the tag as the ONLY filter."""
+        assert request.headers["X-Amz-Target"] == b"AmazonEC2ContainerServiceV20141113.ListTasks"
+        body = json.loads(request.body)
+        assert body["cluster"] == CLUSTER_ARN and body["startedBy"].startswith(
+            "kalpamani-permission-"
+        )
+        assert body["maxResults"] == pc.MAX_RETURNED_TASKS
+        assert not (set(body) & self.LIST_TASKS_OTHER_FILTERS), sorted(body)
+        expected = {"cluster", "startedBy", "maxResults"} | ({"nextToken"} if next_token else set())
+        assert set(body) == expected, sorted(body)
+        if next_token is not None:
+            assert body["nextToken"] == next_token
 
     def _run_task(self, adapter: Any, *, task_role_arn: str | None = None) -> Any:
         return adapter.run_task(
@@ -2643,33 +2791,27 @@ class TestBoto3Adapter:
         assert r3.classify(adapter.stop_task(cluster_arn=CLUSTER_ARN, task_arn=TASK_ARN)) is (
             r3.ObservedClass.OK_200
         )
-        # ListTasks by the tag, per desired status, page by page; DescribeTasks carries the
-        # documented fields. An empty page settles nothing (the engine decides that); a
-        # page with a token is reported incomplete-able through next_token.
+        # ListTasks by the tag and by NOTHING else (PR #106 correction 3: the contract makes
+        # startedBy the only filter when it is used), page by page; DescribeTasks carries
+        # the documented fields. An empty page settles nothing (the engine decides that); a
+        # page with a token is reported through next_token.
         transport.script = [(200, json.dumps({"taskArns": []}).encode())]
         empty = adapter.list_tasks(
-            cluster_arn=CLUSTER_ARN,
-            started_by="kalpamani-permission-x",
-            desired_status="RUNNING",
-            next_token=None,
+            cluster_arn=CLUSTER_ARN, started_by="kalpamani-permission-x", next_token=None
         )
         assert empty.task_arns == () and empty.next_token is None
-        body = json.loads(transport.requests[-1].body)
-        assert body["startedBy"] == "kalpamani-permission-x" and body["cluster"] == CLUSTER_ARN
-        assert body["desiredStatus"] == "RUNNING" and "nextToken" not in body
+        self._assert_list_tasks_contract(transport.requests[-1], next_token=None)
         transport.script = [
             (200, json.dumps({"taskArns": [TASK_ARN], "nextToken": "page-2"}).encode())
         ]
         listed = adapter.list_tasks(
             cluster_arn=CLUSTER_ARN,
             started_by="kalpamani-permission-x",
-            desired_status="STOPPED",
             next_token="page-1",  # noqa: S106 - a page token
         )
         assert listed.task_arns == (TASK_ARN,)
         assert listed.next_token == "page-2"  # noqa: S105 - a page token
-        body = json.loads(transport.requests[-1].body)
-        assert body["desiredStatus"] == "STOPPED" and body["nextToken"] == "page-1"
+        self._assert_list_tasks_contract(transport.requests[-1], next_token="page-1")  # noqa: S106
         transport.script = [
             (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "STOPPED"}]}).encode())
         ]
@@ -2704,43 +2846,54 @@ class TestBoto3Adapter:
             )
 
         empty = (200, json.dumps({"taskArns": []}).encode())
-        # Persistent empty discovery: two listings (RUNNING, STOPPED), nothing settled.
-        transport.script = [empty, empty]
+        # Persistent empty discovery: one listing by the tag alone, nothing settled.
+        transport.script = [empty]
         cleanup = settle()
         assert (
-            transport.sends == 2 and cleanup.tasks[0].undiscovered and not cleanup.tasks[0].settled
+            transport.sends == 1 and cleanup.tasks[0].undiscovered and not cleanup.tasks[0].settled
         )
         assert cleanup.residue == (f"launch:{launch.started_by}:undiscovered",)
-        statuses = [json.loads(r.body)["desiredStatus"] for r in transport.requests]
-        assert statuses == ["RUNNING", "STOPPED"]
-        # Empty, then visible under STOPPED on a later pass; described STOPPED: settled.
+        self._assert_list_tasks_contract(transport.requests[-1], next_token=None)
+        # Empty, then visible on a later pass (ECS still returning the task by its tag);
+        # described STOPPED: settled by that evidence.
         transport.script = [
-            empty,
             (200, json.dumps({"taskArns": [TASK_ARN]}).encode()),
             (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "STOPPED"}]}).encode()),
         ]
         cleanup = settle()
         assert cleanup.tasks[0].task_ids == ("a" * 32,) and cleanup.tasks[0].settled
-        assert cleanup.settles_tasks("e5" * 32, ()) and transport.sends == 5
+        assert cleanup.settles_tasks("e5" * 32, ()) and transport.sends == 3
+        self._assert_list_tasks_contract(transport.requests[-2], next_token=None)
+        # A paginated discovery follows the token, still with the tag as the only filter;
+        # a token remaining beyond the bound is an incomplete discovery.
+        paged = (200, json.dumps({"taskArns": [], "nextToken": "t1"}).encode())
+        transport.script = [paged, paged, paged]
+        cleanup = settle()
+        assert cleanup.tasks[0].discovery_incomplete and not cleanup.tasks[0].settled
+        assert transport.sends == 6
+        self._assert_list_tasks_contract(transport.requests[-1], next_token="t1")  # noqa: S106
         # Discovery refused: failed, residue, nothing described, nothing settled.
         transport.script = [(403, b'{"__type":"AccessDeniedException","message":"synthetic"}')]
         cleanup = settle()
-        assert cleanup.tasks[0].discovery_failed and transport.sends == 6
+        assert cleanup.tasks[0].discovery_failed and transport.sends == 7
         assert cleanup.residue == (f"launch:{launch.started_by}:failed",)
         # Discovered but still RUNNING: stopped once, residue -- a stop is not a termination.
         transport.script = [
             (200, json.dumps({"taskArns": [TASK_ARN]}).encode()),
-            empty,
             (200, json.dumps({"tasks": [{"taskArn": TASK_ARN, "lastStatus": "RUNNING"}]}).encode()),
             (200, json.dumps({"task": {"taskArn": TASK_ARN}}).encode()),
         ]
         cleanup = settle()
         assert cleanup.tasks[0].residue_ids == ("a" * 32,) and not cleanup.tasks[0].settled
         assert cleanup.residue == ("task:" + "a" * 32,) and transport.sends == 10
-        # No RunTask was ever sent by the cleanup.
-        assert all(
-            b"RunTask" not in (r.headers.get("X-Amz-Target") or b"") for r in transport.requests
-        )
+        # Every ListTasks the cleanup sent used the tag as its only filter, and no RunTask
+        # was ever sent by the cleanup.
+        for request in transport.requests:
+            target = request.headers.get("X-Amz-Target") or b""
+            assert b"RunTask" not in target
+            if target == b"AmazonEC2ContainerServiceV20141113.ListTasks":
+                body = json.loads(request.body)
+                assert not (set(body) & self.LIST_TASKS_OTHER_FILTERS), sorted(body)
         from botocore.exceptions import ReadTimeoutError  # type: ignore[import-untyped]
 
         transport.script = [ReadTimeoutError(endpoint_url="https://synthetic")]
