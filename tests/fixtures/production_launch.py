@@ -44,6 +44,7 @@ from kalpamani.data.production.sharadar.launch_records import (
     RECORD_SCHEMA_VERSION,
     LaunchKind,
     LaunchSpecification,
+    ReleaseMode,
     build_specification,
     parse_launch_inputs,
     parse_owner_ledger,
@@ -183,6 +184,7 @@ def specification_for(
     inputs: dict[str, Any] | None = None,
     slice_doc: dict[str, Any] | None = None,
     run_identities: list[str] | None = None,
+    release_mode: ReleaseMode = ReleaseMode.NORMAL,
 ) -> LaunchSpecification:
     """The specification the fixtures' records produce for one launch."""
     from kalpamani.data.contracts.canonical import canonical_bytes
@@ -206,6 +208,7 @@ def specification_for(
         run_identities=([RUN_ID] if run_identities is None else run_identities)
         if actor is BLD
         else None,
+        release_mode=release_mode,
     )
 
 

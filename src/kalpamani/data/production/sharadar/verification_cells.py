@@ -1,7 +1,8 @@
 """The verification cell matrix: the required cells, and each one's state derived from records.
 
 **ADR-0036 §3 (L3 cells R-1 … R-9), ADR-0045 (the verification entries, the R-2 verdict rule,
-the launch tool), readiness §4.3 (S5, S8, S9); proposed ADR-0046 (this matrix and its state).**
+the launch tool), readiness §4.3 (S5, S8, S9); ADR-0046 (this matrix and its state); proposed
+ADR-0047 (the negative cells and the permission subcells).**
 
 Nothing here launches, reserves, reads a receipt or decides a verdict: those are the
 accepted launch tool's, the reservation store's, the receipt validator's and the
@@ -46,18 +47,19 @@ only; nothing is relaunched, no record is discarded, and no "latest wins" rule e
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
+from kalpamani.data.contracts.canonical import canonical_bytes
 from kalpamani.data.production.sharadar.documents import (
     decode_document,
     exact_str,
     hex_digest,
     instant,
 )
-from kalpamani.data.production.sharadar.entry import TaskEntry
+from kalpamani.data.production.sharadar.entry import EXIT_STATUS, TaskEntry, TaskOutcome
 from kalpamani.data.production.sharadar.launch_records import (
     MAX_RECORD_BYTES,
     RECORD_SCHEMA_VERSION,
@@ -71,12 +73,21 @@ from kalpamani.data.production.sharadar.launch_records import (
     compile_launch,
 )
 from kalpamani.data.production.sharadar.launch_store import RecordBinding, Reservation, bind_record
+from kalpamani.data.production.sharadar.permission_cells import (
+    PermissionEvidence,
+    SubcellState,
+    SubcellStatus,
+    derive_subcell,
+    subcells_of,
+)
 from kalpamani.data.production.sharadar.probe import (
     RESOLVABLE_INSUFFICIENCIES,
     IsolationVerdict,
     IsolationVerdictDocument,
 )
 from kalpamani.data.production.sharadar.r3_verification import R3Binding, R3Record, record_attests
+from kalpamani.data.production.sharadar.receipts import VerifiedReceipt
+from kalpamani.data.production.sharadar.release import ReleaseMode
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor
 
 CELLS_CONTRACT_ID: Final = "kalpamani-verification-cells/v1"
@@ -134,6 +145,11 @@ class CellDefinition:
     depends_on: tuple[str, ...]
     authorization: str
     execution: str
+    #: For a launch cell, the release mode the prepared specification must carry
+    #: (proposed ADR-0047); ``None`` for a cell that is not a launch.
+    release_mode: ReleaseMode | None = None
+    #: For a negative launch cell, the one task outcome that passes it.
+    expected_outcome: TaskOutcome | None = None
 
     def document(self) -> dict[str, Any]:
         """The closed definition block."""
@@ -146,6 +162,10 @@ class CellDefinition:
             "title": self.title,
             "must_succeed": self.must_succeed,
             "must_be_refused": self.must_be_refused,
+            "release_mode": None if self.release_mode is None else self.release_mode.value,
+            "expected_outcome": (
+                None if self.expected_outcome is None else self.expected_outcome.value
+            ),
             "depends_on": list(self.depends_on),
             "authorization": self.authorization,
             "execution": self.execution,
@@ -155,15 +175,18 @@ class CellDefinition:
 _LAUNCH_TOOL: Final = (
     "scripts/production_launch.py -- one prepared specification, one identity, one authorization"
 )
-_WITHHELD: Final = (
-    "requires a launch mode that withholds or mis-names the release; no accepted tool has one "
-    "(proposed ADR-0046 §4 records the decision the owner must take) -- BLOCKED until decided"
+_NEGATIVE: Final = (
+    "scripts/production_verification_cells.py --prepare-cell / --execute-cell / --complete-cell: "
+    "the launch tool once under --release-mode withheld|mismatched (proposed ADR-0047); the "
+    "expected refusal, and only it, passes -- receipt-verified, bound to its reservation, "
+    "record and terminal state, with zero data-plane operations"
 )
 _OWNER_RUN: Final = (
-    "not orchestrated by this runner: L2 SimulatePrincipalPolicy per identity-policy cell and "
-    "L3 one counted request per cell with synthetic objects, owner-run under the cell's "
-    "principal (readiness S8); a cell decided by simulation only is recorded simulated, "
-    "never verified"
+    "scripts/production_permission_cells.py --execute-subcell <id> per subcell (one operation, "
+    "one principal, one attempt; proposed ADR-0047) and --cleanup afterwards; the cell passes "
+    "only when every subcell is matched at runtime under the current binding and every "
+    "created object is confirmed removed; a blocked subcell (task role, deletion role) blocks "
+    "the cell, and simulation never passes one"
 )
 
 #: The required cells, enumerated from ADR-0036 §3 and readiness §4.3 (S5, S8, S9).
@@ -258,7 +281,9 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
             ),
             depends_on=(f"R1-{short}-BOOTSTRAP",),
             authorization="one authorization per cell; not reusable",
-            execution=_WITHHELD,
+            execution=_NEGATIVE,
+            release_mode=ReleaseMode.WITHHELD,
+            expected_outcome=TaskOutcome.REFUSED_NO_RELEASE,
         )
         for short, actor, entry in (
             ("ACQ", ProductionActor.ACQUISITION, TaskEntry.ACQUISITION_VERIFY),
@@ -277,7 +302,9 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
             must_be_refused="REFUSED_RELEASE_MISMATCH with zero data-plane operations",
             depends_on=(f"R1-{short}-BOOTSTRAP",),
             authorization="one authorization per cell; not reusable",
-            execution=_WITHHELD,
+            execution=_NEGATIVE,
+            release_mode=ReleaseMode.MISMATCHED,
+            expected_outcome=TaskOutcome.REFUSED_RELEASE_MISMATCH,
         )
         for short, actor, entry in (
             ("ACQ", ProductionActor.ACQUISITION, TaskEntry.ACQUISITION_VERIFY),
@@ -392,6 +419,10 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
 )
 
 CELL_BY_ID: Final[dict[str, CellDefinition]] = {cell.cell_id: cell for cell in REQUIRED_CELLS}
+#: The cells a prepared-cells document may name: those the launch tool executes.
+_PREPARABLE_KINDS: Final[frozenset[CellKind]] = frozenset(
+    {CellKind.RUNTIME_LAUNCH, CellKind.NEGATIVE_LAUNCH}
+)
 assert len(CELL_BY_ID) == len(REQUIRED_CELLS)
 
 
@@ -464,7 +495,7 @@ def parse_cells_document(raw: object) -> dict[str, PreparedCell]:
             or set(block) != {"cell_id", "identity", "specification_digest", "prepared_at"}
             or block["cell_id"] != cell_id
             or cell_id not in CELL_BY_ID
-            or CELL_BY_ID[cell_id].kind is not CellKind.RUNTIME_LAUNCH
+            or CELL_BY_ID[cell_id].kind not in _PREPARABLE_KINDS
         ):
             raise CellsDocumentError("malformed")
         identity = exact_str(block["identity"])
@@ -490,6 +521,167 @@ def parse_cells_document(raw: object) -> dict[str, PreparedCell]:
 # ---------------------------------------------------------------------------
 
 
+NEGATIVE_EVIDENCE_CONTRACT_ID: Final = "kalpamani-negative-launch-evidence/v1"
+MAX_NEGATIVE_EVIDENCE_BYTES: Final = 16 * 1024
+_NEGATIVE_EVIDENCE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "cell_id",
+        "actor",
+        "identity",
+        "specification_digest",
+        "release_mode",
+        "receipt_outcome",
+        "counts",
+        "released",
+        "recorded_at",
+    }
+)
+_NEGATIVE_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"s3_operations", "secret_retrievals", "provider_requests"}
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NegativeLaunchEvidence:
+    """What a negative cell's verified receipt established, recorded closed.
+
+    Written by the cell runner's ``--complete-cell`` after the launch tool verified the
+    receipt against the launch record (proposed ADR-0047): the cell, the launch it
+    belongs to (identity and specification digest), the release mode the specification
+    carried, the task's own outcome token, the data-plane counts the task measured
+    (``None`` when it measured none -- uncertainty, never zero), and whether the task
+    reported itself released. The ledger row records only ``REFUSED``; this record is
+    what says *which* refusal, and it passes the cell only when it is the expected one.
+    """
+
+    cell_id: str
+    actor: ProductionActor
+    identity: str
+    specification_digest: str
+    release_mode: ReleaseMode
+    receipt_outcome: TaskOutcome
+    counts: dict[str, int] | None
+    released: bool
+    recorded_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        """The closed record."""
+        return {
+            "schema_version": RECORD_SCHEMA_VERSION,
+            "contract_id": NEGATIVE_EVIDENCE_CONTRACT_ID,
+            "cell_id": self.cell_id,
+            "actor": self.actor.value,
+            "identity": self.identity,
+            "specification_digest": self.specification_digest,
+            "release_mode": self.release_mode.value,
+            "receipt_outcome": self.receipt_outcome.value,
+            "counts": None if self.counts is None else dict(sorted(self.counts.items())),
+            "released": self.released,
+            "recorded_at": self.recorded_at.isoformat(),
+        }
+
+    @property
+    def data_plane_operations(self) -> int | None:
+        """The task's S3, secret and provider operations together, or ``None`` unmeasured."""
+        if self.counts is None:
+            return None
+        return sum(self.counts.values())
+
+
+def negative_evidence_document(
+    *,
+    cell: CellDefinition,
+    identity: str,
+    specification_digest: str,
+    release_mode: ReleaseMode,
+    receipt: VerifiedReceipt,
+    recorded_at: datetime,
+) -> dict[str, Any]:
+    """The negative launch evidence record for one verified receipt."""
+    if cell.kind is not CellKind.NEGATIVE_LAUNCH or cell.actor is None:
+        raise ValueError("negative launch evidence belongs to a negative launch cell")
+    if type(receipt) is not VerifiedReceipt:
+        raise TypeError("receipt must be a VerifiedReceipt")
+    counts = (
+        None
+        if receipt.counts is None
+        else {
+            "s3_operations": receipt.counts.s3_operations,
+            "secret_retrievals": receipt.counts.secret_retrievals,
+            "provider_requests": receipt.counts.provider_requests,
+        }
+    )
+    return NegativeLaunchEvidence(
+        cell_id=cell.cell_id,
+        actor=cell.actor,
+        identity=identity,
+        specification_digest=specification_digest,
+        release_mode=release_mode,
+        receipt_outcome=receipt.outcome,
+        counts=counts,
+        released=receipt.released,
+        recorded_at=recorded_at,
+    ).document()
+
+
+def parse_negative_launch_evidence(raw: object) -> NegativeLaunchEvidence:
+    """A negative launch evidence record, parsed closed, or ``ValueError``."""
+    document = (
+        raw if type(raw) is dict else decode_document(raw, max_bytes=MAX_NEGATIVE_EVIDENCE_BYTES)
+    )
+    if type(document) is not dict or set(document) != _NEGATIVE_EVIDENCE_FIELDS:
+        raise ValueError("negative launch evidence: closed field set")
+    if (
+        document["schema_version"] != RECORD_SCHEMA_VERSION
+        or document["contract_id"] != NEGATIVE_EVIDENCE_CONTRACT_ID
+    ):
+        raise ValueError("negative launch evidence: contract")
+    cell_id = exact_str(document["cell_id"])
+    if cell_id is None or cell_id not in CELL_BY_ID:
+        raise ValueError("negative launch evidence: cell")
+    cell = CELL_BY_ID[cell_id]
+    if cell.kind is not CellKind.NEGATIVE_LAUNCH:
+        raise ValueError("negative launch evidence: not a negative cell")
+    actor = exact_str(document["actor"])
+    identity = exact_str(document["identity"])
+    digest = hex_digest(document["specification_digest"])
+    mode = exact_str(document["release_mode"])
+    outcome = exact_str(document["receipt_outcome"])
+    recorded_at = instant(document["recorded_at"])
+    if (
+        actor not in {m.value for m in ProductionActor}
+        or ProductionActor(actor) is not cell.actor
+        or identity is None
+        or not identity.startswith(VERIFICATION_IDENTITY_PREFIX)
+        or digest is None
+        or mode not in {m.value for m in ReleaseMode}
+        or outcome not in {m.value for m in TaskOutcome}
+        or type(document["released"]) is not bool
+        or recorded_at is None
+    ):
+        raise ValueError("negative launch evidence: field")
+    counts = document["counts"]
+    if counts is not None and (
+        type(counts) is not dict
+        or set(counts) != _NEGATIVE_COUNT_FIELDS
+        or any(type(v) is not int or type(v) is bool or v < 0 for v in counts.values())
+    ):
+        raise ValueError("negative launch evidence: counts")
+    return NegativeLaunchEvidence(
+        cell_id=cell_id,
+        actor=cell.actor,
+        identity=identity,
+        specification_digest=digest,
+        release_mode=ReleaseMode(mode),
+        receipt_outcome=TaskOutcome(outcome),
+        counts=None if counts is None else dict(counts),
+        released=document["released"],
+        recorded_at=recorded_at,
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RecordedEvidence:
     """What the runner read: the ledger, the unreconciled identities, the verdicts, R-3."""
@@ -511,6 +703,14 @@ class RecordedEvidence:
     inputs: LaunchInputs | None
     r3_record: R3Record | None
     r3_binding: R3Binding | None
+    #: negative launch evidence records that parsed, per specification digest.
+    negative_evidence: dict[str, tuple[NegativeLaunchEvidence, ...]] = field(default_factory=dict)
+    #: specification digests named by negative-evidence files that did NOT parse closed.
+    malformed_negative_evidence: frozenset[str] = frozenset()
+    #: negative-evidence files that could not be decoded at all.
+    unreadable_negative_evidence: int = 0
+    #: the R-4 .. R-9 permission records, attempts and cleanups, with the current binding.
+    permission: PermissionEvidence = field(default_factory=PermissionEvidence)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -522,6 +722,8 @@ class CellState:
     reason: str
     identity: str | None
     specification_digest: str | None
+    #: For a permission cell, every subcell's derived state, in catalogue order.
+    subcells: tuple[SubcellState, ...] = ()
 
     def document(self) -> dict[str, Any]:
         """The closed block."""
@@ -689,6 +891,37 @@ def _bound_success(
         )
     if record.network_interface_id is None:
         return _unbound(cell, prepared, "the launch record carries no verified placement")
+    expected_mode = ReleaseMode.NORMAL if cell.release_mode is None else cell.release_mode
+    if reservation.specification.release_mode is not expected_mode:
+        return _unbound(
+            cell,
+            prepared,
+            "the reservation's release mode is not this cell's "
+            f"({reservation.specification.release_mode.value})",
+        )
+    historical = _historical(cell, evidence, reservation, prepared)
+    if historical is not None:
+        return historical
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.PASSED,
+        reason=(
+            "ledger row VERIFIED with receipt-verified evidence, bound to its reservation, "
+            "launch record and the registered target"
+        ),
+        identity=identity,
+        specification_digest=digest,
+    )
+
+
+def _historical(
+    cell: CellDefinition,
+    evidence: RecordedEvidence,
+    reservation: Reservation,
+    prepared: PreparedCell,
+) -> CellState | None:
+    """``HISTORICAL`` when the bound chain is not for the registration now in force."""
+    assert cell.actor is not None
     target = reservation.specification.target
     if evidence.inputs is None:
         return _unbound(cell, prepared, "no launch-inputs record to apply the evidence against")
@@ -701,23 +934,206 @@ def _bound_success(
         )
     except (LaunchRecordError, TypeError, ValueError):
         applicable = False
-    if not applicable:
+    if applicable:
+        return None
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.HISTORICAL,
+        reason=(
+            "bound evidence for a target or placement other than the one now registered; "
+            "re-verification is required (ADR-0045 s.7)"
+        ),
+        identity=prepared.identity,
+        specification_digest=prepared.specification_digest,
+    )
+
+
+def _negative_state(
+    cell: CellDefinition, evidence: RecordedEvidence, prepared: PreparedCell | None
+) -> CellState:
+    """A negative R-1 cell: the expected refusal passes, and nothing else does.
+
+    The ledger row of a refused verification launch reads ``REFUSED`` and no more; the
+    cell passes only through the whole chain -- the reservation carrying this cell's
+    release mode, the launch record bound to it under the shared rule (mode included)
+    with a verified placement and the launcher's own observation of the expected exit
+    code, and exactly one negative launch evidence record for the launch naming the
+    expected outcome with zero data-plane operations and no release -- and only against
+    the registration now in force. A ``VERIFIED`` row is an unexpected success and
+    ``FAILED``; another refusal, a halt, an observed data-plane operation or a task that
+    reported itself released is ``FAILED``; missing, malformed or conflicting evidence
+    is ``UNBOUND``. A refused negative launch is never a successful bootstrap: its row
+    stays ``REFUSED`` and its identity is a ``verify-`` identity no build can select.
+    """
+    assert cell.actor is not None and cell.release_mode is not None
+    assert cell.expected_outcome is not None
+    if prepared is None:
         return CellState(
             cell_id=cell.cell_id,
-            status=CellStatus.HISTORICAL,
+            status=CellStatus.UNEXECUTED,
+            reason="not prepared: no identity and no specification recorded for this cell",
+            identity=None,
+            specification_digest=None,
+        )
+    identity, digest = prepared.identity, prepared.specification_digest
+    row = evidence.ledger.row(identity)
+    if identity in evidence.unreconciled:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.INTERRUPTED,
+            reason="reserved but unrecorded: run production_launch.py --recover; never relaunch",
+            identity=identity,
+            specification_digest=digest,
+        )
+    if row is None:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.PREPARED,
+            reason="specification written; awaiting the owner's authorization and one launch",
+            identity=identity,
+            specification_digest=digest,
+        )
+    if row.kind is not LaunchKind.VERIFICATION or row.actor is not cell.actor:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
+            reason="the ledger row for this identity is not this cell's actor and kind",
+            identity=identity,
+            specification_digest=digest,
+        )
+    if row.evidence is LedgerEvidence.EXIT_CODE_ONLY:
+        if row.outcome in {"REFUSED", "VERIFIED"}:
+            return CellState(
+                cell_id=cell.cell_id,
+                status=CellStatus.LAUNCHED,
+                reason=(
+                    f"ledger row {row.outcome} from the exit code only; the receipt has not "
+                    "verified (--complete-cell)"
+                ),
+                identity=identity,
+                specification_digest=digest,
+            )
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
+            reason=f"ledger outcome {row.outcome}; the identity is consumed",
+            identity=identity,
+            specification_digest=digest,
+        )
+    if row.outcome == "VERIFIED":
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
             reason=(
-                "bound evidence for a target or placement other than the one now registered; "
-                "re-verification is required (ADR-0045 s.7)"
+                "unexpected success: the task accepted a release it must have refused; "
+                "the identity is consumed"
             ),
             identity=identity,
             specification_digest=digest,
         )
+    if row.outcome != "REFUSED":
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
+            reason=f"ledger outcome {row.outcome}; the identity is consumed",
+            identity=identity,
+            specification_digest=digest,
+        )
+    # REFUSED, receipt-verified: bind the chain, then hold it to the expected refusal.
+    reservation = evidence.reservations.get(identity)
+    if reservation is None:
+        return _unbound(cell, prepared, "no reservation beside the ledger for this identity")
+    if (
+        reservation.specification_digest != digest
+        or reservation.identity != identity
+        or reservation.actor is not cell.actor
+        or reservation.kind is not LaunchKind.VERIFICATION
+        or reservation.specification.entry is not cell.entry
+    ):
+        return _unbound(cell, prepared, "the reservation is not for the prepared specification")
+    if reservation.specification.release_mode is not cell.release_mode:
+        return _unbound(
+            cell,
+            prepared,
+            "the reservation's release mode is not this cell's "
+            f"({reservation.specification.release_mode.value})",
+        )
+    record = evidence.launch_records.get(identity)
+    if record is None:
+        return _unbound(
+            cell, prepared, "no launch record for this identity in the records directory"
+        )
+    binding = bind_record(reservation, record)
+    if binding is not RecordBinding.BOUND:
+        return _unbound(
+            cell, prepared, f"the launch record does not bind to the reservation: {binding.value}"
+        )
+    if record.network_interface_id is None:
+        return _unbound(cell, prepared, "the launch record carries no verified placement")
+    if digest in evidence.malformed_negative_evidence or evidence.unreadable_negative_evidence:
+        return _unbound(
+            cell, prepared, "malformed or unreadable negative launch evidence in the records"
+        )
+    records = evidence.negative_evidence.get(digest, ())
+    if not records:
+        return _unbound(
+            cell, prepared, "no negative launch evidence record for this launch (--complete-cell)"
+        )
+    distinct = {canonical_bytes(r.document()) for r in records}
+    if len(distinct) != 1:
+        return _unbound(
+            cell, prepared, "conflicting negative launch evidence records for this launch"
+        )
+    found = records[0]
+    if (
+        found.cell_id != cell.cell_id
+        or found.identity != identity
+        or found.actor is not cell.actor
+        or found.release_mode is not cell.release_mode
+    ):
+        return _unbound(cell, prepared, "the negative launch evidence is not this cell's")
+    if found.receipt_outcome is not cell.expected_outcome:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
+            reason=(
+                f"the task refused with {found.receipt_outcome.value}, not "
+                f"{cell.expected_outcome.value}; the identity is consumed"
+            ),
+            identity=identity,
+            specification_digest=digest,
+        )
+    expected_exit = EXIT_STATUS[cell.expected_outcome]
+    if record.observed_exit_code is None:
+        return _unbound(cell, prepared, "the launcher observed no terminal state for this launch")
+    if record.observed_exit_code != expected_exit:
+        return _unbound(
+            cell,
+            prepared,
+            "the terminal exit code the launcher observed contradicts the receipt "
+            f"({record.observed_exit_code} is not {expected_exit})",
+        )
+    if found.released or found.data_plane_operations is None or found.data_plane_operations:
+        return CellState(
+            cell_id=cell.cell_id,
+            status=CellStatus.FAILED,
+            reason=(
+                "the refused task reported a release or a data-plane operation, or measured "
+                "no counts; the identity is consumed"
+            ),
+            identity=identity,
+            specification_digest=digest,
+        )
+    historical = _historical(cell, evidence, reservation, prepared)
+    if historical is not None:
+        return historical
     return CellState(
         cell_id=cell.cell_id,
         status=CellStatus.PASSED,
         reason=(
-            "ledger row VERIFIED with receipt-verified evidence, bound to its reservation, "
-            "launch record and the registered target"
+            f"the task refused with {cell.expected_outcome.value} under a "
+            f"{cell.release_mode.value} release, receipt-verified and bound to its "
+            "reservation, launch record, terminal state and the registered target"
         ),
         identity=identity,
         specification_digest=digest,
@@ -826,26 +1242,95 @@ def derive_states(
             states[cell.cell_id] = _verdict_state(cell, evidence, states)
             continue
         if cell.kind is CellKind.NEGATIVE_LAUNCH:
+            state = _negative_state(cell, evidence, prepared.get(cell.cell_id))
+            if blocked and state.status in {CellStatus.UNEXECUTED, CellStatus.PREPARED}:
+                state = CellState(
+                    cell_id=cell.cell_id,
+                    status=CellStatus.BLOCKED,
+                    reason=f"prerequisite {blocked[0]} is {states[blocked[0]].status.value}",
+                    identity=state.identity,
+                    specification_digest=state.specification_digest,
+                )
+            states[cell.cell_id] = state
+            continue
+        assert cell.kind is CellKind.PERMISSION_MATRIX
+        if blocked:
             states[cell.cell_id] = CellState(
                 cell_id=cell.cell_id,
                 status=CellStatus.BLOCKED,
-                reason=cell.execution,
+                reason=f"prerequisite {blocked[0]} is {states[blocked[0]].status.value}",
                 identity=None,
                 specification_digest=None,
             )
             continue
-        states[cell.cell_id] = CellState(
+        states[cell.cell_id] = _permission_state(cell, evidence, states)
+    return states
+
+
+#: The cell status each subcell status contributes, in precedence order: the first status
+#: any subcell holds decides the cell. A cell is PASSED only when every subcell is.
+_SUBCELL_PRECEDENCE: Final[tuple[tuple[SubcellStatus, CellStatus], ...]] = (
+    (SubcellStatus.FAILED, CellStatus.FAILED),
+    (SubcellStatus.UNBOUND, CellStatus.UNBOUND),
+    (SubcellStatus.BLOCKED, CellStatus.BLOCKED),
+    (SubcellStatus.INTERRUPTED, CellStatus.INTERRUPTED),
+    (SubcellStatus.HISTORICAL, CellStatus.HISTORICAL),
+    (SubcellStatus.CLEANUP_UNRESOLVED, CellStatus.INCONCLUSIVE),
+    (SubcellStatus.UNDECIDED, CellStatus.INCONCLUSIVE),
+    (SubcellStatus.AWAITING_R1, CellStatus.UNEXECUTED),
+    (SubcellStatus.UNEXECUTED, CellStatus.UNEXECUTED),
+)
+
+
+def _permission_state(
+    cell: CellDefinition, evidence: RecordedEvidence, states: dict[str, CellState]
+) -> CellState:
+    """A permission cell from its subcells: PASSED only when every subcell is.
+
+    Every other status is decided by precedence over the subcells' statuses -- a
+    failed subcell fails the cell whatever the others read; a blocked subcell (a task
+    role with no probe entry, the deletion role with no execution path) blocks it;
+    unresolved cleanup or an undecided answer leaves it INCONCLUSIVE. Empty, partial,
+    simulated or blocked coverage never passes.
+    """
+    r1_passed = {
+        ProductionActor.ACQUISITION: states["R1-ACQ-BOOTSTRAP"].status is CellStatus.PASSED,
+        ProductionActor.BUILD: states["R1-BLD-BOOTSTRAP"].status is CellStatus.PASSED,
+    }
+    subcells = tuple(
+        derive_subcell(s, evidence.permission, r1_passed=r1_passed)
+        for s in subcells_of(cell.cell_id)
+    )
+    counts = {status: sum(1 for s in subcells if s.status is status) for status in SubcellStatus}
+    summary = " ".join(f"{s.value.lower()}={n}" for s, n in counts.items() if n)
+    if subcells and all(s.status is SubcellStatus.PASSED for s in subcells):
+        return CellState(
             cell_id=cell.cell_id,
-            status=CellStatus.BLOCKED if blocked else CellStatus.UNEXECUTED,
-            reason=(
-                f"prerequisite {blocked[0]} is {states[blocked[0]].status.value}"
-                if blocked
-                else cell.execution
-            ),
+            status=CellStatus.PASSED,
+            reason=f"every subcell matched under the current binding ({summary})",
             identity=None,
             specification_digest=None,
+            subcells=subcells,
         )
-    return states
+    for subcell_status, cell_status in _SUBCELL_PRECEDENCE:
+        if counts.get(subcell_status):
+            first = next(s for s in subcells if s.status is subcell_status)
+            return CellState(
+                cell_id=cell.cell_id,
+                status=cell_status,
+                reason=f"{first.subcell_id} {first.status.value}: {first.reason} ({summary})",
+                identity=None,
+                specification_digest=None,
+                subcells=subcells,
+            )
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.UNEXECUTED,
+        reason=cell.execution,
+        identity=None,
+        specification_digest=None,
+        subcells=subcells,
+    )
 
 
 def aggregate(states: dict[str, CellState]) -> AggregateStatus:
@@ -867,6 +1352,8 @@ def matrix_lines(states: dict[str, CellState]) -> list[str]:
             f"cell={cell.cell_id} ref={cell.cell_ref} kind={cell.kind.value} "
             f"status={state.status.value}"
         )
+        for sub in state.subcells:
+            lines.append(f"  subcell={sub.subcell_id} status={sub.status.value}")
     counts = {
         status: sum(1 for s in states.values() if s.status is status) for status in CellStatus
     }
@@ -878,6 +1365,8 @@ def matrix_lines(states: dict[str, CellState]) -> list[str]:
 __all__ = [
     "CELLS_CONTRACT_ID",
     "CELL_BY_ID",
+    "MAX_NEGATIVE_EVIDENCE_BYTES",
+    "NEGATIVE_EVIDENCE_CONTRACT_ID",
     "REQUIRED_CELLS",
     "AggregateStatus",
     "CellDefinition",
@@ -885,6 +1374,7 @@ __all__ = [
     "CellState",
     "CellStatus",
     "CellsDocumentError",
+    "NegativeLaunchEvidence",
     "PreparedCell",
     "RecordedEvidence",
     "aggregate",
@@ -892,6 +1382,8 @@ __all__ = [
     "definition",
     "derive_states",
     "matrix_lines",
+    "negative_evidence_document",
     "parse_cells_document",
+    "parse_negative_launch_evidence",
     "resolve_verdicts",
 ]

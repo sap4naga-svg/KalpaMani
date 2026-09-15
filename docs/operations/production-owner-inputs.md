@@ -70,44 +70,56 @@ account id, an ARN, a bucket name, a private path, a run identity, a vendor row.
 | E-10 | Route B: the observation build's refusal receipt (per-dataset digests, zero writes) **and your explicit per-dataset acceptance record** — the receipt is evidence, the acceptance is the decision; Route A: the attribution worksheet (documented header → `schema_digest_of` → equality with an observed digest, per dataset) | S10b / S1 |
 | E-11 | R-2: the probe's observed result, attempt count and keyed destination digest from the receipt, **and separately** the isolation verdict record the launch tool derives (`--isolation-verdict`: `FAILED` on `CONNECTED`; otherwise `INCONCLUSIVE` with its closed reason, or `VERIFIED` only from a transcribed analysis bound to this task's interface, destination and window with an admitted blocking explanation inside the placement) | S9 (build) |
 
-## D. The consolidated checklist for the next runtime milestone (after the tooling cycle, proposed ADR-0046)
+## D. The consolidated checklist for the next runtime milestone (after the coverage cycle, proposed ADR-0047)
 
-Refreshed with the verification-tooling cycle. Four kinds, kept apart; nothing here is a value to
-type into this repository, and none of it was supplied to finish the offline work.
+Refreshed with the coverage cycle (ADR-0046 accepted on the merge of PR #105; ADR-0047 proposed).
+Three kinds, kept apart; nothing here is a value to type into this repository, and none of it was
+supplied to finish the offline work. **Every value stays MISSING; no permission is granted; no
+deferred owner decision is resolved by assumption.**
 
-### D.1 Values the owner must supply (still MISSING)
+### D.1 Values required before packaging
 
 | Value | Where it goes | Consumed by |
 |---|---|---|
-| the ADR-0024 environment binding (account, licensed bucket) — already capturable by the qualification capture | `KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE`, under the private root | the materializer (source), the R-3 tool (bucket, binding digest), the cell runner (R-3 attestation) |
-| the two production human-binding destinations | `KALPAMANI_PRODUCTION_ACQUISITION_RUNTIME_BINDING_FILE`, `KALPAMANI_RESEARCH_BUILD_RUNTIME_BINDING_FILE` | the materializer (destination), the launch tool (bootstrap) |
+| every S0 value of §A/§B: the production secret's **name** (in the compiled acquisition configuration), the origin address set, the release commit, the `tfvars` values, the ledger, the launch-inputs record, the slice / run identities | as §A/§B state | the compiled-configuration generator, the image build, the launch tool |
+| the ADR-0024 environment binding (account, licensed bucket) — already capturable by the qualification capture | `KALPAMANI_QUALIFICATION_ENVIRONMENT_BINDING_FILE`, under the private root | the materializer (source), the R-3 tool, the permission tool, the cell runner |
+| the two production human-binding destinations | `KALPAMANI_PRODUCTION_ACQUISITION_RUNTIME_BINDING_FILE`, `KALPAMANI_RESEARCH_BUILD_RUNTIME_BINDING_FILE` | the materializer (destination), the launch tool and the permission tool (bootstrap) |
 | the R-3 record directory | `KALPAMANI_PRODUCTION_R3_RECORD_DIR`, under the private root | the R-3 tool |
-| every S0 value of §A/§B: the secret, the origin address set, the release commit, the tfvars values, the ledger, the launch-inputs record, the slice / run identities, one authorization record per cell naming its specification digest | as §A/§B state | the launch tool through the cell runner |
+| the **permission targets** document (`kalpamani-permission-targets/v1`: the foundation task role ARN, the qualification secret ARN, the CONTROL bucket name — three values no accepted binding carries) | `KALPAMANI_PRODUCTION_PERMISSION_TARGETS_FILE`, under the private root | the permission tool (R-4's refused secret, R-4/R-5's refused bucket, R-9) |
+| one authorization record per cell naming its prepared specification digest — the negative cells' digests cover their release mode | `--authorization` per execution | the cell runner, the launch tool |
+| one authorization per permission subcell (`kalpamani-permission-authorization/v1`) naming the prepared statement's digest — consumed by its one execution | `--authorization` per `--execute-subcell` | the permission tool |
 
-### D.2 Evidence that can only exist after an earlier runtime step
+### D.2 Decisions or permissions required before cloud verification (recorded, not granted, not resolved)
+
+| Decision or permission | For | Recorded in |
+|---|---|---|
+| a **task-side permission probe entry** (a third verification entry, a task-definition family, a compiled-configuration field, a launcher resource) | the 32 task-role subcells of R-4 and R-5 — until then `BLOCKED`; a human role is never a substitute | ADR-0047 §5 |
+| a **running task of the actor** to execute into (during an authorized R-1 launch, a later decision of the verification entries) | the 2 R-6 `ExecuteCommand` subcells — until then `BLOCKED` | ADR-0047 §5 |
+| `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask` on the governed cluster for the **control principal** (whether its identity policy already holds them is not established here) | the cleanup's discovery and settlement of an unexpected or ambiguous launch — until then a `failed` discovery is residue | ADR-0047 §3.5, §5 — recorded, not granted |
+| an **owner attestation** for an ambiguous launch whose task is never discovered | the subcell stays `CLEANUP_UNRESOLVED` (discovery exhaustion is never proof of absence) | ADR-0047 §3.5, §5 — not implemented, not decided |
+| **discovery of a task that stopped early and aged out of the `startedBy` listing** (a `ListTasks` by `startedBy` admits no status filter; a documented request under another filter, or an attestation, would be a later decision) | such a launch stays `CLEANUP_UNRESOLVED` | ADR-0047 §3.5, §5 — limitation recorded, not implemented, not decided |
+| an **execution path for the deletion role** (a deletion task definition, or a runbook step under a separately authorized principal) | the 2 R-8 subcells — until then `BLOCKED` | ADR-0047 §5; ADR-0007 |
+| the reading of ADR-0036 R-4's *"deleted by the deletion role afterwards"* as cleanup by the control principal | the R-4 / R-5 synthetic objects | ADR-0047 §6.3 — decided by its acceptance |
+| `ec2:CreateNetworkInsightsPath`, `ec2:StartNetworkInsightsAnalysis`, `ec2:DescribeNetworkInsights*`, `ec2:DeleteNetworkInsights*` | the principal that corroborates R-2 | D-14; ADR-0045 §3 |
+| `ecs:DescribeTaskDefinition` | live read-back of the task-definition evidence | V-16; ADR-0045 §6 |
+| `logs:GetLogEvents` and the receipt collector | receipts are hand-read; collection stays deferred | ADR-0044 §5 |
+| the G-14 bucket-policy transition procedure | a changed deployed policy | readiness §4.6, §6 — deferred |
+| stage a and stage b applies, the R-3 session, each launch, each permission subcell and the cleanup | every runtime step | each its own written authorization (readiness §3) |
+
+### D.3 Evidence obtainable only after the relevant runtime step
 
 | Evidence | Exists only after | Then consumed by |
 |---|---|---|
-| the R-3 record (`kalpamani-r3-verification-record/v1`), result `VERIFIED`, attesting to the current `storage.tf` and binding | S4 (stage a applied) and one authorized R-3 session | S5a (`production_r3_verification_digest`), S6, the cell runner's `R3` cell |
-| the four profile preflights and both human bindings | S6 (stage b) and S7 | the launch tool's bootstrap; the cell runner |
-| a `VERIFIED` ledger row with `RECEIPT_VERIFIED` evidence per bootstrap cell, its reservation and launch record bound to the prepared specification and to the inputs now registered | one authorized launch per cell, the owner's receipt lines; a later change to the registered target or placement makes the row `HISTORICAL` and requires re-verification (ADR-0045 §7) | `R1-*-BOOTSTRAP` PASSED; the verdict cell |
-| the isolation verdict record | the build bootstrap cell PASSED and one transcribed analysis (D-16); an `INCONCLUSIVE` verdict is re-evaluated for the same launch with a later qualifying transcription — no relaunch | `R2-BLD-ISOLATION` |
+| the R-3 record (`kalpamani-r3-verification-record/v1`), result `VERIFIED`, attesting to the current `storage.tf` and binding | S4 (stage a applied) and one authorized R-3 session | S5a (`r3_verification_digest`), S6, the cell runner's `R3` cell |
+| the four profile preflights and both human bindings | S6 (stage b) and S7 | the launch tool's bootstrap; the cell runner; the permission tool |
+| a `VERIFIED` ledger row with `RECEIPT_VERIFIED` evidence per bootstrap cell, its reservation and launch record bound to the prepared specification and to the inputs now registered | one authorized launch per cell, the owner's receipt lines; a later change to the registered target or placement makes the row `HISTORICAL` (ADR-0045 §7) | `R1-*-BOOTSTRAP` PASSED; the verdict cell; R-6's evidenced positives |
+| a `REFUSED` ledger row with `RECEIPT_VERIFIED` evidence per negative cell, its launch record carrying the mode and the observed exit code, and its negative-evidence record | one authorized negative launch per cell (four in all), the owner's receipt lines | `R1-*-NO-RELEASE`, `R1-*-RELEASE-MISMATCH` PASSED |
+| the isolation verdict record | the build bootstrap cell PASSED and one transcribed analysis (D-16); an `INCONCLUSIVE` verdict is re-evaluated for the same launch — no relaunch | `R2-BLD-ISOLATION` |
+| one prepared statement, one consumed authorization (its consumption record beside the ledger), one attempt and one permission record per executable subcell (56), each under its principal and bound as one chain to the context in force (environment binding, declarations, registration, **targets document**), and one cleanup record settling every created or possibly created object and every started or possibly started task by attempt identity — a launch only by termination evidence | one authorized invocation per subcell and one authorized cleanup, after the R-3 cell and (for R-4/R-5 reads) the creating subcells | `R6-LAUNCHERS`, `R7-QUALIFICATION`, `R9-FOUNDATION-TASK` PASSED; R-4 and R-5's human subcells (the cells stay `BLOCKED` on D.2) |
 | Route B observation receipts, the first production Bronze, the first manifest | S10a–S10c | later gates, unchanged |
 
-### D.3 Permissions still requiring a decision (recorded, not granted)
-
-| Permission | For | Recorded in |
-|---|---|---|
-| `ec2:CreateNetworkInsightsPath`, `ec2:StartNetworkInsightsAnalysis`, `ec2:DescribeNetworkInsights*`, `ec2:DeleteNetworkInsights*` | the principal that corroborates R-2 | D-14; ADR-0045 §3 |
-| `ecs:DescribeTaskDefinition` | live read-back of the task-definition evidence (the launcher sets do not hold it; the evidence is the owner's transcription) | V-16; ADR-0045 §6 |
-| `logs:GetLogEvents` | the deferred receipt collector | ADR-0044 §5 |
-| the G-14 bucket-policy transition procedure | a changed deployed policy | readiness §4.6, §6 — deferred |
-
-### D.4 Code gaps remaining after this cycle
-
-| Gap | What is missing | Decision needed |
-|---|---|---|
-| the negative R-1 cells (`NO-RELEASE`, `RELEASE-MISMATCH`) | a launch mode that withholds or mis-names the release for one launch; the accepted launch tool has none | ADR-0046 §4 — a later proposed ADR; until then the cells are `BLOCKED` and the matrix aggregate cannot be `VERIFIED` |
-| R-4 … R-9 orchestration | an L2 `SimulatePrincipalPolicy` runner and L3 per-cell live requests under each principal with synthetic objects and deletion-role cleanup; the cell runner enumerates these cells and does not execute them | a later cycle; the owner runs them per readiness S8 meanwhile |
-| the receipt collector | ADR-0044 §5, deferred; receipts are hand-read | unchanged |
-| G-14 | the bucket-policy transition procedure | deferred |
+**What the coverage cycle closed, and what it left.** The withheld-release launch mode and the negative
+R-1 cells, and the R-4 … R-9 orchestration, are no longer code gaps: both are implemented offline and
+proposed by ADR-0047. Still absent as code: the task-side permission probe entry and the deletion
+role's execution path (D.2, blocking 34 subcells), the receipt collector (ADR-0044 §5, deferred) and
+the G-14 transition procedure (deferred).

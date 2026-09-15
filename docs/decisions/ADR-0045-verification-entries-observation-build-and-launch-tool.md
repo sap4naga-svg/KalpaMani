@@ -30,7 +30,7 @@ apply, no launch, no run, no probe, no Reachability Analyzer analysis and no IAM
 analyzer permissions (D-14) stay a recorded delta, `ecs:DescribeTaskDefinition` (V-16) stays a
 recorded dependency, G-14 stays deferred, and every owner input stays MISSING. The owner-side tooling
 that composes these contracts — the human-binding materializer, the R-3 tool and the cell runner —
-is proposed separately as ADR-0046.
+was proposed separately as ADR-0046 (since accepted on the merge of PR #105).
 
 **Nothing was run to produce this decision.** No AWS call, no STS call, no ECS, EC2 or SSM call, no
 container image built, pulled or published, no registry contacted, no credential retrieved, no

@@ -1,6 +1,6 @@
 """R-3 -- server-side conditional-write verification, executed on an injected client.
 
-**ADR-0036 §2.7 / §3 (the R-3 procedure), proposed ADR-0046 (the record).** The
+**ADR-0036 §2.7 / §3 (the R-3 procedure), ADR-0046 (the record).** The
 procedure is transcribed from the accepted text and nothing is added to it: one
 identity proof first (the tool's, not this module's), then **nine expected-path S3
 operations** under ``_verification/<stamp>/`` with a fixed 64-byte synthetic marker, each
@@ -134,6 +134,20 @@ class Observation:
     upload_id: str | None = None
     #: ``"timeout"`` / ``"network"`` when the request never produced a response.
     transport_failure: str | None = None
+    #: Every task ARN a ``RunTask`` or ``ListTasks`` answered with (the permission cells'
+    #: unexpected-success reaction stops each; the cleanup settles each). Never rendered.
+    task_arns: tuple[str, ...] = ()
+    #: ``(task ARN, lastStatus)`` pairs a ``DescribeTasks`` answered with. Never rendered.
+    task_statuses: tuple[tuple[str, str], ...] = ()
+    #: The count of ``failures`` entries a ``RunTask`` answer carried beside its tasks.
+    failures: int = 0
+    #: The pagination token a ``ListTasks`` answer carried: a further page exists.
+    next_token: str | None = None
+
+    @property
+    def task_arn(self) -> str | None:
+        """The first returned task ARN, when one was returned."""
+        return self.task_arns[0] if self.task_arns else None
 
     def __repr__(self) -> str:
         """Status and code only -- never the message."""

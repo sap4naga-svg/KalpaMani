@@ -99,6 +99,9 @@ LOCK_SUFFIX: Final = ".lock"
 LEGACY_RESERVATIONS_DIRECTORY: Final = "reservations"
 #: How many fresh random names are tried before a record write is refused.
 MAX_NAME_ATTEMPTS: Final = 8
+#: Beside the ledger, the consumed authorizations (proposed ADR-0047): one exclusive file
+#: per authorization digest, created before the operation it authorizes.
+CONSUMED_SUFFIX: Final = ".consumed"
 
 _HEX_64: Final = frozenset("0123456789abcdef")
 _RESERVATION_FIELDS: Final[frozenset[str]] = frozenset(
@@ -127,6 +130,7 @@ class StoreDefect(StrEnum):
     WRITE_FAILED = "WRITE_FAILED"
     NAME_EXHAUSTED = "NAME_EXHAUSTED"
     LEGACY_RESERVATIONS_PRESENT = "LEGACY_RESERVATIONS_PRESENT"
+    AUTHORIZATION_CONSUMED = "AUTHORIZATION_CONSUMED"
 
 
 class StoreError(Exception):
@@ -208,6 +212,8 @@ class RecordBinding(StrEnum):
     PLACEMENT_MISMATCH = "PLACEMENT_MISMATCH"
     #: The specification cannot be compiled, so nothing can be held to it.
     UNCOMPILABLE = "UNCOMPILABLE"
+    #: The record's release mode is not the one the specification authorized.
+    MODE_MISMATCH = "MODE_MISMATCH"
 
 
 def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding:
@@ -218,8 +224,9 @@ def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding
     kind and entry agree; when the record's slice and plan digest are exactly the
     specification's workload (``None`` for a build, whose workload names runs); when the
     record's target is the specification's own -- revision, image, configuration and
-    commit; and when any verified placement the record carries is the specification's
-    subnet and its security groups as a set. A record with no verified placement (no
+    commit; when any verified placement the record carries is the specification's
+    subnet and its security groups as a set; and when the record's release mode is the
+    one the specification authorized. A record with no verified placement (no
     release was written) is not held to a placement here; a caller that needs one checks
     for it. The launch tool refuses on anything but ``BOUND`` before completing a row or
     deciding a verdict, and the cell runner reads anything else as unbound evidence.
@@ -254,6 +261,8 @@ def bind_record(reservation: Reservation, record: LaunchRecord) -> RecordBinding
         or frozenset(compiled.security_group_ids) != frozenset(record.security_group_ids or ())
     ):
         return RecordBinding.PLACEMENT_MISMATCH
+    if record.release_mode is not specification.release_mode:
+        return RecordBinding.MODE_MISMATCH
     return RecordBinding.BOUND
 
 
@@ -463,6 +472,58 @@ class LaunchStore:
             raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
         return parse_reservation(raw)
 
+    # -- consumed authorizations -----------------------------------------------------------
+
+    def consumed_path(self, kind: str, digest: str) -> Path:
+        """Where the consumption of ``digest`` lives: beside the ledger, never under the records."""
+        if not (len(digest) == 64 and set(digest) <= _HEX_64) or not kind.isidentifier():
+            raise _refuse(StoreDefect.WRITE_FAILED)
+        return self._ledger_path.with_name(self._ledger_path.name + CONSUMED_SUFFIX) / (
+            f"{kind}-{digest}.json"
+        )
+
+    def consume(self, kind: str, digest: str, document: dict[str, Any]) -> None:
+        """Consume one authorization durably, or refuse if it was consumed before.
+
+        Exclusive creation beside the canonical ledger: a second execution under the same
+        authorization -- repeated, after an interruption, after an ambiguous outcome, from
+        another records directory -- finds the file and refuses. Nothing here ever
+        removes a consumption.
+        """
+        path = self.consumed_path(kind, digest)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _create_exclusive(path, canonical_bytes(document))
+        except FileExistsError:
+            raise _refuse(StoreDefect.AUTHORIZATION_CONSUMED) from None
+        except OSError:
+            raise _refuse(StoreDefect.WRITE_FAILED) from None
+
+    def is_consumed(self, kind: str, digest: str) -> bool:
+        """Whether ``digest`` was consumed before."""
+        return self.consumed_path(kind, digest).exists()
+
+    def consumptions(self, kind: str) -> dict[str, bytes]:
+        """Every consumption of ``kind`` beside the ledger: the digest and the bytes.
+
+        Read only; a file whose name is not a digest of this kind is ignored, a file that
+        cannot be read is reported by its digest with empty bytes (malformed, never
+        silently absent).
+        """
+        directory = self._ledger_path.with_name(self._ledger_path.name + CONSUMED_SUFFIX)
+        if not directory.is_dir() or not kind.isidentifier():
+            return {}
+        found: dict[str, bytes] = {}
+        for path in sorted(directory.glob(f"{kind}-*.json")):
+            digest = path.name[len(kind) + 1 : -len(".json")]
+            if len(digest) != 64 or not set(digest) <= _HEX_64:
+                continue
+            try:
+                found[digest] = path.read_bytes()
+            except OSError:
+                found[digest] = b""
+        return found
+
     def unreconciled(self, ledger: OwnerLedger) -> list[str]:
         """Identities reserved but absent from the ledger: interrupted work, sorted."""
         if not self._reservations.is_dir():
@@ -502,6 +563,7 @@ class LaunchStore:
 
 
 __all__ = [
+    "CONSUMED_SUFFIX",
     "LEGACY_RESERVATIONS_DIRECTORY",
     "LOCK_SUFFIX",
     "MAX_NAME_ATTEMPTS",

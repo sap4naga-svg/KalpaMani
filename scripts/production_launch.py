@@ -140,6 +140,9 @@ SENTENCES: Final[dict[str, str]] = {
 
 _ACTORS: Final = ("acquisition", "build")
 _KINDS: Final = ("production", "verification")
+#: The negative release modes of proposed ADR-0047, admitted for a verification launch
+#: only; the ordinary mode is the default and is never spelled on the command line.
+_RELEASE_MODES: Final = ("withheld", "mismatched")
 
 
 class LaunchRefusalError(Exception):
@@ -174,6 +177,8 @@ class LaunchArguments:
     launch_record: Path | None
     receipt_lines: Path | None
     reachability_evidence: Path | None
+    #: ``None`` is the ordinary release; a negative mode names the R-1 cell it produces.
+    release_mode: str | None = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -201,6 +206,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--launch-record", type=Path)
     parser.add_argument("--receipt-lines", type=Path)
     parser.add_argument("--reachability-evidence", type=Path)
+    parser.add_argument("--release-mode", choices=_RELEASE_MODES)
     return parser
 
 
@@ -235,9 +241,14 @@ def parse_arguments(argv: Sequence[str]) -> LaunchArguments:
         launch_record=namespace.launch_record,
         receipt_lines=namespace.receipt_lines,
         reachability_evidence=namespace.reachability_evidence,
+        release_mode=namespace.release_mode,
     )
     modes = sum((arguments.complete_row, arguments.recover, arguments.isolation_verdict))
     if modes > 1 or (modes == 1 and arguments.authorized):
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+    # A negative release mode is a verification launch's (preparation or execution)
+    # and no other mode's; the production kind never carries one.
+    if arguments.release_mode is not None and (modes or arguments.kind != "verification"):
         raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     if arguments.complete_row or arguments.isolation_verdict:
         if arguments.launch_record is None or arguments.receipt_lines is None:
@@ -404,6 +415,11 @@ def prepare_launch(
             identity=arguments.identity,
             slice_document=slice_document,
             run_identities=run_identities,
+            release_mode=(
+                lr.ReleaseMode.NORMAL
+                if arguments.release_mode is None
+                else lr.ReleaseMode(arguments.release_mode.upper())
+            ),
         )
         covered: Any = None
         plan_digest: str | None = None
@@ -740,6 +756,8 @@ def execute_launch(
     launched_at = now()
     if not authorization_record.valid_at(launched_at):
         raise LaunchRefusalError("refused_authorization", EXIT_REFUSED_AUTHORIZATION)
+    # The release behaviour is the authorized specification's -- the digest the
+    # authorization named covers it -- never the command line's.
     report = launch_authorized_run(
         compiled=prepared.compiled,
         adapters=adapters,
@@ -748,6 +766,7 @@ def execute_launch(
         now=now,
         monotonic=monotonic,
         sleep=sleep,
+        release_mode=prepared.specification.release_mode,
     )
     recorded_at = now()
 
@@ -777,6 +796,8 @@ def execute_launch(
             subnet_id=report.subnet_id,
             security_group_ids=report.security_group_ids,
             specification_digest=prepared.specification.digest,
+            release_mode=report.release_mode,
+            observed_exit_code=report.observed_exit_code,
         )
         row = lr.provisional_ledger_row(record, outcome=outcome, completed_at=recorded_at)
     else:

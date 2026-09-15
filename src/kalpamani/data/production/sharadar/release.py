@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final
 
-from kalpamani.data.contracts.canonical import canonical_bytes
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.production.sharadar.documents import (
     DocumentDefect,
     DocumentError,
@@ -329,6 +329,43 @@ def verify_release(
     )
 
 
+class ReleaseMode(StrEnum):
+    """How the launcher treats the placement release for one launch. Closed.
+
+    ``NORMAL`` is every production launch and the positive verification cells: the
+    release is written after placement verification. The two negative modes exist only
+    for a **verification** launch and only to produce ADR-0036 s.3 R-1's refusals:
+    ``WITHHELD`` writes no release at all, so the task exits ``REFUSED_NO_RELEASE`` at
+    the barrier ceiling; ``MISMATCHED`` writes a release naming a task ARN derived
+    from -- and never equal to -- the launched task's, so the task exits
+    ``REFUSED_RELEASE_MISMATCH``. The mode is part of the specification and therefore
+    of the digest the authorization names (proposed ADR-0047).
+    """
+
+    NORMAL = "NORMAL"
+    WITHHELD = "WITHHELD"
+    MISMATCHED = "MISMATCHED"
+
+
+def mismatched_task_arn(task_arn: str) -> str:
+    """A task ARN on the launched task's cluster that is never the launched task's.
+
+    The task id is the first 32 hex characters of the SHA-256 of the real id; the
+    result is held unequal to the input (a collision would be refused, never written).
+    A release naming it is a well-formed release the launched task can only refuse
+    (``REFUSED_RELEASE_MISMATCH``): the release contract binds the exact task ARN, and
+    every other field stays the launched task's own, so nothing else can accept it either.
+    """
+    match = TASK_ARN_RE.fullmatch(task_arn)
+    if match is None:
+        raise ValueError("a task ARN is required")
+    derived = sha256_hex(match.group(3).encode("ascii"))[:32]
+    candidate = task_arn[: match.start(3)] + derived
+    if candidate == task_arn or TASK_ARN_RE.fullmatch(candidate) is None:
+        raise ValueError("the derived task ARN must differ from the launched task's")
+    return candidate
+
+
 def build_release_document(
     *,
     actor: ProductionActor,
@@ -396,8 +433,10 @@ __all__ = [
     "ReleaseDefect",
     "ReleaseError",
     "ReleaseExpectation",
+    "ReleaseMode",
     "build_release_document",
     "decode_release",
+    "mismatched_task_arn",
     "release_fields",
     "verify_release",
 ]

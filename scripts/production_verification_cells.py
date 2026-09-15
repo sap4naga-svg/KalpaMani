@@ -1,4 +1,4 @@
-"""The verification cell runner (readiness S9; ADR-0036 §3; proposed ADR-0046). Refuses by default.
+"""The verification cell runner (readiness S9; ADR-0036 §3; ADR-0046). Refuses by default.
 
 Orchestrates the cells the accepted contracts require by composing the accepted tools
 and adding nothing to their contracts: the launch tool (one prepared specification, one
@@ -22,6 +22,13 @@ execute       --execute-cell <id> + the flag + --authorization: the cell must be
               never a second launch of the same cell, never a retry of an uncertain one
 complete      --complete-cell <id> --launch-record --receipt-lines: the launch tool's
               --complete-row for the cell's record
+recover       --recover-negative-evidence <id> --launch-record --receipt-lines: for a
+              negative cell whose row is already REFUSED / RECEIPT_VERIFIED and whose
+              negative-evidence record is missing (an interruption between the row's
+              completion and the evidence write), re-verify the reservation, the launch
+              record and the receipt through the launch tool's own reader and record the
+              evidence; no launch, no new identity, no ledger change; repeatable; a
+              contradicting record refuses
 verdict       --verdict-cell R2-BLD-ISOLATION --launch-record --receipt-lines
               [--reachability-evidence]: the launch tool's --isolation-verdict; allowed while
               the cell is UNEXECUTED or INCONCLUSIVE, so a later transcription for the SAME
@@ -65,6 +72,7 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
 
 from kalpamani.data.contracts.canonical import canonical_bytes  # noqa: E402
 from kalpamani.data.production.sharadar import verification_cells as vc  # noqa: E402
+from kalpamani.data.production.sharadar.release import ReleaseMode  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-cell-launch"
 CELLS_SUFFIX: Final = ".cells.json"
@@ -89,6 +97,9 @@ EXIT_REFUSED_CELL_STATE: Final = 4
 EXIT_REFUSED_PREREQUISITE: Final = 5
 EXIT_REFUSED_AUTHORIZATION: Final = 6
 EXIT_REFUSED_LEDGER_LOCKED: Final = 13
+EXIT_RECOVERED: Final = 0
+EXIT_ALREADY_RECORDED: Final = 0
+EXIT_REFUSED_EVIDENCE_CONFLICT: Final = 14
 
 SENTENCES: Final[dict[str, str]] = {
     "refused_arguments": "cells refused: the arguments were not admitted",
@@ -101,6 +112,14 @@ SENTENCES: Final[dict[str, str]] = {
     "refused_ledger_locked": "cells refused: the ledger is locked by another process",
     "prepared": "cell prepared offline; authorize its specification digest to execute it",
     "matrix": "completion matrix derived from recorded state; nothing was launched",
+    "recovered": "negative launch evidence recorded from the re-verified receipt; nothing launched",
+    "already_recorded": (
+        "negative launch evidence already recorded and consistent; nothing written, "
+        "nothing launched"
+    ),
+    "refused_evidence_conflict": (
+        "cells refused: a recorded negative launch evidence contradicts the re-verified receipt"
+    ),
 }
 
 
@@ -142,6 +161,20 @@ def _r3_tool() -> Any:
     return module
 
 
+def _permission_tool() -> Any:
+    name = "production_permission_cells"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name, REPO_ROOT / "scripts" / "production_permission_cells.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="production_verification_cells",
@@ -156,6 +189,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--execute-cell")
     mode.add_argument("--complete-cell")
     mode.add_argument("--verdict-cell")
+    mode.add_argument("--recover-negative-evidence")
     parser.add_argument("--identity")
     parser.add_argument("--slice", dest="slice_path", type=Path)
     parser.add_argument("--run-identity", dest="run_identities", action="append", default=[])
@@ -214,18 +248,19 @@ def write_prepared(store: Any, prepared: dict[str, vc.PreparedCell]) -> None:
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
 
-def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
-    """Every verdict record in the records directory, parsed closed.
+def _closed_records(
+    store: Any, prefix: str, parse: Callable[[Any], Any]
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every ``<prefix>-*.json`` record in the records directory, parsed closed.
 
     Returns the parsed documents grouped by the specification digest they name, the
     digests named by files that decode but do not parse closed (malformed evidence for a
     launch is reported against that launch, never ignored), and the count of files that
     could not be decoded at all. Nothing is ranked here: the cell matrix resolves the
-    documents deterministically (:func:`verification_cells.resolve_verdicts`).
+    documents deterministically.
     """
     from kalpamani.data.production.sharadar.documents import decode_document
     from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
-    from kalpamani.data.production.sharadar.probe import parse_isolation_verdict_document
 
     parsed: dict[str, list[Any]] = {}
     malformed: set[str] = set()
@@ -233,7 +268,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
     records_dir: Path = store._records_dir
     if not records_dir.is_dir():
         return {}, frozenset(), 0
-    for path in sorted(records_dir.glob("isolation-verdict-*.json")):
+    for path in sorted(records_dir.glob(f"{prefix}-*.json")):
         try:
             raw = path.read_bytes()
             document = decode_document(raw, max_bytes=MAX_RECORD_BYTES)
@@ -241,7 +276,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
             unreadable += 1
             continue
         try:
-            verdict = parse_isolation_verdict_document(document)
+            record = parse(document)
         except ValueError:
             digest = document.get("specification_digest") if type(document) is dict else None
             if type(digest) is str and digest:
@@ -249,7 +284,7 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
             else:
                 unreadable += 1
             continue
-        parsed.setdefault(verdict.specification_digest, []).append(verdict)
+        parsed.setdefault(record.specification_digest, []).append(record)
     return (
         {
             digest: tuple(sorted(docs, key=lambda d: d.recorded_at))
@@ -260,11 +295,90 @@ def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], i
     )
 
 
+def _verdicts(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every verdict record, parsed closed (:func:`_closed_records`)."""
+    from kalpamani.data.production.sharadar.probe import parse_isolation_verdict_document
+
+    return _closed_records(store, "isolation-verdict", parse_isolation_verdict_document)
+
+
+def _negative_evidence(store: Any) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], int]:
+    """Every negative launch evidence record, parsed closed (:func:`_closed_records`)."""
+    return _closed_records(store, "negative-launch-evidence", vc.parse_negative_launch_evidence)
+
+
+def permission_evidence(store: Any, context: Any) -> Any:
+    """Every permission record, attempt, statement, consumption and cleanup, parsed closed.
+
+    Grouped by subcell (records, attempts, statements), by authorization digest
+    (consumptions, read from beside the ledger) or kept in order (cleanups); a file that
+    does not parse is counted as malformed, which makes every permission subcell UNBOUND
+    until it is removed or repaired -- malformed evidence is reported, never ignored.
+    ``context`` is what everything is held to now (``None``: no binding, nothing passes).
+    """
+    from kalpamani.data.production.sharadar import permission_cells as pc
+    from kalpamani.data.production.sharadar.documents import decode_document
+    from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
+
+    records: dict[str, list[Any]] = {}
+    attempts: dict[str, list[Any]] = {}
+    statements: dict[str, list[Any]] = {}
+    consumptions: dict[str, Any] = {}
+    cleanups: list[Any] = []
+    malformed = 0
+    for digest, raw in store.consumptions(_permission_tool().CONSUMPTION_KIND).items():
+        try:
+            parsed = pc.parse_permission_consumption(
+                decode_document(raw, max_bytes=MAX_RECORD_BYTES)
+            )
+        except Exception:
+            malformed += 1
+            continue
+        if parsed.authorization_sha256 != digest:
+            malformed += 1
+            continue
+        consumptions[digest] = parsed
+    records_dir: Path = store._records_dir
+    if not records_dir.is_dir():
+        return pc.PermissionEvidence(
+            consumptions=consumptions, malformed=malformed, context=context
+        )
+    parsers: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]] | None], ...] = (
+        ("permission-record", pc.parse_permission_record, records),
+        ("permission-attempt", pc.parse_permission_attempt, attempts),
+        ("permission-statement", pc.parse_permission_statement, statements),
+        ("permission-cleanup", pc.parse_permission_cleanup, None),
+    )
+    for prefix, parse, sink in parsers:
+        for path in sorted(records_dir.glob(f"{prefix}-*.json")):
+            try:
+                parsed = parse(decode_document(path.read_bytes(), max_bytes=MAX_RECORD_BYTES))
+            except Exception:
+                malformed += 1
+                continue
+            if sink is None:
+                cleanups.append(parsed)
+            else:
+                sink.setdefault(parsed.subcell_id, []).append(parsed)
+    return pc.PermissionEvidence(
+        records={k: tuple(sorted(v, key=lambda r: r.started_at)) for k, v in records.items()},
+        attempts={k: tuple(sorted(v, key=lambda a: a.started_at)) for k, v in attempts.items()},
+        statements={
+            k: tuple(sorted(v, key=lambda st: st.prepared_at)) for k, v in statements.items()
+        },
+        consumptions=consumptions,
+        cleanups=tuple(sorted(cleanups, key=lambda c: c.recorded_at)),
+        malformed=malformed,
+        context=context,
+    )
+
+
 def recorded_evidence(
     arguments: argparse.Namespace,
     store: Any,
     *,
     r3_binding_source: Callable[[], Any] | None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
 ) -> vc.RecordedEvidence:
     """Everything the matrix is derived from, read once."""
     from kalpamani.data.production.sharadar import launch_records as lr
@@ -302,6 +416,7 @@ def recorded_evidence(
             continue
         launch_records[record.identity] = record
     verdicts, malformed_verdicts, unreadable_verdicts = _verdicts(store)
+    negative, malformed_negative, unreadable_negative = _negative_evidence(store)
     inputs = None
     try:
         inputs = lr.parse_launch_inputs(arguments.launch_inputs.read_bytes())
@@ -319,6 +434,24 @@ def recorded_evidence(
                 r3_binding = r3_binding_source()
             except Exception:
                 r3_binding = None
+    # The permission context: the same environment binding, the tracked declarations,
+    # the registration, the private targets document and (when named) the acquisition
+    # configuration -- built by the permission tool's own constructor, so the matrix holds
+    # every recorded result to exactly what an execution would be held to. Absent when any
+    # input is (nothing to hold the evidence to: recorded results read UNBOUND, never
+    # PASSED).
+    permission_context = None
+    if r3_binding is not None:
+        source = (
+            _current_permission_context
+            if permission_context_source is None
+            else permission_context_source
+        )
+        try:
+            permission_context = source(arguments)
+        except Exception:
+            permission_context = None
+    permission = permission_evidence(store, permission_context)
     return vc.RecordedEvidence(
         ledger=ledger,
         unreconciled=unreconciled,
@@ -331,6 +464,44 @@ def recorded_evidence(
         inputs=inputs,
         r3_record=r3_record,
         r3_binding=r3_binding,
+        negative_evidence=negative,
+        malformed_negative_evidence=malformed_negative,
+        unreadable_negative_evidence=unreadable_negative,
+        permission=permission,
+    )
+
+
+def _current_permission_context(arguments: argparse.Namespace) -> Any:
+    """The permission context in force today, from the same private inputs the tool admits."""
+    from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
+    from kalpamani.data.production.sharadar.launch_records import parse_launch_inputs
+    from kalpamani.data.qualify.sharadar.runtime_binding import (
+        ENVIRONMENT_BINDING_ENV_VAR,
+        load_environment_binding,
+    )
+
+    tool = _permission_tool()
+    from aws_foundation_verify import expected_account
+
+    environment = load_environment_binding(
+        path=os.environ.get(ENVIRONMENT_BINDING_ENV_VAR, ""), expected_account=expected_account()
+    )
+    registration_bytes = arguments.launch_inputs.read_bytes()
+    targets = tool.pc.parse_permission_targets(
+        tool._read_private(os.environ.get(tool.TARGETS_ENV_VAR, ""))
+    )
+    production_secret = None
+    if arguments.acquisition_configuration is not None:
+        configuration, _digest = parse_compiled_configuration(
+            arguments.acquisition_configuration.read_bytes()
+        )
+        production_secret = configuration.secret_identifier
+    return tool.permission_context(
+        environment,
+        registration_bytes=registration_bytes,
+        inputs=parse_launch_inputs(registration_bytes),
+        targets=targets,
+        production_secret=production_secret,
     )
 
 
@@ -356,7 +527,11 @@ def _current_r3_binding() -> Any:
 
 
 def _launch_argv(
-    arguments: argparse.Namespace, cell: vc.CellDefinition, identity: str
+    arguments: argparse.Namespace,
+    cell: vc.CellDefinition,
+    identity: str,
+    *,
+    with_release_mode: bool = True,
 ) -> list[str]:
     assert cell.actor is not None
     argv = [
@@ -386,7 +561,19 @@ def _launch_argv(
     ):
         if value is not None:
             argv += [flag, str(value)]
+    # A negative cell's release mode is the cell definition's, bound into the prepared
+    # specification (and so into the authorization's digest) -- never an owner argument.
+    if (
+        with_release_mode
+        and cell.release_mode is not None
+        and cell.release_mode is not ReleaseMode.NORMAL
+    ):
+        argv += ["--release-mode", cell.release_mode.value.lower()]
     return argv
+
+
+#: The cells the launch tool executes: the positive bootstrap cells and the negative ones.
+_LAUNCH_KINDS: Final[set[vc.CellKind]] = {vc.CellKind.RUNTIME_LAUNCH, vc.CellKind.NEGATIVE_LAUNCH}
 
 
 def _cell(cell_id: str | None, kinds: set[vc.CellKind]) -> vc.CellDefinition:
@@ -403,7 +590,7 @@ def prepare_cell(
     arguments: argparse.Namespace, launch: Any, store: Any, *, now: datetime, root_source: Any
 ) -> vc.PreparedCell:
     """The launch tool's offline preparation for one runtime cell, recorded beside the ledger."""
-    cell = _cell(arguments.prepare_cell, {vc.CellKind.RUNTIME_LAUNCH})
+    cell = _cell(arguments.prepare_cell, _LAUNCH_KINDS)
     identity = arguments.identity
     if identity is None or not identity.startswith("verify-"):
         raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
@@ -432,6 +619,140 @@ def prepare_cell(
             raise CellsRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     return record
+
+
+def _record_negative_evidence(
+    launch: Any,
+    store: Any,
+    cell: vc.CellDefinition,
+    prepared: vc.PreparedCell,
+    mode_argv: list[str],
+    *,
+    now: datetime,
+    root_source: Any,
+) -> None:
+    """Write the negative launch evidence record for a completed negative cell.
+
+    The receipt is read again through the launch tool's own record-and-receipt reader
+    (the same verification ``--complete-row`` performed), so the outcome recorded is
+    the one bound to the launch record; the record is written under an exclusive name.
+    A failure here leaves the ledger row as completed and the cell reads UNBOUND until
+    the evidence is recorded, never PASSED.
+    """
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    assert cell.release_mode is not None
+    try:
+        _store, record, verified = launch._record_and_receipt(
+            launch.parse_arguments(mode_argv), root_source=root_source
+        )
+        document = vc.negative_evidence_document(
+            cell=cell,
+            identity=prepared.identity,
+            specification_digest=record.specification_digest,
+            release_mode=record.release_mode,
+            receipt=verified,
+            recorded_at=now,
+        )
+        store.write_record("negative-launch-evidence", document, at=now)
+    except (launch.LaunchRefusalError, StoreError, ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+
+
+def recover_negative_evidence(
+    arguments: argparse.Namespace,
+    launch: Any,
+    store: Any,
+    cell: vc.CellDefinition,
+    prepared: vc.PreparedCell,
+    evidence: vc.RecordedEvidence,
+    *,
+    now: datetime,
+    root_source: Any,
+) -> str:
+    """Record the negative launch evidence a completed row lacks, or confirm it is there.
+
+    Offline: the reservation, the launch record and the receipt are re-verified through
+    the launch tool's own reader (the reservation-to-record rule and the receipt-to-record
+    rule, unchanged), the ledger row must already read REFUSED / RECEIPT_VERIFIED for
+    this identity, the record must be this cell's prepared launch under its release mode,
+    and the evidence document is recomputed from the verified receipt. An existing record
+    that equals it (``recorded_at`` aside) means nothing to do; one that differs is a
+    contradiction and refuses; none means it is written. No launch, no new identity, no
+    ledger change, no binding check weakened.
+    """
+    from kalpamani.data.production.sharadar.launch_records import LedgerEvidence
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    assert cell.release_mode is not None
+    row = evidence.ledger.row(prepared.identity)
+    if (
+        row is None
+        or row.outcome != "REFUSED"
+        or row.evidence is not LedgerEvidence.RECEIPT_VERIFIED
+        or prepared.identity in evidence.unreconciled
+    ):
+        raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+    mode_argv = _launch_argv(arguments, cell, prepared.identity, with_release_mode=False)
+    mode_argv = [
+        a for a in mode_argv if a != "--authorization" and a != str(arguments.authorization)
+    ]
+    mode_argv += [
+        "--complete-row",
+        "--launch-record",
+        str(arguments.launch_record),
+        "--receipt-lines",
+        str(arguments.receipt_lines),
+    ]
+    try:
+        _store, record, verified = launch._record_and_receipt(
+            launch.parse_arguments(mode_argv), root_source=root_source
+        )
+    except (launch.LaunchRefusalError, StoreError, ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if (
+        record.identity != prepared.identity
+        or record.specification_digest != prepared.specification_digest
+        or record.release_mode is not cell.release_mode
+        or record.actor is not cell.actor
+    ):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+    # The receipt's outcome must be the terminal state the launcher itself observed for
+    # this launch: two pieces of evidence for one launch that disagree are a
+    # contradiction, refused rather than recorded.
+    from kalpamani.data.production.sharadar.entry import EXIT_STATUS
+
+    if (
+        record.observed_exit_code is None
+        or EXIT_STATUS.get(verified.outcome) != record.observed_exit_code
+    ):
+        raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+    try:
+        document = vc.negative_evidence_document(
+            cell=cell,
+            identity=prepared.identity,
+            specification_digest=record.specification_digest,
+            release_mode=record.release_mode,
+            receipt=verified,
+            recorded_at=now,
+        )
+    except (ValueError, TypeError):
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if prepared.specification_digest in evidence.malformed_negative_evidence:
+        raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+    existing = evidence.negative_evidence.get(prepared.specification_digest, ())
+    if existing:
+        expected = {k: v for k, v in document.items() if k != "recorded_at"}
+        for found in existing:
+            recorded = {k: v for k, v in found.document().items() if k != "recorded_at"}
+            if recorded != expected:
+                raise CellsRefusalError("refused_evidence_conflict", EXIT_REFUSED_EVIDENCE_CONFLICT)
+        return "already_recorded"
+    try:
+        store.write_record("negative-launch-evidence", document, at=now)
+    except StoreError:
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return "recovered"
 
 
 def _require_state(
@@ -468,6 +789,7 @@ def main(
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
     r3_binding_source: Callable[[], Any] | None = None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
 ) -> int:
     """Derive the matrix (default), or prepare / execute / complete / verdict one cell.
 
@@ -533,11 +855,16 @@ def main(
             print(f"cell={record.cell_id} specification_digest={record.specification_digest}")
             print(SENTENCES["prepared"])
             return EXIT_PREPARED
-        evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+        evidence = recorded_evidence(
+            arguments,
+            store,
+            r3_binding_source=binding_source,
+            permission_context_source=permission_context_source,
+        )
         prepared = read_prepared(store)
         states = vc.derive_states(evidence, prepared)
         if arguments.execute_cell is not None:
-            cell = _cell(arguments.execute_cell, {vc.CellKind.RUNTIME_LAUNCH})
+            cell = _cell(arguments.execute_cell, _LAUNCH_KINDS)
             if not arguments.authorized or arguments.authorization is None:
                 raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
             _require_state(states, cell, {vc.CellStatus.PREPARED})
@@ -565,16 +892,48 @@ def main(
                 [*_launch_argv(arguments, cell, record.identity), launch.AUTHORIZATION_FLAG],
                 **seams,
             )
-            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):
                 print(line)
             return code
+        if arguments.recover_negative_evidence is not None:
+            cell = _cell(arguments.recover_negative_evidence, {vc.CellKind.NEGATIVE_LAUNCH})
+            if arguments.launch_record is None or arguments.receipt_lines is None:
+                raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
+            if cell.cell_id not in prepared:
+                raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+            outcome = recover_negative_evidence(
+                arguments,
+                launch,
+                store,
+                cell,
+                prepared[cell.cell_id],
+                evidence,
+                now=clock(),
+                root_source=root_source,
+            )
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
+            states = vc.derive_states(evidence, prepared)
+            for line in vc.matrix_lines(states):
+                print(line)
+            print(SENTENCES[outcome])
+            return EXIT_RECOVERED if outcome == "recovered" else EXIT_ALREADY_RECORDED
         if arguments.complete_cell is not None or arguments.verdict_cell is not None:
             completing = arguments.complete_cell is not None
             cell = _cell(
                 arguments.complete_cell if completing else arguments.verdict_cell,
-                {vc.CellKind.RUNTIME_LAUNCH} if completing else {vc.CellKind.ISOLATION_VERDICT},
+                _LAUNCH_KINDS if completing else {vc.CellKind.ISOLATION_VERDICT},
             )
             if arguments.launch_record is None or arguments.receipt_lines is None:
                 raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
@@ -587,7 +946,9 @@ def main(
                 # matrix resolves the records deterministically afterwards.
                 _require_state(states, cell, {vc.CellStatus.UNEXECUTED, vc.CellStatus.INCONCLUSIVE})
             record = prepared[launch_cell.cell_id]
-            mode_argv = _launch_argv(arguments, launch_cell, record.identity)
+            mode_argv = _launch_argv(
+                arguments, launch_cell, record.identity, with_release_mode=False
+            )
             mode_argv = [
                 a for a in mode_argv if a != "--authorization" and a != str(arguments.authorization)
             ]
@@ -604,7 +965,23 @@ def main(
                 if arguments.reachability_evidence is not None:
                     mode_argv += ["--reachability-evidence", str(arguments.reachability_evidence)]
             code = launch.main(mode_argv, **seams)
-            evidence = recorded_evidence(arguments, store, r3_binding_source=binding_source)
+            if (
+                completing
+                and cell.kind is vc.CellKind.NEGATIVE_LAUNCH
+                and code == launch.EXIT_ROW_COMPLETED
+            ):
+                # The row now reads REFUSED and no more. Record which refusal the verified
+                # receipt established -- re-verified against the launch record by the launch
+                # tool's own reader -- so the matrix can hold the cell to the expected one.
+                _record_negative_evidence(
+                    launch, store, cell, record, mode_argv, now=clock(), root_source=root_source
+                )
+            evidence = recorded_evidence(
+                arguments,
+                store,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
             states = vc.derive_states(evidence, prepared)
             for line in vc.matrix_lines(states):
                 print(line)
@@ -629,9 +1006,11 @@ __all__ = [
     "CellsRefusalError",
     "cells_path",
     "main",
+    "permission_evidence",
     "prepare_cell",
     "read_prepared",
     "recorded_evidence",
+    "recover_negative_evidence",
     "write_prepared",
 ]
 

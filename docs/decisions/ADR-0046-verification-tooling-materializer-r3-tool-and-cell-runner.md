@@ -16,6 +16,19 @@ merged beside it. **Acceptance authorizes no execution** (§6): no R-3 session, 
 materialization against a real private root, no launch, no run, no probe, no analysis, no Terraform
 plan or apply, no IAM change.
 
+**The condition above has since been satisfied.** **PR #105 merged** — merged **2026-09-14T20:37:38Z**,
+merge commit **`5174dcf290b4837d38af8ce4a4b975c6557e482e`**, ordered parents **`af20f36acbe8a3006830762fbad5cb01d1e9b38b`** then
+**`c4436648d90d39baa3769e990887e6f0f239df40`** (the approved head, after two independently reviewed correction cycles
+recorded in the pull request), with a **merge tree identical to the reviewed pull-request head tree**
+(`4ec26720c7635257a3f938b21750e9b778fc42a9`). ADR-0046 is therefore **ACCEPTED / IN FORCE** exactly as the clause
+above states — the owner-side tooling for S5, S7 and S9, the two narrow contracts it adds, the
+verdict-document contract and the shared reservation-to-record rule its corrections added (§3), and the
+one decision it deferred (§4) — effective together with the offline code merged beside it, and nothing
+else. While the pull request was open it was proposed and carried no authority — true then, and not
+rewritten. **Acceptance authorized no R-3 session, no materialization, no launch, no run, no probe, no
+analysis, no Terraform plan or apply and no IAM change**; every tool still refuses by default and none
+has run against AWS. The deferral of §4 is decided by a later, separately proposed ADR-0047.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no
 container image built or pulled, no registry contacted, no credential retrieved, no provider request,
 no private input inspected. Every result beside this text is a counting fake's, on synthetic
@@ -237,6 +250,10 @@ and the receipt are read and written exactly as ADR-0045 left them; the runner r
 and launch records it already had access to and adds no field to any of them.
 
 ## 4. Deferred: the negative R-1 cells
+
+> **Decided since by proposed ADR-0047** (a later, separate pull request): the two negative modes are
+> bound into the authorized specification and the launcher, and R-4 .. R-9 are expanded into
+> executable subcells. The text below records the deferral as this ADR made it and is not rewritten.
 
 ADR-0036 §3 R-1 requires two negative cells per actor — a verification launch with **no release
 written** (`REFUSED_NO_RELEASE` at the ceiling) and one with a release **naming another task**
