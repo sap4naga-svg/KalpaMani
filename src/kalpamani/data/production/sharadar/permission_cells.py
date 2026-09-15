@@ -1090,6 +1090,12 @@ def synthetic_run_id(stamp: str) -> str:
     return f"verification-{stamp}"
 
 
+# The ``startedBy`` tags a verified cleanup may settle: the permission subcells' own, and
+# the deletion rehearsal's (correction 1 of PR #109 -- an ambiguous or interrupted rehearsal
+# launch is settled by the same accepted cleanup rule, never by a rule of its own).
+CLEANUP_STARTED_BY_PREFIXES: Final = ("kalpamani-permission-", "kalpamani-rehearsal-")
+
+
 def started_by_of(stamp: str) -> str:
     """The ``startedBy`` every launching subcell of one session tags its request with.
 
@@ -3122,7 +3128,7 @@ def parse_permission_cleanup(raw: object) -> PermissionCleanup:
         max_listings = DISCOVERY_MAX_PAGES
         if (
             started_by is None
-            or not started_by.startswith("kalpamani-permission-")
+            or not started_by.startswith(CLEANUP_STARTED_BY_PREFIXES)
             or type(block["operations"]) is not int
             or type(block["operations"]) is bool
             or type(listings) is not int
@@ -3907,6 +3913,7 @@ def derive_subcell(
 __all__ = [
     "CLEANUP_OPERATIONS_PER_KEY",
     "CLEANUP_OPERATIONS_PER_TASK_MAX",
+    "CLEANUP_STARTED_BY_PREFIXES",
     "DELETION_DEPENDENCY",
     "DISCOVERY_MAX_PAGES",
     "EXECUTABLE_LAYERS",

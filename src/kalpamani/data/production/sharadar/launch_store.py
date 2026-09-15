@@ -65,6 +65,7 @@ malformed rather than read: it carried no specification.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -104,6 +105,8 @@ MAX_NAME_ATTEMPTS: Final = 8
 CONSUMED_SUFFIX: Final = ".consumed"
 
 _HEX_64: Final = frozenset("0123456789abcdef")
+#: An anchored document's name: a closed identifier-like token (an identity, a stamp).
+_ANCHOR_NAME_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
 _RESERVATION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "schema_version",
@@ -131,6 +134,7 @@ class StoreDefect(StrEnum):
     NAME_EXHAUSTED = "NAME_EXHAUSTED"
     LEGACY_RESERVATIONS_PRESENT = "LEGACY_RESERVATIONS_PRESENT"
     AUTHORIZATION_CONSUMED = "AUTHORIZATION_CONSUMED"
+    ANCHOR_EXISTS = "ANCHOR_EXISTS"
 
 
 class StoreError(Exception):
@@ -522,6 +526,58 @@ class LaunchStore:
                 found[digest] = path.read_bytes()
             except OSError:
                 found[digest] = b""
+        return found
+
+    # -- anchors: exclusive documents beside the ledger, by kind -----------------------------
+
+    def anchor_path(self, kind: str, name: str) -> Path:
+        """Where the anchored document ``name`` of ``kind`` lives: ``<ledger>.<kind>/<name>.json``.
+
+        Beside the canonical ledger, never under the records directory, so an anchor made
+        from any records directory over this ledger is seen from every other. ``kind`` is
+        an identifier and ``name`` a closed name; anything else refuses.
+        """
+        if not kind.isidentifier() or _ANCHOR_NAME_RE.fullmatch(name) is None:
+            raise _refuse(StoreDefect.WRITE_FAILED)
+        return self._ledger_path.with_name(f"{self._ledger_path.name}.{kind}") / f"{name}.json"
+
+    def anchor(self, kind: str, name: str, document: dict[str, Any]) -> None:
+        """Create the anchored document ``name`` of ``kind`` exclusively, or refuse.
+
+        Exclusive creation beside the canonical ledger: a second attempt on the same name
+        -- concurrent, later, after an interruption, after an ambiguous outcome, from
+        another records directory -- finds the file and refuses. Nothing here ever
+        removes or overwrites an anchor.
+        """
+        path = self.anchor_path(kind, name)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _create_exclusive(path, canonical_bytes(document))
+        except FileExistsError:
+            raise _refuse(StoreDefect.ANCHOR_EXISTS) from None
+        except OSError:
+            raise _refuse(StoreDefect.WRITE_FAILED) from None
+
+    def anchored(self, kind: str) -> dict[str, bytes]:
+        """Every anchored document of ``kind`` beside the ledger: the name and the bytes.
+
+        Read only; a file whose name is not a closed anchor name is ignored, a file that
+        cannot be read is reported with empty bytes (malformed, never silently absent).
+        """
+        if not kind.isidentifier():
+            return {}
+        directory = self._ledger_path.with_name(f"{self._ledger_path.name}.{kind}")
+        if not directory.is_dir():
+            return {}
+        found: dict[str, bytes] = {}
+        for path in sorted(directory.glob("*.json")):
+            name = path.name[: -len(".json")]
+            if _ANCHOR_NAME_RE.fullmatch(name) is None:
+                continue
+            try:
+                found[name] = path.read_bytes()
+            except OSError:
+                found[name] = b""
         return found
 
     def reservations(self) -> list[Reservation]:

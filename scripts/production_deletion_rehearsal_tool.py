@@ -13,6 +13,7 @@ The four modes, in the order an owner runs them::
     --rehearse-deletion <R8 subcell> --rehearsal-inputs F --authorization A <AUTHORIZATION_FLAG>
     --collect-rehearsal-receipt <R8 subcell> --rehearsal-inputs F <COLLECT_FLAG>
     --complete-rehearsal <R8 subcell> --receipt-lines L    (no flag; offline)
+    --recover-rehearsal-launch <R8 subcell>                (no flag; offline; after an interruption)
 
 Every step reuses what the permission tool already admits and proves: the bindings, the
 registration, the targets, the evidence, the store's durable authorization consumption,
@@ -72,6 +73,29 @@ SENTENCES: Final[dict[str, str]] = {
         "permission cells refused: a rehearsal statement, launch record or record under the "
         "records directory is malformed; nothing is chosen between them"
     ),
+    "rehearsal_recovered": (
+        "interrupted deletion rehearsal launch recorded RECOVERED_INTERRUPTED beside the ledger; "
+        "nothing was launched or retried; whether a task started is UNKNOWN until the control "
+        "principal's cleanup lists the reservation's tag and confirms every task stopped"
+    ),
+    "refused_rehearsal_recovery": (
+        "permission cells refused: no interrupted (reserved, unresolved) rehearsal launch of this "
+        "subcell beside the ledger"
+    ),
+    "refused_rehearsal_recovery_pending": (
+        "permission cells refused: an earlier rehearsal reservation beside the ledger is unsettled "
+        "-- interrupted (recover it with --recover-rehearsal-launch) or its task not yet confirmed "
+        "stopped by a verified cleanup -- so no rehearsal is launched, under any authorization or "
+        "from any records directory, until it is"
+    ),
+    "refused_rehearsal_reserved": (
+        "permission cells refused: this rehearsal identity is already reserved beside the ledger; "
+        "the authorization is consumed and nothing was launched (prepare and authorize again)"
+    ),
+    "rehearsal_completion_recorded": (
+        "deletion rehearsal already completed from this receipt; the record and the retained "
+        "receipt are present and nothing was changed"
+    ),
     "refused_rehearsal_inputs": (
         "permission cells refused: the rehearsal launch inputs were not admitted (not the "
         "rehearsal family, not the deletion role, another account, or not the bound one)"
@@ -81,22 +105,37 @@ SENTENCES: Final[dict[str, str]] = {
 _STATEMENT_PREFIX: Final = "rehearsal-statement"
 _LAUNCH_PREFIX: Final = "rehearsal-launch-record"
 _RECORD_PREFIX: Final = "rehearsal-record"
+_RECEIPT_PREFIX: Final = "rehearsal-receipt"
 
 
 class _RehearsalEvidence:
-    """Every rehearsal statement, launch record and record under the records directory,
-    each parsed closed; a malformed one refuses the whole reading."""
+    """Every rehearsal statement, launch record, record and retained receipt under the
+    records directory, plus every reservation and resolution anchored beside the canonical
+    ledger and every consumed rehearsal authorization -- each parsed closed; a malformed
+    one refuses the whole reading (correction 1)."""
 
-    __slots__ = ("launches", "records", "statements")
+    __slots__ = (
+        "consumptions",
+        "launches",
+        "receipts",
+        "records",
+        "reservations",
+        "resolutions",
+        "statements",
+        "store",
+    )
 
-    def __init__(self, records_dir: Path, cells: Any) -> None:
+    def __init__(self, store: Any, cells: Any) -> None:
         from kalpamani.data.production.sharadar import deletion_rehearsal as dr
         from kalpamani.data.production.sharadar import deletion_rehearsal_launch as dl
         from kalpamani.data.production.sharadar import deletion_rehearsal_task as dt
 
+        records_dir: Path = store._records_dir
+        self.store = store
         self.statements: list[Any] = []
         self.launches: list[Any] = []
         self.records: list[Any] = []
+        self.receipts: list[Any] = []
         try:
             for path in sorted(records_dir.glob(f"{_STATEMENT_PREFIX}-*.json")):
                 self.statements.append(dt.parse_rehearsal_statement(path.read_bytes()))
@@ -104,45 +143,132 @@ class _RehearsalEvidence:
                 self.launches.append(dl.parse_rehearsal_launch_record(path.read_bytes()))
             for path in sorted(records_dir.glob(f"{_RECORD_PREFIX}-*.json")):
                 self.records.append(dr.parse_rehearsal_record(path.read_bytes()))
+            for path in sorted(records_dir.glob(f"{_RECEIPT_PREFIX}-*.json")):
+                self.receipts.append(dl.parse_rehearsal_receipt_evidence(path.read_bytes()))
+            self.reservations: dict[str, Any] = dl.rehearsal_reservations(store)
+            self.resolutions: dict[str, Any] = dl.rehearsal_resolutions(store)
+            self.consumptions: dict[str, bytes] = store.consumptions(dr.REHEARSAL_CONSUMPTION_KIND)
         except Exception:
             raise cells.PermissionToolRefusalError(
                 "refused_rehearsal_records", EXIT_REFUSED_REHEARSAL_RECORDS
             ) from None
 
-    def earlier(self, binding: Any) -> tuple[str, ...]:
-        """The rehearsal subcells recorded PASS with a verified identity under ``binding``:
-        what :func:`prepare_rehearsal` needs to admit the next subcell of the sequence."""
-        from kalpamani.data.production.sharadar.deletion_rehearsal import RehearsalOutcome
+    def unsettled(self, cleanups: Any) -> list[Any]:
+        from kalpamani.data.production.sharadar import deletion_rehearsal_launch as dl
 
-        return tuple(
-            sorted(
-                {
-                    r.subcell_id
-                    for r in self.records
-                    if r.binding == binding
-                    and r.outcome is RehearsalOutcome.PASS
-                    and r.identity_verified
-                }
-            )
+        return dl.unsettled_rehearsals(self.store, cleanups)
+
+    def bind(self, record: Any, target: Any) -> Any:
+        """The one evidence-binding rule over this evidence (raises RehearsalBindingError)."""
+        from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+            bind_rehearsal_result,
         )
 
+        return bind_rehearsal_result(
+            record,
+            target=target,
+            consumptions=self.consumptions,
+            reservations=self.reservations.values(),
+            launches=self.launches,
+            receipts=self.receipts,
+        )
+
+    def bind_with(self, record: Any, target: Any, receipt: Any) -> Any:
+        """The rule with ``receipt`` standing in for a retained receipt of its launch when
+        none is retained yet (the completion's own, before it is written)."""
+        from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+            bind_rehearsal_result,
+        )
+
+        retained = [
+            r for r in self.receipts if r.launch_record_sha256 == receipt.launch_record_sha256
+        ]
+        receipts = list(self.receipts) if retained else [*self.receipts, receipt]
+        return bind_rehearsal_result(
+            record,
+            target=target,
+            consumptions=self.consumptions,
+            reservations=self.reservations.values(),
+            launches=self.launches,
+            receipts=receipts,
+        )
+
+    def bound_results(
+        self, binding: Any, target: Any, evidence: Any, attempt: str | None
+    ) -> list[Any]:
+        """Every record under ``binding`` that binds to its evidence for exactly ``target``
+        and reads PASSED with the control principal's cleanups -- the only records the
+        sequence and the prerequisite admission count."""
+        from kalpamani.data.production.sharadar.deletion_rehearsal import (
+            RehearsalStatus,
+            derive_rehearsal,
+        )
+        from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+            RehearsalBindingError,
+        )
+
+        found: list[Any] = []
+        for record in self.records:
+            if record.binding != binding or attempt is None:
+                continue
+            try:
+                self.bind(record, target)
+            except RehearsalBindingError:
+                continue
+            status, _ = derive_rehearsal(record, evidence.cleanups, prerequisite_attempt=attempt)
+            if status is RehearsalStatus.PASSED:
+                found.append(record)
+        return found
+
+    def earlier(
+        self, binding: Any, target: Any, evidence: Any, attempt: str | None
+    ) -> tuple[str, ...]:
+        """The rehearsal subcells PASSED and bound for exactly this target: what
+        :func:`prepare_rehearsal` needs to admit the next subcell of the sequence."""
+        return tuple(
+            sorted({r.subcell_id for r in self.bound_results(binding, target, evidence, attempt)})
+        )
+
+    def completion_state(self, launch: Any) -> tuple[Any, Any]:
+        """What a launch's completion already wrote: its record (by statement, authorization
+        and stamp) and its retained receipt (by launch-record digest), each exactly one or
+        none; two of either refuse as conflicting evidence."""
+        from kalpamani.data.production.sharadar.deletion_rehearsal_task import (
+            REHEARSAL_IDENTITY_PREFIX,
+        )
+
+        stamp = launch.identity[len(REHEARSAL_IDENTITY_PREFIX) :]
+        records = [
+            r
+            for r in self.records
+            if r.statement_sha256 == launch.statement_sha256
+            and r.authorization_sha256 == launch.authorization_sha256
+            and r.stamp == stamp
+        ]
+        receipts = [r for r in self.receipts if r.launch_record_sha256 == launch.digest]
+        if len(records) > 1 or len(receipts) > 1:
+            raise ValueError("conflicting completion evidence")
+        return (records[0] if records else None, receipts[0] if receipts else None)
+
     def pending_launch(self, subcell_id: str, binding: Any) -> Any:
-        """The one LAUNCHED, terminal launch of ``subcell_id`` under ``binding`` that no
-        rehearsal record completes yet, or ``None``."""
+        """The one LAUNCHED, terminal launch of ``subcell_id`` under ``binding`` whose
+        completion is not whole (no record, or no retained receipt), or ``None``."""
         from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
             RehearsalLaunchOutcome,
         )
 
-        completed = {(r.statement_sha256, r.authorization_sha256) for r in self.records}
-        pending = [
-            launch
-            for launch in self.launches
-            if launch.subcell_id == subcell_id
-            and launch.binding == binding
-            and launch.outcome is RehearsalLaunchOutcome.LAUNCHED
-            and launch.observed_exit_code is not None
-            and (launch.statement_sha256, launch.authorization_sha256) not in completed
-        ]
+        pending = []
+        for launch in self.launches:
+            if (
+                launch.subcell_id != subcell_id
+                or launch.binding != binding
+                or launch.outcome is not RehearsalLaunchOutcome.LAUNCHED
+                or launch.observed_exit_code is None
+            ):
+                continue
+            record, receipt = self.completion_state(launch)
+            if record is None or receipt is None:
+                pending.append(launch)
         return pending[0] if len(pending) == 1 else None
 
 
@@ -166,8 +292,36 @@ def _admitted(
         root_source=seams.get("root_source"),
     )
     evidence = cells._evidence(admitted)
-    rehearsal = _RehearsalEvidence(admitted.store._records_dir, cells)
+    try:
+        rehearsal = _RehearsalEvidence(admitted.store, cells)
+    except ValueError:
+        raise cells.PermissionToolRefusalError(
+            "refused_rehearsal_records", EXIT_REFUSED_REHEARSAL_RECORDS
+        ) from None
     return admitted, evidence, rehearsal
+
+
+def _current_target(evidence: Any, cells: Any) -> tuple[Any, str | None]:
+    """The exact deletion target the R-4 record binds today, and its prerequisite attempt;
+    ``(None, None)`` when no target is bound (nothing is earlier, nothing binds)."""
+    from kalpamani.data.production.sharadar.deletion_rehearsal import (
+        REHEARSAL_PREREQUISITE,
+        RehearsalError,
+        rehearsal_target,
+    )
+
+    try:
+        target = rehearsal_target(evidence)
+    except RehearsalError:
+        return None, None
+    for record in evidence.records.get(REHEARSAL_PREREQUISITE, ()):
+        if (
+            record.binding == evidence.binding
+            and record.created_bucket == target.bucket
+            and record.created_key == target.key
+        ):
+            return target, str(record.attempt_sha256)
+    return target, None
 
 
 def _recomputed_statement(
@@ -188,9 +342,13 @@ def _recomputed_statement(
         prepare_rehearsal,
     )
 
+    target, attempt = _current_target(evidence, cells)
     try:
         statement = prepare_rehearsal(
-            subcell_id, evidence, stamp=stamp, earlier=rehearsal.earlier(binding)
+            subcell_id,
+            evidence,
+            stamp=stamp,
+            earlier=rehearsal.earlier(binding, target, evidence, attempt),
         )
     except RehearsalError:
         raise cells.PermissionToolRefusalError(
@@ -280,12 +438,13 @@ def prepare(
     _subcell(subcell_id, cells)
     now: Callable[[], datetime] = seams["now"]
     admitted, evidence, rehearsal = _admitted(parsed, env, seams, cells)
+    target, attempt = _current_target(evidence, cells)
     try:
         statement = prepare_rehearsal(
             subcell_id,
             evidence,
             stamp=r3.new_stamp(now()),
-            earlier=rehearsal.earlier(admitted.binding),
+            earlier=rehearsal.earlier(admitted.binding, target, evidence, attempt),
         )
     except RehearsalError:
         raise cells.PermissionToolRefusalError(
@@ -386,6 +545,13 @@ def rehearse(
         binding=admitted.binding,
         cells=cells,
     )
+    if rehearsal.unsettled(evidence.cleanups):
+        # Correction 1: an unsettled reservation beside the ledger -- interrupted, or its
+        # task not confirmed stopped -- blocks every launch before anything is consumed,
+        # whatever the subcell, the records directory or the authorization.
+        raise cells.PermissionToolRefusalError(
+            "refused_rehearsal_recovery_pending", cells.EXIT_REFUSED_RECOVERY_PENDING
+        )
     if rehearsal.pending_launch(subcell_id, admitted.binding) is not None:
         # A launched, uncompleted rehearsal of this subcell is completed before another
         # is launched: the receipt it produced is evidence, and it is never repeated over.
@@ -429,6 +595,7 @@ def rehearse(
         now=now,
         monotonic=seams["monotonic"],
         sleep=seams["sleep"],
+        cleanups=evidence.cleanups,
     )
     print(
         f"rehearsal launch={report.outcome.value} subcell={subcell_id} "
@@ -446,6 +613,14 @@ def rehearse(
     if report.outcome is RehearsalLaunchOutcome.REFUSED_CONSUMED:
         raise cells.PermissionToolRefusalError(
             "refused_authorization_consumed", cells.EXIT_REFUSED_AUTHORIZATION_CONSUMED
+        )
+    if report.outcome is RehearsalLaunchOutcome.REFUSED_RECOVERY_PENDING:
+        raise cells.PermissionToolRefusalError(
+            "refused_rehearsal_recovery_pending", cells.EXIT_REFUSED_RECOVERY_PENDING
+        )
+    if report.outcome is RehearsalLaunchOutcome.REFUSED_RESERVED:
+        raise cells.PermissionToolRefusalError(
+            "refused_rehearsal_reserved", cells.EXIT_REFUSED_RESERVATION
         )
     if report.outcome is RehearsalLaunchOutcome.LAUNCHED:
         print(SENTENCES["rehearsal_launched"])
@@ -579,8 +754,61 @@ def collect(
             )
         line = collected.receipt_line
     return _complete(
-        launch, decode_receipt_line(line), admitted, evidence, rehearsal, now=now, cells=cells
+        launch,
+        decode_receipt_line(line),
+        admitted,
+        evidence,
+        rehearsal,
+        now=now,
+        cells=cells,
+        parsed=parsed,
+        hand_receipt=None,
     )
+
+
+def recover(
+    subcell_id: str,
+    parsed: argparse.Namespace,
+    *,
+    env: Mapping[str, str],
+    seams: dict[str, Any],
+    cells: Any,
+) -> int:
+    """Record an interrupted rehearsal launch offline: exactly one reservation of the
+    subcell beside the ledger with no resolution. Nothing is launched, nothing is
+    retried, no client exists; whether a task started stays UNKNOWN until the cleanup
+    lists the reservation's tag and confirms every discovered task stopped."""
+    from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+        recover_rehearsal_launch,
+    )
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    _subcell(subcell_id, cells)
+    now: Callable[[], datetime] = seams["now"]
+    admitted, evidence, rehearsal = _admitted(parsed, env, seams, cells)
+    interrupted = [
+        u.reservation
+        for u in rehearsal.unsettled(evidence.cleanups)
+        if u.needs_recovery and u.reservation.subcell_id == subcell_id
+    ]
+    if len(interrupted) != 1:
+        raise cells.PermissionToolRefusalError(
+            "refused_rehearsal_recovery", cells.EXIT_REFUSED_RECOVERY
+        )
+    reservation = interrupted[0]
+    try:
+        resolution = recover_rehearsal_launch(admitted.store, reservation, now=now())
+    except StoreError:
+        raise cells.PermissionToolRefusalError(
+            "refused_record_write", cells.EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    print(
+        f"rehearsal recovery subcell={subcell_id} outcome={resolution.outcome} "
+        f"task_state={resolution.task_state.value} started_by={reservation.started_by} "
+        f"reservation_sha256={reservation.digest}"
+    )
+    print(SENTENCES["rehearsal_recovered"])
+    return int(cells.EXIT_RECOVERED)
 
 
 def complete(
@@ -604,7 +832,9 @@ def complete(
     _subcell(subcell_id, cells)
     now: Callable[[], datetime] = seams["now"]
     admitted, evidence, rehearsal = _admitted(parsed, env, seams, cells)
-    launch = rehearsal.pending_launch(subcell_id, admitted.binding)
+    launch = rehearsal.pending_launch(subcell_id, admitted.binding) or _whole_launch(
+        rehearsal, subcell_id, admitted.binding
+    )
     if launch is None:
         raise cells.PermissionToolRefusalError("refused_completion", cells.EXIT_REFUSED_COMPLETION)
     try:
@@ -619,27 +849,73 @@ def complete(
         raise cells.PermissionToolRefusalError(
             "refused_completion", cells.EXIT_REFUSED_COMPLETION
         ) from None
-    return _complete(launch, document, admitted, evidence, rehearsal, now=now, cells=cells)
+    return _complete(
+        launch,
+        document,
+        admitted,
+        evidence,
+        rehearsal,
+        now=now,
+        cells=cells,
+        parsed=parsed,
+        hand_receipt=lines[0],
+    )
+
+
+def _whole_launch(rehearsal: _RehearsalEvidence, subcell_id: str, binding: Any) -> Any:
+    """The one already-whole launch of ``subcell_id`` (record and receipt both present), so
+    a repeated completion can say so, or ``None``."""
+    from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+        RehearsalLaunchOutcome,
+    )
+
+    whole = []
+    for launch in rehearsal.launches:
+        if (
+            launch.subcell_id != subcell_id
+            or launch.binding != binding
+            or launch.outcome is not RehearsalLaunchOutcome.LAUNCHED
+            or launch.observed_exit_code is None
+        ):
+            continue
+        record, receipt = rehearsal.completion_state(launch)
+        if record is not None and receipt is not None:
+            whole.append(launch)
+    return whole[-1] if whole else None
 
 
 def _complete(
     launch: Any,
-    document: object,
+    document: dict[str, Any],
     admitted: Any,
     evidence: Any,
     rehearsal: _RehearsalEvidence,
     *,
     now: Callable[[], datetime],
     cells: Any,
+    parsed: argparse.Namespace,
+    hand_receipt: str | None,
 ) -> int:
-    """The rehearsal record from the verified receipt, written; then the reading with the
-    control principal's cleanups -- the derived status, never a supplied one."""
+    """The rehearsal record from the verified receipt, bound by the one rule, written with
+    its retained receipt; then the reading with the control principal's cleanups.
+
+    **Repeatable** (correction 1): an interruption between the record and the retained
+    receipt is repaired by running the same completion again with the same receipt, which
+    writes exactly what is missing; a completion that is already whole changes nothing and
+    says so; another receipt refuses. **The collector's contradiction and disposition rules
+    apply to the hand path too**: a hand-read receipt over a recorded, unresolved
+    contradiction needs the owner's acknowledgement by digest and is then disposed, bound to
+    this receipt beside the record; a disposition already binding the launch to another
+    receipt refuses this one.
+    """
     from kalpamani.data.production.sharadar.deletion_rehearsal import (
         RehearsalStatus,
         derive_rehearsal,
     )
     from kalpamani.data.production.sharadar.deletion_rehearsal_launch import (
+        RehearsalBindingError,
         RehearsalCompletionError,
+        RehearsalReceiptEvidence,
         complete_rehearsal,
     )
     from kalpamani.data.production.sharadar.deletion_rehearsal_task import (
@@ -663,13 +939,61 @@ def _complete(
         raise cells.PermissionToolRefusalError(
             "refused_completion", cells.EXIT_REFUSED_COMPLETION
         ) from None
+    dispositions: list[dict[str, Any]] = []
+    if hand_receipt is not None:
+        dispositions = cells._dispositions_for(
+            parsed,
+            records_dir=admitted.store._records_dir,
+            identity=launch.identity,
+            launch_record_sha256=launch.digest,
+            receipt_text=hand_receipt,
+            now=now,
+        )
+    existing_record, existing_receipt = rehearsal.completion_state(launch)
+    receipt_evidence = RehearsalReceiptEvidence(
+        identity=launch.identity,
+        subcell_id=launch.subcell_id,
+        statement_sha256=launch.statement_sha256,
+        launch_record_sha256=launch.digest,
+        receipt=dict(document),
+        received_at=now(),
+        binding=admitted.binding,
+    )
+    if existing_record is not None and existing_record.document() != record.document():
+        # A record exists and this receipt establishes something else: not a repeat.
+        raise cells.PermissionToolRefusalError("refused_completion", cells.EXIT_REFUSED_COMPLETION)
+    if existing_receipt is not None and existing_receipt.receipt != document:
+        raise cells.PermissionToolRefusalError("refused_completion", cells.EXIT_REFUSED_COMPLETION)
+    write_record = existing_record is None
+    write_receipt = existing_receipt is None
+    if not (write_record or write_receipt or dispositions):
+        raise cells.PermissionToolRefusalError(
+            "rehearsal_completion_recorded", cells.EXIT_COMPLETION_RECORDED
+        )
+    # The one evidence-binding rule, before anything is written: the consumption, the
+    # reservation, the launch's binding to it, the receipt (the retained one, or the one
+    # about to be retained) and the record must form one chain for exactly this target.
     try:
-        admitted.store.write_record(_RECORD_PREFIX, record.document(), at=now())
+        rehearsal.bind_with(record, statement.target, receipt_evidence)
+    except RehearsalBindingError as error:
+        print(f"rehearsal evidence does not bind: {error.defect.value}")
+        raise cells.PermissionToolRefusalError(
+            "refused_completion", cells.EXIT_REFUSED_COMPLETION
+        ) from None
+    try:
+        for disposition in dispositions:
+            admitted.store.write_record("collection-disposition", disposition, at=now())
+        if write_record:
+            admitted.store.write_record(_RECORD_PREFIX, record.document(), at=now())
+        if write_receipt:
+            admitted.store.write_record(
+                _RECEIPT_PREFIX, receipt_evidence.document(), at=receipt_evidence.received_at
+            )
     except Exception:
         raise cells.PermissionToolRefusalError(
             "refused_record_write", cells.EXIT_REFUSED_RECORD_WRITE
         ) from None
-    prerequisite_attempt = _prerequisite_attempt(statement, evidence, admitted.binding)
+    _target, prerequisite_attempt = _current_target(evidence, cells)
     if prerequisite_attempt is None:
         status, reason = RehearsalStatus.INCONCLUSIVE, "the prerequisite attempt is not bound"
     else:
@@ -699,6 +1023,33 @@ def _complete(
     return int(cells.EXIT_CLEANUP_UNRESOLVED)
 
 
+def rehearsal_tasks_to_settle(store: Any, cleanups: Any) -> list[Any]:
+    """What the control principal's cleanup settles for the rehearsal: every unsettled
+    reservation beside the ledger whose task state is not self-settled -- discovered on the
+    reservation's cluster by the reservation's tag, its known task (when one was recorded)
+    confirmed by exact identity. Keyed by the reservation's digest; a malformed reservation
+    or resolution refuses rather than hides."""
+    from kalpamani.data.production.sharadar import deletion_rehearsal_launch as dl
+    from kalpamani.data.production.sharadar import permission_cells as pc
+
+    found = []
+    for unsettled in dl.unsettled_rehearsals(store, cleanups):
+        reservation = unsettled.reservation
+        resolution = unsettled.resolution
+        known: tuple[str, ...] = ()
+        if resolution is not None and resolution.task_id is not None:
+            known = (resolution.task_id,)
+        found.append(
+            pc.TasksToSettle(
+                attempt_sha256=reservation.digest,
+                started_by=reservation.started_by,
+                cluster_arn=reservation.cluster_arn,
+                known_task_ids=known,
+            )
+        )
+    return found
+
+
 # ---------------------------------------------------------------------------
 # Entry from the permission tool
 # ---------------------------------------------------------------------------
@@ -711,6 +1062,7 @@ def _arguments_admitted(parsed: argparse.Namespace, cells: Any) -> bool:
         parsed.rehearse_deletion is not None,
         parsed.collect_rehearsal_receipt is not None,
         parsed.complete_rehearsal is not None,
+        parsed.recover_rehearsal_launch is not None,
     ]
     if sum(modes) != 1:
         return False
@@ -724,10 +1076,26 @@ def _arguments_admitted(parsed: argparse.Namespace, cells: Any) -> bool:
     )
     if any(m is not None for m in other_modes) or parsed.cleanup or parsed.cleanup_authorized:
         return False
-    if parsed.acknowledged_contradictions:
+    if parsed.acknowledged_contradictions and (
+        parsed.complete_rehearsal is None
+        or parsed.receipt_lines is None
+        or any(
+            not isinstance(d, str) or cells._SHA256_RE.fullmatch(d) is None
+            for d in parsed.acknowledged_contradictions
+        )
+    ):
+        # An acknowledgement belongs to a hand-read completion only, and names a digest.
         return False
     if parsed.ledger is None or parsed.launch_inputs is None or parsed.records_dir is None:
         return False
+    if parsed.recover_rehearsal_launch is not None:
+        return not (
+            parsed.authorized
+            or parsed.collection_authorized
+            or parsed.authorization is not None
+            or parsed.receipt_lines is not None
+            or parsed.rehearsal_inputs is not None
+        )
     if parsed.prepare_rehearsal is not None:
         return not (
             parsed.authorized
@@ -795,6 +1163,10 @@ def run(
                 seams=seams,
                 cells=cells,
             )
+        if parsed.recover_rehearsal_launch is not None:
+            return recover(
+                parsed.recover_rehearsal_launch, parsed, env=env, seams=seams, cells=cells
+            )
         return complete(parsed.complete_rehearsal, parsed, env=env, seams=seams, cells=cells)
     except cells.PermissionToolRefusalError as refusal:
         print(SENTENCES.get(refusal.key) or cells.SENTENCES[refusal.key])
@@ -809,6 +1181,8 @@ __all__ = [
     "collect",
     "complete",
     "prepare",
+    "recover",
+    "rehearsal_tasks_to_settle",
     "rehearse",
     "run",
 ]

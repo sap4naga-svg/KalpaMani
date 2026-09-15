@@ -2064,6 +2064,14 @@ def settlement_targets(
                     cluster_arn=probe.cluster_arn,
                     known_task_ids=probe.known_task_ids,
                 )
+    # Proposed ADR-0050 (correction 1): every unsettled deletion-rehearsal reservation
+    # anchored beside the ledger -- discovered on its own cluster by its own tag, keyed by
+    # the reservation's digest -- is settled by this same pass. Read from the store's
+    # anchors, so a reservation made from any records directory is settled here.
+    import production_deletion_rehearsal_tool as rehearsal
+
+    for target in rehearsal.rehearsal_tasks_to_settle(admitted.store, evidence.cleanups):
+        tasks[target.attempt_sha256] = target
     return (
         tuple(objects[k] for k in sorted(objects)),
         tuple(tasks[k] for k in sorted(tasks)),
@@ -2305,6 +2313,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--prepare-rehearsal")
     parser.add_argument("--collect-rehearsal-receipt")
     parser.add_argument("--complete-rehearsal")
+    parser.add_argument("--recover-rehearsal-launch")
     parser.add_argument("--rehearsal-inputs", type=Path)
     parser.add_argument(COLLECT_FLAG, dest="collection_authorized", action="store_true")
     parser.add_argument("--receipt-lines", type=Path)
@@ -2407,6 +2416,7 @@ def main(
             parsed.prepare_rehearsal,
             parsed.collect_rehearsal_receipt,
             parsed.complete_rehearsal,
+            parsed.recover_rehearsal_launch,
         )
     )
     if rehearsal_mode or parsed.rehearsal_inputs is not None:
