@@ -163,6 +163,7 @@ EXIT_REFUSED_DESTINATION: Final = 26
 EXIT_REFUSED_REHEARSAL_CLOSED: Final = 27
 EXIT_REFUSED_COLLECTION_RECORDS: Final = 28
 EXIT_REFUSED_CONTRADICTION_UNRESOLVED: Final = 29
+EXIT_REFUSED_RECEIPT_BINDING: Final = 30
 _SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
 #: The hand-read completion's acknowledgement of one recorded contradiction, by the
 #: collection record's digest; repeatable; never accepted with a collection.
@@ -254,6 +255,11 @@ SENTENCES: Final[dict[str, str]] = {
         "receipts and no disposition names it; no collection resolves that -- the owner "
         "reads the stream, completes from a hand-read receipt and acknowledges the record "
         "by digest"
+    ),
+    "refused_receipt_binding": (
+        "permission cells refused: a disposition bound this launch to one hand-read receipt; "
+        "only a hand-read completion with that receipt continues, no other receipt does, "
+        "and a collection does not"
     ),
     "refused_destination": (
         "permission cells refused: the registration names no log destination for the probe "
@@ -1407,11 +1413,24 @@ def complete_subcell(
         # Already whole: the same receipt changes nothing and says so; another refuses.
         try:
             text = _receipt_text(parsed, receipt_text)
-            document = decode_receipt_line(collect_receipt_line(text.splitlines()))
+            line = collect_receipt_line(text.splitlines())
+            document = decode_receipt_line(line)
         except ReceiptError:
             raise PermissionToolRefusalError(
                 "refused_completion", EXIT_REFUSED_COMPLETION
             ) from None
+        whole = candidates[0].launch
+        if receipt_text is None and whole.record is not None:
+            # A completed resolution stays bound to its receipt: another line, even one
+            # decoding to the same document, is refused as a substitution.
+            _dispositions_for(
+                parsed,
+                records_dir=admitted.store._records_dir,
+                identity=whole.identity,
+                launch_record_sha256=pc.launch_record_digest(whole.record),
+                receipt_text=text,
+                now=now,
+            )
         if candidates[0].receipts[0].receipt == document:
             raise PermissionToolRefusalError("completion_recorded", EXIT_COMPLETION_RECORDED)
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
@@ -1662,6 +1681,10 @@ def collect_receipt_for_subcell(
             raise PermissionToolRefusalError(
                 "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
             ) from None
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise PermissionToolRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
         raise PermissionToolRefusalError(
             "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
         ) from None
@@ -1671,6 +1694,9 @@ def collect_receipt_for_subcell(
         ) from None
     if admission.reusable_line is not None:
         return admission.reusable_line
+    if admission.bound_receipt_sha256 is not None and pending:
+        # A resolution begun by a hand-read completion is finished by one: no read.
+        raise PermissionToolRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
     if not pending:
         raise PermissionToolRefusalError("completion_recorded", EXIT_COMPLETION_RECORDED)
     actor = pc.PRINCIPAL_ACTOR[cell.principal]
@@ -1749,6 +1775,7 @@ def _dispositions_for(
     from kalpamani.data.contracts.canonical import sha256_hex
     from kalpamani.data.production.sharadar.receipt_collector import (
         CollectionDisposition,
+        CollectionRecordDefect,
         CollectionRecordError,
         ContradictionDisposition,
         contradiction_status,
@@ -1761,7 +1788,15 @@ def _dispositions_for(
             identity=identity,
             launch_record_sha256=launch_record_sha256,
         )
-    except (CollectionRecordError, OSError):
+    except CollectionRecordError as error:
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise PermissionToolRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
+        raise PermissionToolRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    except OSError:
         raise PermissionToolRefusalError(
             "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
         ) from None
@@ -1771,12 +1806,15 @@ def _dispositions_for(
         raise PermissionToolRefusalError(
             "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
         )
-    if not status.unresolved:
-        return []
     try:
         line = collect_receipt_line(receipt_text.splitlines())
     except ReceiptError:
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
+    if not status.admits_line(line):
+        # A disposition bound this launch to another receipt: no substitution.
+        raise PermissionToolRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
+    if not status.unresolved:
+        return []
     return [
         CollectionDisposition(
             identity=identity,

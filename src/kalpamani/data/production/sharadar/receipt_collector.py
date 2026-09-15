@@ -67,7 +67,13 @@ recorded before or after it and in whatever order. The one way past it is explic
 evidence-bound -- the owner reads the stream, completes from a hand-read receipt while
 acknowledging the contradiction record by its digest, and the tool writes a **disposition**
 (:data:`DISPOSITION_CONTRACT_ID`) binding that digest, the launch record and the receipt it
-completed from; the contradiction record stays exactly as written. No rule here chooses
+completed from; the contradiction record stays exactly as written. **The disposition's receipt
+binding constrains every later step**: once a disposition names receipt A, the launch is bound
+to A -- a hand-read completion offering another line is refused, a kept line other than A is
+refused, a collection reads nothing, and two dispositions naming different receipts refuse
+as conflicting. An interrupted resolution (the disposition written, the completion not whole)
+is therefore repeatable only with A, and a completed resolution is whole; the two are told
+apart by the completion's own evidence, never by the disposition alone. No rule here chooses
 between two lines, and no later collection resolves anything. Nothing is removed, and
 nothing is chosen by filename order.
 
@@ -522,6 +528,10 @@ class CollectionRecordDefect(StrEnum):
     CONTRADICTION_UNRESOLVED = "CONTRADICTION_UNRESOLVED"
     #: A disposition names a contradiction record that does not exist for this launch.
     DISPOSITION_UNBOUND = "DISPOSITION_UNBOUND"
+    #: Two dispositions of this launch name different receipts.
+    CONFLICTING_DISPOSITIONS = "CONFLICTING_DISPOSITIONS"
+    #: A line offered or kept for this launch is not the receipt its disposition bound.
+    RECEIPT_SUBSTITUTED = "RECEIPT_SUBSTITUTED"
 
 
 class CollectionRecordError(ValueError):
@@ -783,15 +793,25 @@ def parse_collection_disposition(raw: object) -> CollectionDisposition:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ContradictionStatus:
-    """The recorded contradictions of one launch: the digests still unresolved, and the
-    digests a disposition already names."""
+    """The recorded contradictions of one launch: the digests still unresolved, the digests
+    a disposition already names, and the one receipt line (by digest) every disposition
+    bound the launch to -- ``None`` while nothing is disposed."""
 
     unresolved: tuple[str, ...]
     disposed: tuple[str, ...]
+    bound_receipt_sha256: str | None
+
+    def admits_line(self, line: str) -> bool:
+        """Whether a receipt line is the one the launch is bound to (or nothing binds it)."""
+        return (
+            self.bound_receipt_sha256 is None
+            or sha256_hex(line.encode("utf-8", "surrogatepass")) == self.bound_receipt_sha256
+        )
 
     def __repr__(self) -> str:
         return (
-            f"ContradictionStatus(unresolved={len(self.unresolved)}, disposed={len(self.disposed)})"
+            f"ContradictionStatus(unresolved={len(self.unresolved)}, "
+            f"disposed={len(self.disposed)}, bound={self.bound_receipt_sha256 is not None})"
         )
 
 
@@ -848,18 +868,30 @@ def _contradiction_status(
     named = {d.contradiction_sha256 for d in dispositions}
     if named - contradictions:
         raise _refuse(CollectionRecordDefect.DISPOSITION_UNBOUND)
-    return ContradictionStatus(
+    bound = {d.receipt_line_sha256 for d in dispositions}
+    if len(bound) > 1:
+        raise _refuse(CollectionRecordDefect.CONFLICTING_DISPOSITIONS)
+    status = ContradictionStatus(
         unresolved=tuple(sorted(contradictions - named)),
         disposed=tuple(sorted(contradictions & named)),
+        bound_receipt_sha256=next(iter(bound)) if bound else None,
     )
+    # A kept line that is not the bound receipt is a substitution, whichever route reads
+    # the records: refused here, before any read or completion mutation.
+    for record, _digest in records:
+        if record.receipt_line is not None and not status.admits_line(record.receipt_line):
+            raise _refuse(CollectionRecordDefect.RECEIPT_SUBSTITUTED)
+    return status
 
 
 def contradiction_status(
     payloads: Iterable[bytes], *, identity: str, launch_record_sha256: str
 ) -> ContradictionStatus:
     """The hand-read completion's view: which recorded contradictions of this launch still
-    need the owner's acknowledgement, and which a disposition already names. Malformed or
-    misbound records refuse; a disposition naming no recorded contradiction refuses."""
+    need the owner's acknowledgement, which a disposition already names, and the receipt
+    line the dispositions bound the launch to. Malformed or misbound records refuse; a
+    disposition naming no recorded contradiction refuses; dispositions naming different
+    receipts refuse."""
     records, dispositions = _read_records(
         payloads,
         identity=identity,
@@ -877,6 +909,10 @@ class CollectionAdmission:
 
     reusable_line: str | None
     records: tuple[CollectionRecord, ...]
+    #: The receipt line (by digest) a disposition bound the launch to: a resolution begun
+    #: by a hand-read completion; only that line completes the launch, and a collection
+    #: reads nothing while it stands.
+    bound_receipt_sha256: str | None = None
 
     @property
     def attempts(self) -> int:
@@ -906,7 +942,10 @@ def admit_collection_records(
     must name a recorded contradiction (``DISPOSITION_UNBOUND``). **A recorded
     ``CONTRADICTORY_RECEIPTS`` without a disposition refuses** (``CONTRADICTION_UNRESOLVED``)
     -- no later collection, no earlier or later ``COLLECTED`` record and no ordering
-    supersedes it. Otherwise a kept line must verify against the expectation
+    supersedes it. A disposed contradiction binds the launch to the receipt its
+    disposition names (``bound_receipt_sha256``): a kept line that is not that receipt is
+    ``RECEIPT_SUBSTITUTED``, and dispositions naming different receipts are
+    ``CONFLICTING_DISPOSITIONS``. Otherwise a kept line must verify against the expectation
     (``RECEIPT_UNVERIFIABLE``); two different kept lines are ``CONTRADICTORY_RECORDS``.
     Nothing is chosen by filename order: every record is read, and the reusable line is
     the one line every ``COLLECTED`` record agrees on. Rejected, exhausted and incomplete
@@ -936,6 +975,7 @@ def admit_collection_records(
     return CollectionAdmission(
         reusable_line=next(iter(kept)) if kept else None,
         records=tuple(record for record, _digest in records),
+        bound_receipt_sha256=status.bound_receipt_sha256,
     )
 
 

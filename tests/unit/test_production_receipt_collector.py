@@ -638,23 +638,55 @@ class TestCollectionRecords:
         # The explicit, evidence-bound disposition: names the contradiction record by its
         # digest, the launch, and the hand-read receipt line it was completed from. With it
         # the launch is admitted again and the contradiction record is untouched.
+        from kalpamani.data.contracts.canonical import sha256_hex
+
         disposition = rc.CollectionDisposition(
             identity=collected["identity"],
             launch_record_sha256=collected["launch_record_sha256"],
             contradiction_sha256=digest,
-            receipt_line_sha256="ab" * 32,
+            receipt_line_sha256=sha256_hex(_line().encode()),
             disposition=rc.ContradictionDisposition.HAND_READ_COMPLETION,
             recorded_at=self._collected().finished_at,
         ).document()
         assert rc.parse_collection_disposition(_payload(disposition)).contradiction_sha256 == digest
         admission = _admit([_payload(contradiction), _payload(disposition), _payload(collected)])
         assert admission.reusable_line == _line() and admission.attempts == 2
+        assert admission.bound_receipt_sha256 == sha256_hex(_line().encode())
         status = rc.contradiction_status(
             [_payload(contradiction), _payload(disposition)],
             identity=collected["identity"],
             launch_record_sha256=collected["launch_record_sha256"],
         )
         assert status.unresolved == () and status.disposed == (digest,)
+        assert status.admits_line(_line()) and not status.admits_line(RECEIPT)
+        # Correction 3: the disposition binds the launch to the receipt it names. A kept
+        # line that is another receipt is a substitution; a disposition naming another
+        # receipt beside it is a conflict; both refuse before anything else is read.
+        reordered = RECEIPT_LINE_PREFIX + json.dumps(
+            dict(reversed(list(json.loads(_line()[len(RECEIPT_LINE_PREFIX) :]).items())))
+        )
+        other_collected = dict(collected, receipt_line=reordered)
+        with pytest.raises(rc.CollectionRecordError) as refusal:
+            _admit([_payload(contradiction), _payload(disposition), _payload(other_collected)])
+        assert refusal.value.defect is rc.CollectionRecordDefect.RECEIPT_SUBSTITUTED
+        conflicting = dict(disposition, receipt_line_sha256=sha256_hex(reordered.encode()))
+        for payloads in (
+            [_payload(contradiction), _payload(disposition), _payload(conflicting)],
+            [_payload(conflicting), _payload(disposition), _payload(contradiction)],
+        ):
+            with pytest.raises(rc.CollectionRecordError) as refusal:
+                _admit(payloads)
+            assert refusal.value.defect is rc.CollectionRecordDefect.CONFLICTING_DISPOSITIONS
+            with pytest.raises(rc.CollectionRecordError):
+                rc.contradiction_status(
+                    payloads,
+                    identity=collected["identity"],
+                    launch_record_sha256=collected["launch_record_sha256"],
+                )
+        # Two dispositions naming the same receipt (a repeated acknowledgement) agree.
+        admission = _admit([_payload(contradiction), _payload(disposition), _payload(disposition)])
+        assert admission.bound_receipt_sha256 == sha256_hex(_line().encode())
+        assert _admit([_payload(collected)]).bound_receipt_sha256 is None
         # A disposition naming no recorded contradiction, or another launch: refused.
         with pytest.raises(rc.CollectionRecordError) as refusal:
             _admit([_payload(dict(disposition, contradiction_sha256="cd" * 32))])
@@ -1578,6 +1610,236 @@ def test_a_recorded_contradiction_is_never_superseded_through_either_tool(
     assert scenario.mode(*largv) == launch.EXIT_REFUSED_RECORDS
     capsys.readouterr()
     assert len(scenario.files("collection-disposition")) == 1
+
+
+def test_a_disposition_binds_recovery_to_its_receipt_through_either_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kalpamani.data.contracts.canonical import sha256_hex
+
+    # Correction 3, the permission tool. A contradiction recorded; the hand-read completion
+    # with receipt A and the acknowledgement interrupted right after the disposition is
+    # written (before the permission record): the disposition names A, and nothing else.
+    subcell = "R4-SECRET-GET-TASK"
+    t = _launched(tmp_path / "probe", subcell)
+    capsys.readouterr()
+    a_path = t.receipt_lines(TaskOutcome.PROBE_MATCHED)
+    a = _receipt_line_of(a_path)
+    b = _reordered(a)  # the same document as another line: otherwise valid, not A
+    b_path = tmp_path / "receipt-b.txt"
+    b_path.write_text(b + "\n", encoding="utf-8")
+    argv = ["--collect-receipt", subcell, *t.base(), tool.COLLECT_FLAG]
+    logs = t.launch_clients.logs_fake
+    logs.answers = [_stream_answer(t, a, b)]
+    assert t.main(*argv) == tool.EXIT_COLLECTION_NOT_COLLECTED
+    capsys.readouterr()
+    digest = _contradiction_digest(t.files("receipt-collection"))
+    acknowledged_a = [
+        "--complete-subcell",
+        subcell,
+        *t.base(),
+        "--receipt-lines",
+        str(a_path),
+        tool.ACKNOWLEDGE_FLAG,
+        digest,
+    ]
+    acknowledged_b = [
+        "--complete-subcell",
+        subcell,
+        *t.base(),
+        "--receipt-lines",
+        str(b_path),
+        tool.ACKNOWLEDGE_FLAG,
+        digest,
+    ]
+    # Boundary 1: interrupted inside the disposition write itself -- nothing persisted,
+    # and the acknowledged completion with A simply runs again.
+    _crash_store(
+        monkeypatch,
+        "write_record",
+        when=lambda prefix, *_a, **_k: prefix == "collection-disposition",
+    )
+    with pytest.raises(_Crash):
+        t.main(*acknowledged_a)
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert t.files("collection-disposition") == [] and t.files("permission-record") == []
+    # Boundary 2: interrupted after the disposition, before the permission record.
+    _crash_store(
+        monkeypatch, "write_record", when=lambda prefix, *_a, **_k: prefix == "permission-record"
+    )
+    with pytest.raises(_Crash):
+        t.main(*acknowledged_a)
+    monkeypatch.undo()
+    capsys.readouterr()
+    [disposition_path] = t.files("collection-disposition")
+    disposition = rc.parse_collection_disposition(disposition_path.read_bytes())
+    assert disposition.receipt_line_sha256 == sha256_hex(a.encode())
+    assert (
+        t.files("permission-record") == []
+        and t.status(subcell) is pc.SubcellStatus.AWAITING_RECEIPT
+    )
+    # An interrupted resolution: receipt B is refused through hand completion, with and
+    # without the acknowledgement; a collection is refused before any read; a cached
+    # COLLECTED record carrying B is refused; nothing is written by any of them.
+    reads = len(logs.calls)
+    logs.answers = [AssertionError("no read while a disposition binds the launch")]
+    assert t.complete(subcell, b_path) == tool.EXIT_REFUSED_RECEIPT_BINDING
+    assert tool.SENTENCES["refused_receipt_binding"] in capsys.readouterr().out
+    assert t.main(*acknowledged_b) == tool.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    assert t.main(*argv) == tool.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    template = json.loads(t.files("receipt-collection")[0].read_bytes())
+    cached = t.scenario.records / "receipt-collection-20990101T000000Z-0000.json"
+    cached.write_bytes(
+        json.dumps(
+            dict(
+                template,
+                outcome="COLLECTED",
+                scan_complete=True,
+                distinct_receipt_lines=1,
+                receipt_line=b,
+            ),
+            sort_keys=True,
+        ).encode()
+    )
+    assert t.main(*argv) == tool.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    assert t.complete(subcell, a_path) == tool.EXIT_REFUSED_RECEIPT_BINDING  # the cache too
+    capsys.readouterr()
+    cached.unlink()
+    # A conflicting disposition (another receipt) beside the first: refused as records,
+    # before any read or mutation, through both routes.
+    conflict = t.scenario.records / "collection-disposition-20990101T000000Z-0000.json"
+    conflict.write_bytes(
+        json.dumps(
+            dict(disposition.document(), receipt_line_sha256=sha256_hex(b.encode())), sort_keys=True
+        ).encode()
+    )
+    assert t.complete(subcell, a_path) == tool.EXIT_REFUSED_COLLECTION_RECORDS
+    capsys.readouterr()
+    assert t.main(*argv) == tool.EXIT_REFUSED_COLLECTION_RECORDS
+    capsys.readouterr()
+    conflict.unlink()
+    assert len(logs.calls) == reads and t.files("permission-record") == []
+    assert t.status(subcell) is pc.SubcellStatus.AWAITING_RECEIPT
+    assert len(t.files("collection-disposition")) == 1
+    # Repeatable recovery with A: with the acknowledgement or without it, the completion
+    # finishes; no second disposition is written; the contradiction record is untouched.
+    original = t.files("receipt-collection")[0].read_bytes()
+    assert t.complete(subcell, a_path) == tool.EXIT_COMPLETED
+    capsys.readouterr()
+    assert len(t.files("collection-disposition")) == 1 and len(t.files("permission-record")) == 1
+    assert t.files("receipt-collection")[0].read_bytes() == original
+    assert t.status(subcell) is pc.SubcellStatus.CLEANUP_UNRESOLVED
+    # A completed resolution: A says whole; B is still refused; a collection says whole.
+    assert t.main(*acknowledged_a) == tool.EXIT_COMPLETION_RECORDED
+    capsys.readouterr()
+    assert t.complete(subcell, b_path) == tool.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    assert t.main(*argv) == tool.EXIT_COMPLETION_RECORDED
+    capsys.readouterr()
+    assert len(logs.calls) == reads
+    # Control: a launch without a contradiction completes by hand with no disposition,
+    # and another through collection.
+    t2 = _launched(tmp_path / "plain", subcell)
+    capsys.readouterr()
+    assert t2.complete(subcell, t2.receipt_lines(TaskOutcome.PROBE_MATCHED)) == tool.EXIT_COMPLETED
+    capsys.readouterr()
+    assert t2.files("collection-disposition") == []
+    # Correction 3, the launch tool: the same boundaries, refusals and recovery.
+    scenario, launch, record_path, la, largv = _launch_scenario(tmp_path / "launch")
+    lb = _reordered(la)
+    la_path = scenario.root / "receipt.txt"
+    lb_path = scenario.root / "receipt-b.txt"
+    lb_path.write_text(lb + "\n", encoding="utf-8")
+    scenario.clients.logs_fake.answers = [_once(la, lb)]
+    assert scenario.mode(*largv) == launch.EXIT_COLLECTION_NOT_COLLECTED
+    capsys.readouterr()
+    ldigest = _contradiction_digest(scenario.files("receipt-collection"))
+    hand = ["--complete-row", "--launch-record", str(record_path), "--receipt-lines"]
+    _crash_store(
+        monkeypatch,
+        "write_record",
+        when=lambda prefix, *_a, **_k: prefix == "collection-disposition",
+    )
+    with pytest.raises(_Crash):
+        scenario.mode(*hand, str(la_path), launch.ACKNOWLEDGE_FLAG, ldigest)
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert scenario.files("collection-disposition") == []
+    _crash_store(monkeypatch, "replace_ledger", when=lambda *_a, **_k: True)
+    with pytest.raises(_Crash):
+        scenario.mode(*hand, str(la_path), launch.ACKNOWLEDGE_FLAG, ldigest)
+    monkeypatch.undo()
+    capsys.readouterr()
+    [ldisposition_path] = scenario.files("collection-disposition")
+    ldisposition = rc.parse_collection_disposition(ldisposition_path.read_bytes())
+    assert ldisposition.receipt_line_sha256 == sha256_hex(la.encode())
+    from fixtures.production_build import RUN_1
+
+    row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
+    assert row is not None and row.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY
+    lreads = len(scenario.clients.logs_fake.calls)
+    scenario.clients.logs_fake.answers = [
+        AssertionError("no read while a disposition binds the launch")
+    ]
+    assert scenario.mode(*hand, str(lb_path)) == launch.EXIT_REFUSED_RECEIPT_BINDING
+    assert capsys.readouterr().out.strip() == launch.SENTENCES["refused_receipt_binding"]
+    assert (
+        scenario.mode(*hand, str(lb_path), launch.ACKNOWLEDGE_FLAG, ldigest)
+        == launch.EXIT_REFUSED_RECEIPT_BINDING
+    )
+    assert scenario.mode(*largv) == launch.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    ltemplate = json.loads(scenario.files("receipt-collection")[0].read_bytes())
+    lcached = scenario.records / "receipt-collection-20990101T000000Z-0000.json"
+    lcached.write_bytes(
+        json.dumps(
+            dict(
+                ltemplate,
+                outcome="COLLECTED",
+                scan_complete=True,
+                distinct_receipt_lines=1,
+                receipt_line=lb,
+            ),
+            sort_keys=True,
+        ).encode()
+    )
+    assert scenario.mode(*largv) == launch.EXIT_REFUSED_RECEIPT_BINDING
+    assert scenario.mode(*hand, str(la_path)) == launch.EXIT_REFUSED_RECEIPT_BINDING
+    capsys.readouterr()
+    lcached.unlink()
+    lconflict = scenario.records / "collection-disposition-20990101T000000Z-0000.json"
+    lconflict.write_bytes(
+        json.dumps(
+            dict(ldisposition.document(), receipt_line_sha256=sha256_hex(lb.encode())),
+            sort_keys=True,
+        ).encode()
+    )
+    assert scenario.mode(*hand, str(la_path)) == launch.EXIT_REFUSED_COLLECTION_RECORDS
+    assert scenario.mode(*largv) == launch.EXIT_REFUSED_COLLECTION_RECORDS
+    capsys.readouterr()
+    lconflict.unlink()
+    assert len(scenario.clients.logs_fake.calls) == lreads
+    row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
+    assert row is not None and row.evidence is lr.LedgerEvidence.EXIT_CODE_ONLY
+    loriginal = scenario.files("receipt-collection")[0].read_bytes()
+    assert scenario.mode(*hand, str(la_path)) == launch.EXIT_ROW_COMPLETED
+    capsys.readouterr()
+    row = lr.parse_owner_ledger(scenario.ledger.read_bytes()).row(RUN_1)
+    assert row is not None and row.buildable
+    assert len(scenario.files("collection-disposition")) == 1
+    assert scenario.files("receipt-collection")[0].read_bytes() == loriginal
+    assert (
+        scenario.mode(*hand, str(la_path), launch.ACKNOWLEDGE_FLAG, ldigest)
+        == launch.EXIT_REFUSED_RECORDS
+    )
+    assert scenario.mode(*hand, str(lb_path)) == launch.EXIT_REFUSED_RECEIPT_BINDING
+    assert scenario.mode(*largv) == launch.EXIT_REFUSED_RECORDS
+    capsys.readouterr()
+    assert len(scenario.clients.logs_fake.calls) == lreads
 
 
 def test_the_runner_reads_no_collection_record_as_permission_evidence(tmp_path: Path) -> None:

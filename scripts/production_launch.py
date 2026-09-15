@@ -117,6 +117,7 @@ EXIT_REFUSED_LEGACY_RESERVATIONS: Final = 15
 EXIT_COLLECTION_NOT_COLLECTED: Final = 16
 EXIT_REFUSED_COLLECTION_RECORDS: Final = 17
 EXIT_REFUSED_CONTRADICTION_UNRESOLVED: Final = 18
+EXIT_REFUSED_RECEIPT_BINDING: Final = 19
 #: The hand-read completion's acknowledgement of one recorded contradiction, by the
 #: collection record's digest; repeatable; never accepted with a collection.
 ACKNOWLEDGE_FLAG: Final = "--acknowledge-collection-contradiction"
@@ -159,6 +160,11 @@ SENTENCES: Final[dict[str, str]] = {
         "launch refused: a recorded collection of this launch found contradictory receipts "
         "and no disposition names it; no collection resolves that -- the owner reads the "
         "stream, completes from a hand-read receipt and acknowledges the record by digest"
+    ),
+    "refused_receipt_binding": (
+        "launch refused: a disposition bound this launch to one hand-read receipt; only a "
+        "hand-read completion with that receipt continues, no other receipt does, and a "
+        "collection does not"
     ),
     "refused_destination": (
         "launch refused: the registration names no log destination for this entry, or not "
@@ -1084,6 +1090,10 @@ def collect_receipt_lines(
             raise LaunchRefusalError(
                 "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
             ) from None
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise LaunchRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
         raise LaunchRefusalError(
             "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
         ) from None
@@ -1093,6 +1103,9 @@ def collect_receipt_lines(
         ) from None
     if admission.reusable_line is not None:
         return admission.reusable_line
+    if admission.bound_receipt_sha256 is not None:
+        # A resolution begun by a hand-read completion is finished by one: no read.
+        raise LaunchRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
     constants = constants_for(record.actor)
     bootstrap = human_bootstrap(
         actor=record.actor,
@@ -1242,6 +1255,7 @@ def _dispositions_for(
     from kalpamani.data.contracts.canonical import sha256_hex
     from kalpamani.data.production.sharadar.receipt_collector import (
         CollectionDisposition,
+        CollectionRecordDefect,
         CollectionRecordError,
         ContradictionDisposition,
         contradiction_status,
@@ -1254,7 +1268,15 @@ def _dispositions_for(
             identity=record.identity,
             launch_record_sha256=_launch_record_digest(record),
         )
-    except (CollectionRecordError, OSError):
+    except CollectionRecordError as error:
+        if error.defect is CollectionRecordDefect.RECEIPT_SUBSTITUTED:
+            raise LaunchRefusalError(
+                "refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING
+            ) from None
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    except OSError:
         raise LaunchRefusalError(
             "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
         ) from None
@@ -1264,12 +1286,15 @@ def _dispositions_for(
         raise LaunchRefusalError(
             "refused_contradiction_unresolved", EXIT_REFUSED_CONTRADICTION_UNRESOLVED
         )
-    if not status.unresolved:
-        return []
     try:
         line = collect_receipt_line(receipt_lines.decode("utf-8").splitlines())
     except (ReceiptError, UnicodeDecodeError):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if not status.admits_line(line):
+        # A disposition bound this launch to another receipt: no substitution.
+        raise LaunchRefusalError("refused_receipt_binding", EXIT_REFUSED_RECEIPT_BINDING)
+    if not status.unresolved:
+        return []
     return [
         CollectionDisposition(
             identity=record.identity,
