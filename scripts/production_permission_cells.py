@@ -160,6 +160,7 @@ EXIT_COMPLETION_RECORDED: Final = 24
 EXIT_COLLECTION_NOT_COLLECTED: Final = 25
 EXIT_REFUSED_DESTINATION: Final = 26
 EXIT_REFUSED_REHEARSAL_CLOSED: Final = 27
+EXIT_REFUSED_COLLECTION_RECORDS: Final = 28
 
 SENTENCES: Final[dict[str, str]] = {
     "planned": "permission subcell plan printed; nothing was performed",
@@ -233,8 +234,14 @@ SENTENCES: Final[dict[str, str]] = {
         "evidence and the ledger row are present and nothing was changed"
     ),
     "collection_not_collected": (
-        "receipt not collected within the budget: the collection is recorded, the subcell "
-        "stays as it was, and nothing is established about whether a receipt exists"
+        "receipt not collected: the collection is recorded (outcome and counts, never log "
+        "content), the subcell stays as it was, nothing is established about whether a "
+        "receipt exists, and the next collection reads the stream again"
+    ),
+    "refused_collection_records": (
+        "permission cells refused: the recorded collections of this launch are malformed, "
+        "bound to another launch or stream, carry an unverifiable line, or contradict "
+        "each other; nothing is chosen between them"
     ),
     "refused_destination": (
         "permission cells refused: the registration names no log destination for the probe "
@@ -1541,19 +1548,23 @@ def collect_receipt_for_subcell(
     Exactly one launched, incomplete attempt of the subcell under the current binding; the
     registered probe target's log destination held to the probe entry; the actor's
     launcher identity proven through the accepted human bootstrap; then one bounded
-    collection under that profile, recorded (``receipt-collection``) whatever its outcome.
-    A collection already recorded as COLLECTED for this launch is reused and the stream is
-    not read again. The line then completes the subcell through :func:`complete_subcell`
-    -- the same verifier, the same evidence, the same binding rules as a hand-read receipt.
+    collection under that profile, recorded (``receipt-collection``) whatever its outcome,
+    the line kept only once it verified against the launch record. No collection before
+    the launcher observed the probe's terminal state. Every collection record about this
+    launch is admitted through the collector's one rule (:func:`admit_collection_records`):
+    a verified COLLECTED line is reused and the stream is not read again; a rejected,
+    exhausted, incomplete or contradictory attempt never blocks, and the stream is read
+    again; malformed, misbound, unverifiable or mutually contradictory records refuse, and
+    nothing is chosen between them. The line then completes the subcell through
+    :func:`complete_subcell` -- the same verifier, the same evidence, the same binding
+    rules as a hand-read receipt.
     """
-    from kalpamani.data.production.sharadar import launch_records as lr
-    from kalpamani.data.production.sharadar.documents import decode_document
     from kalpamani.data.production.sharadar.launch_store import StoreError
     from kalpamani.data.production.sharadar.receipt_collector import (
-        COLLECTION_CONTRACT_ID,
-        CollectionOutcome,
+        CollectionRecordError,
         CollectorError,
         SdkLogsClient,
+        admit_collection_records,
         collect_receipt,
         destination_for,
     )
@@ -1595,6 +1606,9 @@ def collect_receipt_for_subcell(
     assert launch_record is not None
     if launch.duplicates or launch.binding is not pc.RecordBinding.BOUND:
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    if launch_record.observed_exit_code is None:
+        # No collection before the launcher observed the terminal state.
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
     probe_target = _probe_target(admitted, cell)
     if probe_target.task_definition_arn != launch_record.task_definition_arn:
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
@@ -1605,20 +1619,25 @@ def collect_receipt_for_subcell(
     except CollectorError:
         raise PermissionToolRefusalError("refused_destination", EXIT_REFUSED_DESTINATION) from None
     record_digest = pc.launch_record_digest(launch_record)
-    for path in sorted(admitted.store._records_dir.glob("receipt-collection-*.json")):
-        try:
-            document = decode_document(path.read_bytes(), max_bytes=lr.MAX_RECORD_BYTES)
-        except Exception:  # noqa: S112 - an unreadable record is not this launch's evidence
-            continue
-        if (
-            type(document) is dict
-            and document.get("contract_id") == COLLECTION_CONTRACT_ID
-            and document.get("identity") == launch.identity
-            and document.get("launch_record_sha256") == record_digest
-            and document.get("outcome") == CollectionOutcome.COLLECTED.value
-            and type(document.get("receipt_line")) is str
-        ):
-            return str(document["receipt_line"])
+    expectation = launch_record.expectation()
+    try:
+        admission = admit_collection_records(
+            (
+                path.read_bytes()
+                for path in sorted(admitted.store._records_dir.glob("receipt-collection-*.json"))
+            ),
+            identity=launch.identity,
+            launch_record_sha256=record_digest,
+            destination=destination,
+            task_id=launch_record.task_id,
+            expectation=expectation,
+        )
+    except (CollectionRecordError, OSError):
+        raise PermissionToolRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    if admission.reusable_line is not None:
+        return admission.reusable_line
     if not pending:
         raise PermissionToolRefusalError("completion_recorded", EXIT_COMPLETION_RECORDED)
     actor = pc.PRINCIPAL_ACTOR[cell.principal]
@@ -1647,6 +1666,7 @@ def collect_receipt_for_subcell(
     collected = collect_receipt(
         destination=destination,
         task_id=launch_record.task_id,
+        expectation=expectation,
         client=client,
         now=now,
         monotonic=seams["monotonic"],
@@ -1662,11 +1682,7 @@ def collect_receipt_for_subcell(
         raise PermissionToolRefusalError(
             "refused_record_write", EXIT_REFUSED_RECORD_WRITE
         ) from None
-    print(
-        f"collection={collected.outcome.value} requests={collected.requests} "
-        f"pages={collected.pages} events_scanned={collected.events_scanned} "
-        f"distinct_receipt_lines={collected.distinct_receipt_lines}"
-    )
+    print(collected.summary())
     if collected.receipt_line is None:
         raise PermissionToolRefusalError("collection_not_collected", EXIT_COLLECTION_NOT_COLLECTED)
     return collected.receipt_line

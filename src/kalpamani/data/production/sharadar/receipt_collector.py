@@ -10,25 +10,59 @@ nothing here is a second route to a completed row or a PASSED subcell.
 
 Bounded, and what its bounds mean:
 
-- **request limits** -- at most :data:`COLLECT_MAX_PAGES` ``GetLogEvents`` pages per pass and
-  :data:`COLLECT_MAX_REQUESTS` requests per collection, each page the service's own ceiling
-  (10,000 events or 1 MiB); at most :data:`COLLECT_MAX_EVENTS` events scanned; polling for
-  delayed delivery at :data:`COLLECT_POLL_SECONDS` for at most :data:`COLLECT_CEILING_SECONDS`
-  on an injected monotonic clock;
+- **request limits** -- at most :data:`COLLECT_MAX_REQUESTS` ``GetLogEvents`` requests per
+  collection, read in passes of at most :data:`COLLECT_MAX_PAGES` pages, each page the
+  service's own ceiling (10,000 events or 1 MiB); at most :data:`COLLECT_MAX_EVENTS`
+  events scanned; at most :data:`COLLECT_CEILING_SECONDS` elapsed on an injected monotonic
+  clock. **Every limit is checked before a request is issued**: the request count, the
+  event count and the elapsed time each refuse the next request when reached, and a page
+  whose events would cross the event ceiling is scanned only up to it. **The one limit
+  this module cannot enforce is a request already in flight**: an issued request completes,
+  or fails, within the client's own connect and read timeouts (the workstation client
+  configuration: finite, and one attempt in total), so the elapsed time of a collection may
+  exceed the ceiling by at most one request's in-flight time;
 - **effective SDK retries: zero** -- the logs client is built with one attempt in total
   (``total_max_attempts = 1``); a throttled or failed request is recorded, never retried
   inside the SDK, and the collector itself re-issues nothing within a pass;
-- **a successful read is not a verification** -- a collected line still has to verify against
-  the launch record's expectation (task, revision, image, identity, input, configuration,
-  commit) and against the observed terminal exit, exactly as a hand-read one;
-- **an exhausted budget proves that no receipt was obtained within it**, not that none exists:
-  ``NO_RECEIPT_WITHIN_BUDGET`` and ``STREAM_NOT_FOUND_WITHIN_BUDGET`` are collection
-  outcomes, never receipt verdicts, and a later collection may still find the line.
+- **a complete scan, and only a complete scan, establishes uniqueness** -- the stream is
+  read from its head until the forward token repeats (the documented end of the stream as
+  delivered so far) and, after one poll interval, a re-read from that token delivers nothing
+  new: that closes the **observation window**. Exactly one distinct receipt-shaped line in
+  a complete scan is a candidate; a receipt-shaped line seen in a scan the budget cut short
+  is ``SCAN_INCOMPLETE`` -- it establishes nothing, and the line is not kept. Two distinct
+  receipt-shaped lines are ``CONTRADICTORY_RECEIPTS`` whether or not the scan completed;
+- **delayed delivery** -- the ``awslogs`` driver delivers events with lag, and the window
+  closes on the stream *as delivered* by ``finished_at``: an event delivered after the
+  window closed was not observed. That is why a collection is performed only after the
+  launcher observed the task's terminal state (nothing more is written once it stopped),
+  why the window is recorded on every record (``started_at``, ``finished_at``,
+  ``scan_complete``), and why ``COLLECTED`` means *unique within the observed window*;
+- **validated before it is kept** -- the candidate line must decode as the closed receipt
+  document and verify against the launch record's expectation (task, revision, image,
+  identity, input, configuration, commit) **before** anything of it is persisted. A line
+  that does not is ``RECEIPT_REJECTED``: the record keeps the closed defect and the line's
+  byte count, never the text. **A successful read is still not a verification**: the
+  completion re-verifies the kept line exactly as a hand-read one, and checks it against
+  the observed terminal exit;
+- **an exhausted budget proves that no receipt was obtained within it**, not that none
+  exists: ``NO_RECEIPT_WITHIN_BUDGET``, ``STREAM_NOT_FOUND_WITHIN_BUDGET`` and
+  ``SCAN_INCOMPLETE`` are collection outcomes, never receipt verdicts, and a later
+  collection may still find the line.
 
-Only the receipt line is kept (it is the closed receipt document: tokens, counts, digests --
-no key, identifier, subject or row); every other event is counted and never stored, so no
-arbitrary log content leaves the stream through this module. Real client construction lives
-in the tools' authorized branches; this module imports no SDK.
+Only a verified receipt line is kept (it is the closed receipt document: tokens, counts,
+digests -- no key, identifier, subject or row); every other event is counted and never
+stored, so no arbitrary log content leaves the stream through this module. Real client
+construction lives in the tools' authorized branches; this module imports no SDK.
+
+**The collection record** (:data:`COLLECTION_CONTRACT_ID`) is closed:
+:func:`parse_collection_record` admits exactly its fields, and :func:`admit_collection_records`
+is the one cache rule both tools apply -- every record about this launch is read, each is
+held to the launch record
+digest and to the derived destination, a kept line is re-verified against the expectation,
+two different kept lines are a contradiction that refuses, and a rejected, exhausted or
+contradictory attempt never blocks: the next collection reads the stream again and its
+record is written beside the earlier ones. Nothing is removed, and nothing is chosen by
+filename order.
 
 **Mocked results are not AWS verification.** Every page in this repository's tests is a fake's.
 """
@@ -36,16 +70,23 @@ in the tools' authorized branches; this module imports no SDK.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
-from kalpamani.data.production.sharadar.documents import exact_str
+from kalpamani.data.production.sharadar.documents import decode_document, exact_str
 from kalpamani.data.production.sharadar.entry import TaskEntry
-from kalpamani.data.production.sharadar.receipts import RECEIPT_LINE_PREFIX
+from kalpamani.data.production.sharadar.receipts import (
+    RECEIPT_LINE_PREFIX,
+    ReceiptDefect,
+    ReceiptError,
+    ReceiptExpectation,
+    decode_receipt_line,
+    verify_receipt,
+)
 
 #: The research log group every production family writes to (``logging.tf``): the owner's
 #: ``name_prefix`` between two fixed segments.
@@ -74,6 +115,10 @@ COLLECT_CEILING_SECONDS: Final = 300.0
 LOGS_TOTAL_MAX_ATTEMPTS: Final = 1
 LOGS_RETRY_MODE: Final = "standard"
 COLLECTION_CONTRACT_ID: Final = "kalpamani-receipt-collection/v1"
+#: The largest collection record the parser reads.
+MAX_COLLECTION_RECORD_BYTES: Final = 64 * 1024
+_LOG_STREAM_RE: Final = re.compile(r"production-[a-z-]+/[a-z-]+/[0-9a-f]{32}")
+_SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
 
 
 class CollectorDefect(StrEnum):
@@ -189,7 +234,14 @@ class LogsClient(Protocol):
 class CollectionOutcome(StrEnum):
     """What one collection established. Closed; never a receipt verdict."""
 
+    #: A complete scan, exactly one distinct receipt line, verified against the launch.
     COLLECTED = "COLLECTED"
+    #: A complete scan, exactly one distinct receipt-shaped line, refused by the verifier;
+    #: the closed defect is kept, the text is not.
+    RECEIPT_REJECTED = "RECEIPT_REJECTED"
+    #: A receipt-shaped line was seen, and the budget ended the scan before the stream's
+    #: end was observed: nothing is established, and the line is not kept.
+    SCAN_INCOMPLETE = "SCAN_INCOMPLETE"
     NO_RECEIPT_WITHIN_BUDGET = "NO_RECEIPT_WITHIN_BUDGET"
     STREAM_NOT_FOUND_WITHIN_BUDGET = "STREAM_NOT_FOUND_WITHIN_BUDGET"
     CONTRADICTORY_RECEIPTS = "CONTRADICTORY_RECEIPTS"
@@ -205,8 +257,10 @@ _ABSENT_CODES: Final[frozenset[str]] = frozenset({"ResourceNotFoundException"})
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CollectedReceipt:
-    """The sanitized result of one collection: the outcome, the counts and, when exactly one
-    distinct receipt line was found, that line -- the closed receipt document, nothing else."""
+    """The sanitized result of one collection: the outcome, the counts, the observation
+    window and, when a complete scan found exactly one verified receipt line, that line --
+    the closed receipt document, nothing else. A rejected line leaves its closed defect
+    and its byte count; no other line, and no other event, is ever carried."""
 
     outcome: CollectionOutcome
     log_group: str
@@ -215,15 +269,29 @@ class CollectedReceipt:
     pages: int
     events_scanned: int
     distinct_receipt_lines: int
+    scan_complete: bool
     receipt_line: str | None
+    rejection: ReceiptDefect | None
+    rejected_receipt_bytes: int | None
     started_at: datetime
     finished_at: datetime
+    elapsed_ms: int
 
     def __post_init__(self) -> None:
-        if (self.outcome is CollectionOutcome.COLLECTED) != (self.receipt_line is not None):
+        collected = self.outcome is CollectionOutcome.COLLECTED
+        rejected = self.outcome is CollectionOutcome.RECEIPT_REJECTED
+        if collected != (self.receipt_line is not None):
             raise ValueError("a receipt line is present exactly when one was collected")
+        if rejected != (self.rejection is not None):
+            raise ValueError("a rejection is present exactly when a line was rejected")
+        if rejected != (self.rejected_receipt_bytes is not None):
+            raise ValueError("a rejected line's byte count is present exactly when rejected")
+        if (collected or rejected) and not self.scan_complete:
+            raise ValueError("only a complete scan establishes one line")
         if self.receipt_line is not None and not self.receipt_line.startswith(RECEIPT_LINE_PREFIX):
             raise ValueError("a collected line is a receipt line")
+        if self.outcome is CollectionOutcome.SCAN_INCOMPLETE and self.scan_complete:
+            raise ValueError("an incomplete scan is not complete")
 
     def document(self, *, identity: str, launch_record_sha256: str) -> dict[str, Any]:
         """The collection record: the evidence a verification needs, and no other event."""
@@ -238,9 +306,13 @@ class CollectedReceipt:
             "pages": self.pages,
             "events_scanned": self.events_scanned,
             "distinct_receipt_lines": self.distinct_receipt_lines,
+            "scan_complete": self.scan_complete,
             "receipt_line": self.receipt_line,
+            "rejection": None if self.rejection is None else self.rejection.value,
+            "rejected_receipt_bytes": self.rejected_receipt_bytes,
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat(),
+            "elapsed_ms": self.elapsed_ms,
         }
 
     def digest(self, *, identity: str, launch_record_sha256: str) -> str:
@@ -248,6 +320,15 @@ class CollectedReceipt:
             canonical_bytes(
                 self.document(identity=identity, launch_record_sha256=launch_record_sha256)
             )
+        )
+
+    def summary(self) -> str:
+        """The one line the tools print: outcome and counts, never content."""
+        return (
+            f"collection={self.outcome.value} requests={self.requests} pages={self.pages} "
+            f"events_scanned={self.events_scanned} "
+            f"distinct_receipt_lines={self.distinct_receipt_lines} "
+            f"scan_complete={str(self.scan_complete).lower()}"
         )
 
     def __repr__(self) -> str:
@@ -258,22 +339,33 @@ def collect_receipt(
     *,
     destination: LogDestination,
     task_id: str,
+    expectation: ReceiptExpectation,
     client: LogsClient,
     now: Callable[[], datetime],
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
 ) -> CollectedReceipt:
-    """Read the task's stream for its one receipt line, bounded; never verify it here.
+    """Read the task's stream for its one receipt line, bounded; keep it only verified.
 
-    Pages are read from the head with the forward token; a page whose token equals the
-    one it was asked with is the end of the stream as delivered so far (the documented
-    signal), and every further poll continues from that token. Delivery lag is waited out
-    at the poll interval within the ceiling; a stream not yet created is the same wait. A
-    denial, a throttle or a transport failure ends the collection at once with its own
-    outcome -- the SDK retried nothing, and the collector retries nothing. Two distinct
-    receipt lines are contradictory and refuse; the same line delivered twice is one line.
-    Exhaustion says only that nothing was obtained within the budget.
+    Pages are read from the head with the forward token in passes of at most
+    ``COLLECT_MAX_PAGES``; a page whose token equals the one it was asked with is the end
+    of the stream as delivered so far. Every limit -- requests, events, elapsed time -- is
+    checked **before** a request is issued, and a page is scanned only up to the event
+    ceiling. Once the end is observed with no receipt-shaped line, delivery lag is waited
+    out at the poll interval within the ceiling; a stream not yet created is the same
+    wait. Once the end is observed with exactly one distinct receipt-shaped line, one
+    more poll interval passes and the stream is re-read from the end token: a re-read that
+    delivers nothing new closes the observation window, and only then is the line decoded
+    and verified against ``expectation`` -- kept when it verifies (``COLLECTED``), its
+    closed defect kept when it does not (``RECEIPT_REJECTED``). A denial, a throttle or a
+    transport failure ends the collection at once with its own outcome -- the SDK retried
+    nothing, and the collector retries nothing. Two distinct receipt-shaped lines are
+    contradictory and refuse; the same line delivered twice is one line. A budget that
+    ends the scan before the end was observed establishes nothing (``SCAN_INCOMPLETE``
+    when a line was seen, exhaustion otherwise).
     """
+    if type(expectation) is not ReceiptExpectation:
+        raise TypeError("expectation must be an exact ReceiptExpectation")
     stream = log_stream_name(destination, task_id)
     started_at = now()
     started = monotonic()
@@ -281,9 +373,20 @@ def collect_receipt(
     requests = pages = scanned = 0
     seen: dict[str, None] = {}
     outcome: CollectionOutcome | None = None
+    stream_absent = False
+    awaiting_confirmation = False
 
-    def finish(final: CollectionOutcome) -> CollectedReceipt:
-        line = next(iter(seen)) if final is CollectionOutcome.COLLECTED else None
+    def elapsed() -> float:
+        return max(0.0, monotonic() - started)
+
+    def finish(
+        final: CollectionOutcome,
+        *,
+        scan_complete: bool,
+        line: str | None = None,
+        rejection: ReceiptDefect | None = None,
+        rejected_bytes: int | None = None,
+    ) -> CollectedReceipt:
         return CollectedReceipt(
             outcome=final,
             log_group=destination.log_group,
@@ -292,16 +395,29 @@ def collect_receipt(
             pages=pages,
             events_scanned=scanned,
             distinct_receipt_lines=len(seen),
+            scan_complete=scan_complete,
             receipt_line=line,
+            rejection=rejection,
+            rejected_receipt_bytes=rejected_bytes,
             started_at=started_at,
             finished_at=now(),
+            elapsed_ms=int(elapsed() * 1000),
+        )
+
+    def bound_reached() -> bool:
+        return (
+            requests >= COLLECT_MAX_REQUESTS
+            or scanned >= COLLECT_MAX_EVENTS
+            or elapsed() >= COLLECT_CEILING_SECONDS
         )
 
     while True:
-        # One pass: pages from the current token until the token repeats or a bound holds.
-        stream_absent = False
+        # One pass: pages from the current token until the end is observed, a page is
+        # cut at the event ceiling, or a bound refuses the next request.
+        end_observed = False
+        new_events = 0
         for _ in range(COLLECT_MAX_PAGES):
-            if requests >= COLLECT_MAX_REQUESTS:
+            if bound_reached():
                 break
             page = client.get_log_events(
                 log_group_name=destination.log_group, log_stream_name=stream, next_token=token
@@ -323,32 +439,314 @@ def collect_receipt(
                 outcome = CollectionOutcome.FAILED
                 break
             pages += 1
+            stream_absent = False
+            truncated = False
             for message in page.events:
+                if scanned >= COLLECT_MAX_EVENTS:
+                    truncated = True
+                    break
                 scanned += 1
+                new_events += 1
                 if type(message) is str and message.startswith(RECEIPT_LINE_PREFIX):
                     seen.setdefault(message, None)
+            if truncated or len(seen) > 1:
+                # The ceiling cut the page, or a second distinct line contradicts the
+                # first: nothing further is requested.
+                break
             repeated = page.next_forward_token is None or page.next_forward_token == token
             token = page.next_forward_token if page.next_forward_token is not None else token
-            if repeated or scanned >= COLLECT_MAX_EVENTS:
+            if repeated:
+                end_observed = True
                 break
         if outcome is not None:
-            return finish(outcome)
-        if len(seen) == 1:
-            return finish(CollectionOutcome.COLLECTED)
+            return finish(outcome, scan_complete=False)
         if len(seen) > 1:
-            return finish(CollectionOutcome.CONTRADICTORY_RECEIPTS)
-        exhausted = (
-            requests >= COLLECT_MAX_REQUESTS
-            or scanned >= COLLECT_MAX_EVENTS
-            or max(0.0, monotonic() - started) + COLLECT_POLL_SECONDS > COLLECT_CEILING_SECONDS
-        )
-        if exhausted:
+            return finish(CollectionOutcome.CONTRADICTORY_RECEIPTS, scan_complete=end_observed)
+        if end_observed and len(seen) == 1:
+            if awaiting_confirmation and new_events == 0:
+                # The window is closed: the re-read after the poll delivered nothing new.
+                line = next(iter(seen))
+                try:
+                    verify_receipt(decode_receipt_line(line), expectation=expectation)
+                except ReceiptError as error:
+                    return finish(
+                        CollectionOutcome.RECEIPT_REJECTED,
+                        scan_complete=True,
+                        rejection=error.defect,
+                        rejected_bytes=len(line.encode("utf-8", "surrogatepass")),
+                    )
+                return finish(CollectionOutcome.COLLECTED, scan_complete=True, line=line)
+            awaiting_confirmation = True
+        else:
+            awaiting_confirmation = False
+        # The next request needs budget for a poll interval when the end was observed
+        # (delivery lag), and none when the pass ended on its page bound (more is there).
+        wait = COLLECT_POLL_SECONDS if end_observed or stream_absent else 0.0
+        if bound_reached() or elapsed() + wait > COLLECT_CEILING_SECONDS:
+            if seen:
+                return finish(CollectionOutcome.SCAN_INCOMPLETE, scan_complete=False)
             return finish(
                 CollectionOutcome.STREAM_NOT_FOUND_WITHIN_BUDGET
                 if stream_absent
-                else CollectionOutcome.NO_RECEIPT_WITHIN_BUDGET
+                else CollectionOutcome.NO_RECEIPT_WITHIN_BUDGET,
+                scan_complete=False,
             )
-        sleep(COLLECT_POLL_SECONDS)
+        if wait:
+            sleep(wait)
+
+
+# ---------------------------------------------------------------------------
+# The collection record: one closed parser, one cache-admission rule
+# ---------------------------------------------------------------------------
+
+
+class CollectionRecordDefect(StrEnum):
+    """Why a collection record, or the set of records about one launch, is refused."""
+
+    RECORD_MALFORMED = "RECORD_MALFORMED"
+    LAUNCH_MISMATCH = "LAUNCH_MISMATCH"
+    DESTINATION_MISMATCH = "DESTINATION_MISMATCH"
+    RECEIPT_UNVERIFIABLE = "RECEIPT_UNVERIFIABLE"
+    CONTRADICTORY_RECORDS = "CONTRADICTORY_RECORDS"
+
+
+class CollectionRecordError(ValueError):
+    def __init__(self, defect: CollectionRecordDefect) -> None:
+        super().__init__(defect.value)
+        self.defect = defect
+
+
+_RECORD_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "contract_id",
+        "identity",
+        "launch_record_sha256",
+        "log_group",
+        "log_stream",
+        "outcome",
+        "requests",
+        "pages",
+        "events_scanned",
+        "distinct_receipt_lines",
+        "scan_complete",
+        "receipt_line",
+        "rejection",
+        "rejected_receipt_bytes",
+        "started_at",
+        "finished_at",
+        "elapsed_ms",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CollectionRecord:
+    """One collection record as parsed: closed fields, bound to a launch and a stream."""
+
+    identity: str
+    launch_record_sha256: str
+    log_group: str
+    log_stream: str
+    outcome: CollectionOutcome
+    requests: int
+    pages: int
+    events_scanned: int
+    distinct_receipt_lines: int
+    scan_complete: bool
+    receipt_line: str | None
+    rejection: ReceiptDefect | None
+    rejected_receipt_bytes: int | None
+    started_at: datetime
+    finished_at: datetime
+    elapsed_ms: int
+
+    def __repr__(self) -> str:
+        return f"CollectionRecord(outcome={self.outcome.value!r})"
+
+
+def _refuse(defect: CollectionRecordDefect) -> CollectionRecordError:
+    return CollectionRecordError(defect)
+
+
+def _count(value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    return value
+
+
+def _instant(value: object) -> datetime:
+    text = exact_str(value)
+    if text is None:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED) from None
+    if parsed.tzinfo is None:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    return parsed
+
+
+def is_collection_record(raw: object) -> bool:
+    """Whether a decoded document claims to be a collection record (contract id only)."""
+    return type(raw) is dict and raw.get("contract_id") == COLLECTION_CONTRACT_ID
+
+
+def parse_collection_record(raw: object) -> CollectionRecord:
+    """The one closed reading of a collection record, or ``CollectionRecordError``.
+
+    Bytes are decoded under the record ceiling; a document must carry exactly the
+    contract's fields with their exact types; a kept line exists exactly for ``COLLECTED``
+    and must decode as the closed receipt document (its binding is the admission rule's);
+    a rejection exists exactly for ``RECEIPT_REJECTED`` and names a closed defect; a
+    complete scan is claimed exactly where the contract allows one.
+    """
+    document: Any = raw
+    if isinstance(raw, bytes | bytearray):
+        try:
+            document = decode_document(bytes(raw), max_bytes=MAX_COLLECTION_RECORD_BYTES)
+        except Exception:
+            raise _refuse(CollectionRecordDefect.RECORD_MALFORMED) from None
+    if type(document) is not dict or set(document) != _RECORD_FIELDS:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if document["contract_id"] != COLLECTION_CONTRACT_ID:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    identity = exact_str(document["identity"])
+    digest = exact_str(document["launch_record_sha256"])
+    group = exact_str(document["log_group"])
+    stream = exact_str(document["log_stream"])
+    outcome_text = exact_str(document["outcome"])
+    if (
+        not identity
+        or digest is None
+        or _SHA256_RE.fullmatch(digest) is None
+        or group is None
+        or LOG_GROUP_RE.fullmatch(group) is None
+        or stream is None
+        or _LOG_STREAM_RE.fullmatch(stream) is None
+        or outcome_text is None
+        or outcome_text not in CollectionOutcome.__members__.values()
+    ):
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    outcome = CollectionOutcome(outcome_text)
+    if type(document["scan_complete"]) is not bool:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    scan_complete: bool = document["scan_complete"]
+    line = document["receipt_line"]
+    rejection_text = document["rejection"]
+    rejected_bytes = document["rejected_receipt_bytes"]
+    collected = outcome is CollectionOutcome.COLLECTED
+    rejected = outcome is CollectionOutcome.RECEIPT_REJECTED
+    if collected != (line is not None) or rejected != (rejection_text is not None):
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if rejected != (rejected_bytes is not None):
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if (collected or rejected) and not scan_complete:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if outcome is CollectionOutcome.SCAN_INCOMPLETE and scan_complete:
+        raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+    if line is not None:
+        if exact_str(line) is None:
+            raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+        try:
+            decode_receipt_line(line)
+        except ReceiptError:
+            raise _refuse(CollectionRecordDefect.RECORD_MALFORMED) from None
+    rejection: ReceiptDefect | None = None
+    if rejection_text is not None:
+        text = exact_str(rejection_text)
+        if text is None or text not in ReceiptDefect.__members__.values():
+            raise _refuse(CollectionRecordDefect.RECORD_MALFORMED)
+        rejection = ReceiptDefect(text)
+        _count(rejected_bytes)
+    return CollectionRecord(
+        identity=identity,
+        launch_record_sha256=digest,
+        log_group=group,
+        log_stream=stream,
+        outcome=outcome,
+        requests=_count(document["requests"]),
+        pages=_count(document["pages"]),
+        events_scanned=_count(document["events_scanned"]),
+        distinct_receipt_lines=_count(document["distinct_receipt_lines"]),
+        scan_complete=scan_complete,
+        receipt_line=line,
+        rejection=rejection,
+        rejected_receipt_bytes=rejected_bytes,
+        started_at=_instant(document["started_at"]),
+        finished_at=_instant(document["finished_at"]),
+        elapsed_ms=_count(document["elapsed_ms"]),
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CollectionAdmission:
+    """What the records about one launch establish: the one verified line to reuse (or
+    none), and every admitted record, oldest window first."""
+
+    reusable_line: str | None
+    records: tuple[CollectionRecord, ...]
+
+    @property
+    def attempts(self) -> int:
+        return len(self.records)
+
+    def __repr__(self) -> str:
+        reusable = self.reusable_line is not None
+        return f"CollectionAdmission(attempts={self.attempts}, reusable={reusable})"
+
+
+def admit_collection_records(
+    payloads: Iterable[bytes],
+    *,
+    identity: str,
+    launch_record_sha256: str,
+    destination: LogDestination,
+    task_id: str,
+    expectation: ReceiptExpectation,
+) -> CollectionAdmission:
+    """The one cache-admission rule both tools apply over every ``receipt-collection`` file.
+
+    A payload that is not a collection record about this identity is not this launch's
+    evidence and is ignored (another launch's, or not a record). A record about this
+    identity must parse closed (``RECORD_MALFORMED``), name this launch record's digest
+    (``LAUNCH_MISMATCH``) and this launch's derived group and stream
+    (``DESTINATION_MISMATCH``); a kept line must verify against the expectation
+    (``RECEIPT_UNVERIFIABLE``); two different kept lines are ``CONTRADICTORY_RECORDS``.
+    Nothing is chosen by filename order: every record is read, and the reusable line is
+    the one line every ``COLLECTED`` record agrees on. Rejected, exhausted, incomplete and
+    contradictory attempts are history that never blocks a new collection.
+    """
+    stream = log_stream_name(destination, task_id)
+    records: list[CollectionRecord] = []
+    for payload in payloads:
+        try:
+            document = decode_document(payload, max_bytes=MAX_COLLECTION_RECORD_BYTES)
+        except Exception:  # noqa: S112 - undecodable: not a record about this launch
+            continue
+        if not is_collection_record(document) or document.get("identity") != identity:
+            continue
+        record = parse_collection_record(document)
+        if record.launch_record_sha256 != launch_record_sha256:
+            raise _refuse(CollectionRecordDefect.LAUNCH_MISMATCH)
+        if record.log_group != destination.log_group or record.log_stream != stream:
+            raise _refuse(CollectionRecordDefect.DESTINATION_MISMATCH)
+        records.append(record)
+    records.sort(key=lambda r: (r.started_at, r.finished_at))
+    kept: dict[str, None] = {}
+    for record in records:
+        if record.receipt_line is None:
+            continue
+        try:
+            verify_receipt(decode_receipt_line(record.receipt_line), expectation=expectation)
+        except ReceiptError:
+            raise _refuse(CollectionRecordDefect.RECEIPT_UNVERIFIABLE) from None
+        kept.setdefault(record.receipt_line, None)
+    if len(kept) > 1:
+        raise _refuse(CollectionRecordDefect.CONTRADICTORY_RECORDS)
+    return CollectionAdmission(
+        reusable_line=next(iter(kept)) if kept else None, records=tuple(records)
+    )
 
 
 class SdkLogsClient:
@@ -421,17 +819,25 @@ __all__ = [
     "LOGS_RETRY_MODE",
     "LOGS_TOTAL_MAX_ATTEMPTS",
     "LOG_GROUP_RE",
+    "MAX_COLLECTION_RECORD_BYTES",
     "STREAM_PREFIX_OF_ENTRY",
     "CollectedReceipt",
+    "CollectionAdmission",
     "CollectionOutcome",
+    "CollectionRecord",
+    "CollectionRecordDefect",
+    "CollectionRecordError",
     "CollectorDefect",
     "CollectorError",
     "LogDestination",
     "LogPage",
     "LogsClient",
     "SdkLogsClient",
+    "admit_collection_records",
     "collect_receipt",
     "destination_for",
+    "is_collection_record",
     "log_stream_name",
+    "parse_collection_record",
     "parse_log_destination",
 ]

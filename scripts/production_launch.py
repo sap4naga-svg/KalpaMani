@@ -114,6 +114,7 @@ EXIT_RECOVERED: Final = 0
 EXIT_VERDICT_RECORDED: Final = 0
 EXIT_REFUSED_LEGACY_RESERVATIONS: Final = 15
 EXIT_COLLECTION_NOT_COLLECTED: Final = 16
+EXIT_REFUSED_COLLECTION_RECORDS: Final = 17
 
 #: Allowlisted output sentences. Nothing else reaches stdout.
 SENTENCES: Final[dict[str, str]] = {
@@ -138,8 +139,14 @@ SENTENCES: Final[dict[str, str]] = {
     ),
     "row_completed": "ledger row completed from the verified receipt",
     "collection_not_collected": (
-        "receipt not collected within the budget: the collection is recorded, the row stays "
-        "provisional, and nothing is established about whether a receipt exists"
+        "receipt not collected: the collection is recorded (outcome and counts, never log "
+        "content), the row stays provisional, nothing is established about whether a "
+        "receipt exists, and the next collection reads the stream again"
+    ),
+    "refused_collection_records": (
+        "launch refused: the recorded collections of this launch are malformed, bound to "
+        "another launch or stream, carry an unverifiable line, or contradict each other; "
+        "nothing is chosen between them"
     ),
     "refused_destination": (
         "launch refused: the registration names no log destination for this entry, or not "
@@ -981,17 +988,23 @@ def collect_receipt_lines(
     The launch record (bound to its reservation), the registered destination held to the
     record's entry, the launcher identity proven through the accepted human bootstrap, then
     one bounded collection under that profile -- recorded as a collection record whatever
-    its outcome. A collection already recorded as COLLECTED for this launch is reused and
-    the stream is not read again (repeatable completion); anything short of COLLECTED
-    leaves the row provisional and establishes nothing about whether a receipt exists.
+    its outcome, the line kept only once it verified against this launch record. The
+    collection is refused until the launcher observed the task's terminal state (a
+    stopped task writes nothing more; delivery lag is the collector's stated limit).
+    Every collection record about this launch is admitted through the collector's one
+    rule (:func:`admit_collection_records`): a verified COLLECTED line is reused and the
+    stream is not read again (repeatable completion); a rejected, exhausted, incomplete
+    or contradictory attempt never blocks, and the stream is read again; malformed,
+    misbound, unverifiable or mutually contradictory records refuse, and nothing is
+    chosen between them. Anything short of COLLECTED leaves the row provisional and
+    establishes nothing about whether a receipt exists.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
-    from kalpamani.data.production.sharadar.documents import decode_document
     from kalpamani.data.production.sharadar.launch_store import StoreError
     from kalpamani.data.production.sharadar.receipt_collector import (
-        COLLECTION_CONTRACT_ID,
-        CollectionOutcome,
+        CollectionRecordError,
         SdkLogsClient,
+        admit_collection_records,
         collect_receipt,
     )
     from kalpamani.data.production.sharadar.runner import HumanBootstrapOutcome, human_bootstrap
@@ -1013,25 +1026,33 @@ def collect_receipt_lines(
     ):
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     _bound_reservation(store, record)
+    if record.observed_exit_code is None:
+        # No collection before the launcher observed the terminal state.
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     destination = _registered_destination(arguments, record)
     from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 
     record_digest = sha256_hex(canonical_bytes(record.document()))
-    # A collection already recorded for this launch: reuse it, read nothing again.
-    for path in sorted(arguments.records_dir.glob("receipt-collection-*.json")):
-        try:
-            document = decode_document(path.read_bytes(), max_bytes=lr.MAX_RECORD_BYTES)
-        except Exception:  # noqa: S112 - an unreadable record is not this launch's evidence
-            continue
-        if (
-            type(document) is dict
-            and document.get("contract_id") == COLLECTION_CONTRACT_ID
-            and document.get("identity") == record.identity
-            and document.get("launch_record_sha256") == record_digest
-            and document.get("outcome") == CollectionOutcome.COLLECTED.value
-            and type(document.get("receipt_line")) is str
-        ):
-            return str(document["receipt_line"])
+    expectation = record.expectation()
+    # Every collection record about this launch, under the collector's one rule.
+    try:
+        admission = admit_collection_records(
+            (
+                path.read_bytes()
+                for path in sorted(arguments.records_dir.glob("receipt-collection-*.json"))
+            ),
+            identity=record.identity,
+            launch_record_sha256=record_digest,
+            destination=destination,
+            task_id=record.task_id,
+            expectation=expectation,
+        )
+    except (CollectionRecordError, OSError):
+        raise LaunchRefusalError(
+            "refused_collection_records", EXIT_REFUSED_COLLECTION_RECORDS
+        ) from None
+    if admission.reusable_line is not None:
+        return admission.reusable_line
     constants = constants_for(record.actor)
     bootstrap = human_bootstrap(
         actor=record.actor,
@@ -1050,6 +1071,7 @@ def collect_receipt_lines(
     collected = collect_receipt(
         destination=destination,
         task_id=record.task_id,
+        expectation=expectation,
         client=client,
         now=now,
         monotonic=monotonic,
@@ -1063,13 +1085,7 @@ def collect_receipt_lines(
         )
     except StoreError:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-    _emit(
-        [
-            f"collection={collected.outcome.value} requests={collected.requests} "
-            f"pages={collected.pages} events_scanned={collected.events_scanned} "
-            f"distinct_receipt_lines={collected.distinct_receipt_lines}"
-        ]
-    )
+    _emit([collected.summary()])
     if collected.receipt_line is None:
         raise LaunchRefusalError("collection_not_collected", EXIT_COLLECTION_NOT_COLLECTED)
     return collected.receipt_line
