@@ -715,11 +715,21 @@ def _rule_bootstrap(model: Model) -> list[str]:
             "BuildHumanGeneratesTheInputDataKey",
             "AcquireLauncherGeneratesTheReleaseDataKey",
             "BuildLauncherGeneratesTheReleaseDataKey",
+            # Proposed ADR-0050: the deletion rehearsal's two statements, each a dynamic
+            # statement gated on `local.deletion_rehearsal_open` (false by default), so
+            # the accepted key policy is exactly the seven above until D-1 is accepted.
+            "DeletionRoleDecryptsTheRehearsalParameters",
+            "DeletionRehearsalLauncherGeneratesTheInputAndReleaseDataKeys",
         ]
     )
     if sids != expected:
         found.append(f"key policy statements must be exactly {expected}, found {sids}")
     for s in key:
+        if (
+            s.sid.startswith("Deletion")
+            and s.dynamic_gate != "local.deletion_rehearsal_open ? [1] : []"
+        ):
+            found.append(f"key policy {s.sid} must be gated on the rehearsal being open")
         if s.effect != "Allow":
             found.append(f"key policy {s.sid} must be an Allow")
         if s.sid != "AdministerTheKeyAndMaterializeBindings" and not _has_condition(

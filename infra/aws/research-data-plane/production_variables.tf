@@ -157,13 +157,36 @@ variable "production_image_digests" {
   # established, or rotated, with or without verification images. No other key exists.
   # Proposed ADR-0048: two more OPTIONAL images, keyed `acquisition_probe` and
   # `build_probe` -- the permission-probe families, declared only when their digest is
-  # supplied, exactly like the verification families. No other key exists.
+  # supplied, exactly like the verification families.
+  # Proposed ADR-0050: one more OPTIONAL image, keyed `deletion_rehearsal` -- the
+  # deletion rehearsal family (production_deletion_rehearsal.tf), declared only when
+  # its digest is supplied AND `deletion_rehearsal_open` is true. No other key exists.
   validation {
     condition = alltrue([
-      for key in keys(var.production_image_digests) : contains(["acquisition", "build", "acquisition_verify", "build_verify", "acquisition_probe", "build_probe"], key)
+      for key in keys(var.production_image_digests) : contains(["acquisition", "build", "acquisition_verify", "build_verify", "acquisition_probe", "build_probe", "deletion_rehearsal"], key)
     ])
-    error_message = "production_image_digests keys must be among acquisition, build, acquisition_verify, build_verify, acquisition_probe, build_probe."
+    error_message = "production_image_digests keys must be among acquisition, build, acquisition_verify, build_verify, acquisition_probe, build_probe, deletion_rehearsal."
   }
+}
+
+variable "deletion_rehearsal_open" {
+  description = <<-EOT
+    Proposed ADR-0050 Decision D-1: whether the deletion rehearsal resources
+    (production_deletion_rehearsal.tf) are declared -- the rehearsal task
+    definition running as the actual deletion role, the deletion role's three
+    exact parameter reads, the rehearsal runtime binding, the
+    `KalpaManiDeletionRehearse` launcher permission set and (at stage b) its one
+    assignment.
+
+    FALSE BY DEFAULT, and meaningless at stage `none`. Setting it true is the
+    owner's written acceptance of ADR-0050 D-1, supplied in the git-ignored
+    `.tfvars` under the rehearsal's own apply authorization; it is never a
+    default, and a true value with no `deletion_rehearsal` image digest still
+    declares nothing. Accepting the decision opens the code path separately
+    (`REHEARSAL_PATH_OPEN`); this variable opens only the declaration.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "production_binding_provenance" {

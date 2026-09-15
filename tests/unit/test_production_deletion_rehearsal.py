@@ -105,7 +105,9 @@ class TestClosed:
         # The two subcells stay BLOCKED in the derived matrix whatever the records say.
         state = pc.derive_subcell(pc.subcell("R8-GET"), t.evidence(), r1_passed={})
         assert state.status is pc.SubcellStatus.BLOCKED
-        # The resources the decision would declare are named exactly, and none exists.
+        # The resources the decision would declare are named exactly; they are DECLARED
+        # inert (proposed ADR-0050) in exactly one file, behind a variable whose default
+        # is false, and none exists.
         assert dr.REHEARSAL_FAMILY == "kalpamani-deletion-rehearsal"
         assert dr.REHEARSAL_LAUNCHER_PERMISSION_SET == "KalpaManiDeletionRehearse"
         assert dr.REHEARSAL_STREAM_PREFIX == "production-" + dr.REHEARSAL_CONTAINER
@@ -120,8 +122,16 @@ class TestClosed:
         from kalpamani.data.production.sharadar.entry import TaskEntry
 
         assert dr.REHEARSAL_ENTRY not in {e.value for e in TaskEntry}
-        tf = (Path(__file__).resolve().parents[2] / "infra/aws/research-data-plane").glob("*.tf")
-        assert not any(dr.REHEARSAL_FAMILY in p.read_text(encoding="utf-8") for p in tf)
+        infra = Path(__file__).resolve().parents[2] / "infra/aws/research-data-plane"
+        naming = sorted(
+            p.name
+            for p in infra.glob("*.tf")
+            if dr.REHEARSAL_FAMILY in p.read_text(encoding="utf-8")
+        )
+        assert naming == ["production_deletion_rehearsal.tf"]
+        variables = (infra / "production_variables.tf").read_text(encoding="utf-8")
+        assert 'variable "deletion_rehearsal_open"' in variables
+        assert "default     = false" in variables.split('variable "deletion_rehearsal_open"')[1]
 
 
 class TestTarget:

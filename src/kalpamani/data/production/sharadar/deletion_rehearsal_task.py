@@ -172,7 +172,7 @@ _BINDING_FIELDS: Final[frozenset[str]] = frozenset(
         "provenance",
     }
 )
-REHEARSAL_BINDING_KIND: Final = "deletion_rehearsal"
+REHEARSAL_BINDING_KIND: Final = "kalpamani-deletion-rehearsal-runtime"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
