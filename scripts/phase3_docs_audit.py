@@ -835,6 +835,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0045", "PR #104 merged"),
     # ADR-0046 merged as PR #105 on 2026-09-14: the materializer, the R-3 tool, the cell runner.
     ("ADR-0046", "PR #105 merged"),
+    # ADR-0047 merged as PR #106 on 2026-09-15: the negative R-1 launches and the R-4..R-9
+    # permission subcells.
+    ("ADR-0047", "PR #106 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull
@@ -5091,7 +5094,7 @@ def _sdk_client_construction_sites() -> list[Path]:
         # replaced by a counting fake, to observe the R-3 adapter's one-attempt budget
         # and its classification at the wire (PR #105); it sends nothing.
         REPO_ROOT / "tests" / "unit" / "test_production_r3_verification.py",
-        # The same for the permission-subcell adapter (proposed ADR-0047).
+        # The same for the permission-subcell adapter (ADR-0047).
         REPO_ROOT / "tests" / "unit" / "test_production_permission_cells.py",
     }
     sites: list[Path] = []
@@ -6508,7 +6511,7 @@ ADR_0018_ASSESS_REFUSED: Final[tuple[tuple[str, str], ...]] = (
 #: verification tool accepted with ADR-0046, which builds one S3 client under the
 #: foundation control profile only inside its authorized branch after the identity
 #: gate and the environment binding, and the R-4..R-9 permission-subcell tool
-#: proposed with ADR-0047, which builds one principal's clients only inside its
+#: accepted with ADR-0047, which builds one principal's clients only inside its
 #: authorized branch after the pinned profile, the identity proof, the bindings and
 #: the attempt record; no module under ``src/`` appears here, which is what keeps the
 #: data platform free of ambient credential discovery.
@@ -19993,7 +19996,7 @@ def main() -> int:
         # ADR-0015 authorized one; ADR-0017 a second; the ADR-0018 implementation
         # candidate adds its two operator entry points; ADR-0043 the task image
         # entrypoint; ADR-0045 the owner-side launch tool; ADR-0046 the R-3
-        # verification tool; ADR-0047 proposes the permission-subcell tool. All eight
+        # verification tool; ADR-0047 the permission-subcell tool. All eight
         # are named, so a ninth arriving anywhere fails -- a count could drift, a
         # list cannot.
         sorted(path.name for path in _sdk_client_construction_sites()) == list(SDK_CONSTRUCTORS),

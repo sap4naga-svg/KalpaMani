@@ -38,6 +38,14 @@ locals {
   # exit 18), constructing no secrets client, no transport and no S3 client.
   production_acquire_verify_family = "kalpamani-production-acquire-verify"
   production_build_verify_family   = "kalpamani-research-build-verify"
+  # Proposed ADR-0048 (not accepted): the permission-probe families. The same actor,
+  # the same task role, the same execution role, the same placement, the same read-only
+  # root and /work tmpfs -- the verification image under a family whose entry composes
+  # the accepted bootstrap and then issues exactly one catalogued permission operation
+  # under the task role (or holds for the launcher's ExecuteCommand refusal check),
+  # constructing the one client its operation names and no transport.
+  production_acquire_probe_family = "kalpamani-production-acquire-probe"
+  production_build_probe_family   = "kalpamani-research-build-probe"
 
   # Fargate task size. 1 vCPU / 2 GiB covers 48 sequential provider requests and
   # a bounded build; raising it is a configuration change, not an ADR change.
@@ -157,6 +165,64 @@ locals {
   }
 }
 
+# The permission-probe containers (proposed ADR-0048): the verification container's
+# shape with the probe command; declared only with their own digest below.
+locals {
+  production_acquire_probe_container = {
+    name      = "acquire-probe"
+    image     = "${local.production_image_repository}@${lookup(var.production_image_digests, "acquisition_probe", "sha256:unset")}"
+    essential = true
+    command   = ["kalpamani-production-acquire-probe"]
+    cpu       = 1024
+    memory    = 2048
+    user      = "10001:10001"
+    linuxParameters = {
+      initProcessEnabled = true
+      tmpfs = [{
+        containerPath = "/work"
+        size          = 512
+        mountOptions  = ["rw", "noexec", "nosuid"]
+      }]
+    }
+    readonlyRootFilesystem = true
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.research.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "production-acquire-probe"
+      }
+    }
+  }
+
+  production_build_probe_container = {
+    name      = "build-probe"
+    image     = "${local.production_image_repository}@${lookup(var.production_image_digests, "build_probe", "sha256:unset")}"
+    essential = true
+    command   = ["kalpamani-research-build-probe"]
+    cpu       = 1024
+    memory    = 2048
+    user      = "10001:10001"
+    linuxParameters = {
+      initProcessEnabled = true
+      tmpfs = [{
+        containerPath = "/work"
+        size          = 1024
+        mountOptions  = ["rw", "noexec", "nosuid"]
+      }]
+    }
+    readonlyRootFilesystem = true
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.research.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "production-build-probe"
+      }
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "production_acquire" {
   count = local.production_count_a
 
@@ -250,5 +316,55 @@ resource "aws_ecs_task_definition" "production_build_verify" {
 
   tags = {
     Purpose = "production-build-verification"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Permission-probe families (proposed ADR-0048; declared only with their own digest)
+# ---------------------------------------------------------------------------
+
+resource "aws_ecs_task_definition" "production_acquire_probe" {
+  count = local.production_acquire_probe_count
+
+  family                   = local.production_acquire_probe_family
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = local.production_task_cpu
+  memory                   = local.production_task_memory
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.production_acquire_task[0].arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([local.production_acquire_probe_container])
+
+  tags = {
+    Purpose = "production-acquisition-permission-probe"
+  }
+}
+
+resource "aws_ecs_task_definition" "production_build_probe" {
+  count = local.production_build_probe_count
+
+  family                   = local.production_build_probe_family
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = local.production_task_cpu
+  memory                   = local.production_task_memory
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.production_build_task[0].arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([local.production_build_probe_container])
+
+  tags = {
+    Purpose = "production-build-permission-probe"
   }
 }

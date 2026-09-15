@@ -146,7 +146,7 @@ class CellDefinition:
     authorization: str
     execution: str
     #: For a launch cell, the release mode the prepared specification must carry
-    #: (proposed ADR-0047); ``None`` for a cell that is not a launch.
+    #: (ADR-0047); ``None`` for a cell that is not a launch.
     release_mode: ReleaseMode | None = None
     #: For a negative launch cell, the one task outcome that passes it.
     expected_outcome: TaskOutcome | None = None
@@ -177,13 +177,13 @@ _LAUNCH_TOOL: Final = (
 )
 _NEGATIVE: Final = (
     "scripts/production_verification_cells.py --prepare-cell / --execute-cell / --complete-cell: "
-    "the launch tool once under --release-mode withheld|mismatched (proposed ADR-0047); the "
+    "the launch tool once under --release-mode withheld|mismatched (ADR-0047); the "
     "expected refusal, and only it, passes -- receipt-verified, bound to its reservation, "
     "record and terminal state, with zero data-plane operations"
 )
 _OWNER_RUN: Final = (
     "scripts/production_permission_cells.py --execute-subcell <id> per subcell (one operation, "
-    "one principal, one attempt; proposed ADR-0047) and --cleanup afterwards; the cell passes "
+    "one principal, one attempt; ADR-0047) and --cleanup afterwards; the cell passes "
     "only when every subcell is matched at runtime under the current binding and every "
     "created object is confirmed removed; a blocked subcell (task role, deletion role) blocks "
     "the cell, and simulation never passes one"
@@ -548,7 +548,7 @@ class NegativeLaunchEvidence:
     """What a negative cell's verified receipt established, recorded closed.
 
     Written by the cell runner's ``--complete-cell`` after the launch tool verified the
-    receipt against the launch record (proposed ADR-0047): the cell, the launch it
+    receipt against the launch record (ADR-0047): the cell, the launch it
     belongs to (identity and specification digest), the release mode the specification
     carried, the task's own outcome token, the data-plane counts the task measured
     (``None`` when it measured none -- uncertainty, never zero), and whether the task
@@ -1277,6 +1277,9 @@ _SUBCELL_PRECEDENCE: Final[tuple[tuple[SubcellStatus, CellStatus], ...]] = (
     (SubcellStatus.HISTORICAL, CellStatus.HISTORICAL),
     (SubcellStatus.CLEANUP_UNRESOLVED, CellStatus.INCONCLUSIVE),
     (SubcellStatus.UNDECIDED, CellStatus.INCONCLUSIVE),
+    # A launched probe whose receipt is not yet verified (proposed ADR-0048): the cell
+    # is INCONCLUSIVE until the record is completed -- never PASSED on an exit code.
+    (SubcellStatus.AWAITING_RECEIPT, CellStatus.INCONCLUSIVE),
     (SubcellStatus.AWAITING_R1, CellStatus.UNEXECUTED),
     (SubcellStatus.UNEXECUTED, CellStatus.UNEXECUTED),
 )
@@ -1288,8 +1291,8 @@ def _permission_state(
     """A permission cell from its subcells: PASSED only when every subcell is.
 
     Every other status is decided by precedence over the subcells' statuses -- a
-    failed subcell fails the cell whatever the others read; a blocked subcell (a task
-    role with no probe entry, the deletion role with no execution path) blocks it;
+    failed subcell fails the cell whatever the others read; a blocked subcell (the
+    deletion role with no execution path) blocks it;
     unresolved cleanup or an undecided answer leaves it INCONCLUSIVE. Empty, partial,
     simulated or blocked coverage never passes.
     """

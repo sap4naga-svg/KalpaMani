@@ -54,6 +54,8 @@ from kalpamani.data.production.sharadar.entry import (
     BOOTSTRAP_OUTCOME,
     ENTRY_ACTOR,
     EXIT_STATUS,
+    PROBE_ENTRIES,
+    PROBE_OUTCOMES,
     VERIFICATION_ENTRIES,
     TaskEntry,
     TaskOutcome,
@@ -72,6 +74,10 @@ from kalpamani.data.production.sharadar.outcomes import (
     OperationCounts,
     RunnerOutcome,
 )
+from kalpamani.data.production.sharadar.permission_probe import (
+    PermissionProbeObservation,
+    parse_permission_probe_observation,
+)
 from kalpamani.data.production.sharadar.probe import ProbeObservation, parse_probe_observation
 from kalpamani.data.production.sharadar.release import TASK_DEFINITION_ARN_RE
 from kalpamani.data.production.sharadar.schema_observation import (
@@ -83,8 +89,11 @@ from kalpamani.data.production.sharadar.schema_observation import (
 #: verification probe observation and the Route B per-dataset schema observation --
 #: each carried exactly by the one outcome that produces it, and null everywhere else.
 #: A v1 receipt is refused (SCHEMA_VERSION_UNKNOWN); no v1 receipt was ever emitted by a task.
-RECEIPT_CONTRACT_ID: Final = "kalpamani-task-receipt/v2"
-RECEIPT_SCHEMA_VERSION: Final = 2
+#: Version 3 (proposed ADR-0048): one more closed, nullable block -- ``permission`` --
+#: carried exactly by a permission-probe entry's PROBE_* receipt. A v2 validator refuses
+#: the field; the collector and the workstation read v3 alone.
+RECEIPT_CONTRACT_ID: Final = "kalpamani-task-receipt/v3"
+RECEIPT_SCHEMA_VERSION: Final = 3
 #: The prefix of the one machine-readable line. Everything after it is the document.
 RECEIPT_LINE_PREFIX: Final = "receipt: "
 MAX_RECEIPT_BYTES: Final = 8 * 1024
@@ -106,6 +115,7 @@ _FIELDS: Final[frozenset[str]] = frozenset(
         "binding_digest",
         "probe",
         "schema_observation",
+        "permission",
         "receipt_digest",
     }
 )
@@ -141,6 +151,13 @@ LEDGER_OUTCOME_OF: Final[dict[TaskOutcome, str | None]] = {
     TaskOutcome.MANIFEST_STATE_UNKNOWN: None,
     TaskOutcome.MANIFEST_REFUSED: "HALTED",
     TaskOutcome.UNCLASSIFIED: None,
+    # A probe task issued its one operation or held (proposed ADR-0048): its identity
+    # was consumed by a probe launch; the row says PROBED and never COMPLETED or
+    # VERIFIED. What the operation answered is the permission record's, not the row's.
+    TaskOutcome.PROBE_MATCHED: "PROBED",
+    TaskOutcome.PROBE_INVERTED: "PROBED",
+    TaskOutcome.PROBE_UNDECIDED: "PROBED",
+    TaskOutcome.PROBE_HELD: "PROBED",
 }
 
 
@@ -280,6 +297,7 @@ def receipt_document(receipt: TaskReceipt) -> dict[str, Any]:
         "schema_observation": (
             None if receipt.schema_observation is None else receipt.schema_observation.document()
         ),
+        "permission": None if receipt.permission is None else receipt.permission.document(),
     }
     document["receipt_digest"] = sha256_hex(canonical_bytes(document))
     return document
@@ -369,6 +387,9 @@ class VerifiedReceipt:
     probe: ProbeObservation | None = None
     #: The Route B schema observation -- evidence for owner review, never an accepted set.
     schema_observation: SchemaObservation | None = None
+    #: The permission-probe observation (proposed ADR-0048) -- what the probe's one
+    #: operation answered; the workstation's permission record is completed from it.
+    permission: PermissionProbeObservation | None = None
 
     @property
     def counts_observed(self) -> bool:
@@ -501,6 +522,15 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
         raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
     if outcome is TaskOutcome.COMPLETED and entry in VERIFICATION_ENTRIES:
         raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+    # A probe entry never completes a run and verifies no bootstrap; only a probe entry
+    # reaches a probe outcome (proposed ADR-0048).
+    if entry in PROBE_ENTRIES and outcome in (
+        TaskOutcome.COMPLETED,
+        TaskOutcome.VERIFIED_BOOTSTRAP,
+    ):
+        raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+    if outcome in PROBE_OUTCOMES and entry not in PROBE_ENTRIES:
+        raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
 
     observed = document["counts_observed"]
     if type(observed) is not bool:
@@ -522,8 +552,11 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
         counts = OperationCounts(**raw_counts)
         if runner is not RunnerOutcome.RELEASED and counts.data_plane_operations != 0:
             raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
-        # A verification task performs no data-plane operation, released or not.
+        # A verification task performs no data-plane operation, released or not; a
+        # probe task counts its one operation in its observation, never here.
         if entry in VERIFICATION_ENTRIES and counts.data_plane_operations != 0:
+            raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
+        if entry in PROBE_ENTRIES and counts.data_plane_operations != 0:
             raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
     elif raw_counts is not None:
         raise _refuse(ReceiptDefect.COUNTS_CONTRADICT_OBSERVATION)
@@ -576,6 +609,23 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
         except (TypeError, ValueError):
             raise _refuse(ReceiptDefect.FIELD_MALFORMED) from None
 
+    raw_permission = document["permission"]
+    permission: PermissionProbeObservation | None = None
+    if (raw_permission is not None) != (outcome in PROBE_OUTCOMES):
+        raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+    if raw_permission is not None:
+        try:
+            permission = parse_permission_probe_observation(raw_permission)
+        except (TypeError, ValueError):
+            raise _refuse(ReceiptDefect.FIELD_MALFORMED) from None
+        held = outcome is TaskOutcome.PROBE_HELD
+        if held != (permission.held_seconds > 0 and permission.operations == 0):
+            raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+        if not held and permission.held_seconds != 0:
+            raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+        if not held and permission.outcome.value != outcome.value.removeprefix("PROBE_"):
+            raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
+
     bound = document["binding_digest"]
     released = runner is RunnerOutcome.RELEASED
     if released != (bound is not None):
@@ -605,6 +655,7 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
         released=released,
         probe=probe,
         schema_observation=observation,
+        permission=permission,
     )
 
 

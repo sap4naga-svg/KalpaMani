@@ -99,7 +99,7 @@ LOCK_SUFFIX: Final = ".lock"
 LEGACY_RESERVATIONS_DIRECTORY: Final = "reservations"
 #: How many fresh random names are tried before a record write is refused.
 MAX_NAME_ATTEMPTS: Final = 8
-#: Beside the ledger, the consumed authorizations (proposed ADR-0047): one exclusive file
+#: Beside the ledger, the consumed authorizations (ADR-0047): one exclusive file
 #: per authorization digest, created before the operation it authorizes.
 CONSUMED_SUFFIX: Final = ".consumed"
 
@@ -524,18 +524,25 @@ class LaunchStore:
                 found[digest] = b""
         return found
 
-    def unreconciled(self, ledger: OwnerLedger) -> list[str]:
-        """Identities reserved but absent from the ledger: interrupted work, sorted."""
+    def reservations(self) -> list[Reservation]:
+        """Every reservation beside the ledger, by identity; a malformed one refuses."""
         if not self._reservations.is_dir():
             return []
-        found: list[str] = []
+        found: list[Reservation] = []
         for path in sorted(self._reservations.glob("*.json")):
-            reservation = parse_reservation(path.read_bytes())
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
+            reservation = parse_reservation(raw)
             if reservation.identity != path.stem:
                 raise _refuse(StoreDefect.RESERVATION_MALFORMED)
-            if ledger.row(reservation.identity) is None:
-                found.append(reservation.identity)
+            found.append(reservation)
         return found
+
+    def unreconciled(self, ledger: OwnerLedger) -> list[str]:
+        """Identities reserved but absent from the ledger: interrupted work, sorted."""
+        return [r.identity for r in self.reservations() if ledger.row(r.identity) is None]
 
     # -- records -----------------------------------------------------------------------------
 

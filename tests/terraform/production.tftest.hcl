@@ -224,6 +224,58 @@ run "stage_a_with_verification_digests_declares_both_verification_families" {
   }
 }
 
+run "stage_a_with_probe_digests_declares_both_probe_families" {
+  command = plan
+
+  variables {
+    production_stage                       = "a"
+    identity_center_region                 = "us-east-1"
+    production_acquisition_secret_arn      = "arn:aws:secretsmanager:us-east-1:111111111111:secret:mock-production-secret-AbCdEf"
+    production_apply_principal_arn_pattern = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_MockAdmin_*"
+    production_image_digests = {
+      acquisition       = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      build             = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      acquisition_probe = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      build_probe       = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+    production_binding_provenance = {
+      implementation_commit      = "cccccccccccccccccccccccccccccccccccccccc"
+      implementation_tree        = "dddddddddddddddddddddddddddddddddddddddd"
+      environment_binding_sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+    production_provider_origin_cidrs = ["203.0.113.0/24"]
+  }
+
+  # Proposed ADR-0048: a permission-probe family exists only with its own digest, under
+  # its own closed family name, on the same Fargate shape as its production family;
+  # no verification family is declared without a verification digest, and no
+  # assignment appears at stage a.
+  assert {
+    condition     = length(aws_ecs_task_definition.production_acquire_probe) == 1 && length(aws_ecs_task_definition.production_build_probe) == 1
+    error_message = "with both probe digests both permission-probe families are declared"
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.production_acquire_verify) == 0 && length(aws_ecs_task_definition.production_build_verify) == 0
+    error_message = "probe digests declare no verification family"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.production_acquire_probe[0].family == "kalpamani-production-acquire-probe" && aws_ecs_task_definition.production_build_probe[0].family == "kalpamani-research-build-probe"
+    error_message = "the permission-probe families carry their own closed family names"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.production_acquire_probe[0].cpu == aws_ecs_task_definition.production_acquire[0].cpu && aws_ecs_task_definition.production_build_probe[0].memory == aws_ecs_task_definition.production_build[0].memory && aws_ecs_task_definition.production_build_probe[0].network_mode == aws_ecs_task_definition.production_build[0].network_mode
+    error_message = "a permission-probe family has the same task shape as its production family"
+  }
+
+  assert {
+    condition     = length(aws_ssoadmin_account_assignment.production_acquisition) == 0 && length(aws_ssoadmin_account_assignment.production_acquire_launcher) == 0
+    error_message = "permission-probe families add no assignment at stage a"
+  }
+}
+
 run "an_unknown_image_digest_key_is_refused_by_the_variable" {
   command = plan
 

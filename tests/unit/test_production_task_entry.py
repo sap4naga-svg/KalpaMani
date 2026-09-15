@@ -63,6 +63,7 @@ from kalpamani.data.production.sharadar.build_processing import BuildStatus
 from kalpamani.data.production.sharadar.entry import (
     BOOTSTRAP_OUTCOME,
     EXIT_STATUS,
+    PROBE_OUTCOMES,
     TASK_SENTENCES,
     EntryConfiguration,
     TaskEntry,
@@ -145,6 +146,12 @@ class TestSelectionAndVocabulary:
                 # task stopped at the barrier, and it neither completed nor refused.
                 assert sentence.startswith("verification task ")
                 assert "no processing" in sentence and EXIT_STATUS[outcome] == 18
+                continue
+            if outcome in PROBE_OUTCOMES:
+                # The probe sentences (proposed ADR-0048): a probe issued its one
+                # operation or held; it neither completed nor refused.
+                assert sentence.startswith("permission probe ")
+                assert 41 <= EXIT_STATUS[outcome] <= 44
                 continue
             assert sentence.startswith("production task ")
             if outcome is not TaskOutcome.COMPLETED:

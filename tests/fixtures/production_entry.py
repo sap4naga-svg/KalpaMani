@@ -69,6 +69,19 @@ from kalpamani.data.production.sharadar.inputs import (
     spent_identities_block,
 )
 from kalpamani.data.production.sharadar.metadata import METADATA_URI_ENV_VAR
+from kalpamani.data.production.sharadar.permission_cells import (
+    PRINCIPAL_ACTOR,
+    Operation,
+    PermissionContext,
+    PermissionTargets,
+    Subcell,
+    subcell,
+)
+from kalpamani.data.production.sharadar.permission_probe import (
+    PermissionProbeInput,
+    probe_identity,
+)
+from kalpamani.data.production.sharadar.permission_probe_entry import PermissionProbeFactories
 from kalpamani.data.production.sharadar.plan import plan_digest_for
 from kalpamani.data.production.sharadar.probe import ProbeResult
 from kalpamani.data.production.sharadar.release import build_release_document
@@ -504,6 +517,186 @@ class VerificationHarness:
         )
 
 
+class FakeOperationClient:
+    """A permission-client-shaped fake for the probe task: one scripted answer per call.
+
+    Every operation records its name and arguments; the answers are handed out in
+    order. An exception scripted as an answer is raised.
+    """
+
+    def __init__(self, answers: list[Any] | None = None) -> None:
+        self.answers = list(answers or [])
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _answer(self, name: str, **kwargs: Any) -> Any:
+        self.calls.append((name, kwargs))
+        if not self.answers:
+            raise AssertionError(f"no answer scripted for {name}")
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            return self._answer(name, args=args, **kwargs)
+
+        return call
+
+
+class ProbeHarness:
+    """One permission-probe task (proposed ADR-0048) through the real entry, injected.
+
+    The binding and release are the actor's real contracts; the input is the probe input
+    naming ``subcell_id`` and its resolved target under ``context``; the metadata reports
+    the PROBE family and the release names the probe revision. The one operation client
+    is a scripted fake handed to the entry's ``operation_client`` factory.
+    """
+
+    def __init__(
+        self,
+        *,
+        subcell_id: str,
+        context: PermissionContext,
+        at: datetime = RUN_1_AT,
+        release: bool = True,
+        hold_seconds: int = 0,
+        stamp: str = "20260912T140000Z-abcd",
+        statement_sha256: str = "a1" * 32,
+        attempt_sha256: str = "b2" * 32,
+        target_overrides: dict[str, Any] | None = None,
+        input_overrides: dict[str, Any] | None = None,
+    ) -> None:
+        from fixtures.production_runtime import compiled_probe_task, probe_revision_arn
+
+        cell: Subcell = subcell(subcell_id)
+        actor = PRINCIPAL_ACTOR[cell.principal]
+        assert actor is not None
+        self.cell = cell
+        self.actor = actor
+        self.entry = TaskEntry.ACQUISITION_PROBE if actor is ACQ else TaskEntry.BUILD_PROBE
+        constants = constants_for(actor)
+        self.stamp = stamp
+        self.identity = probe_identity(stamp)
+        target = context.resolve(cell, stamp=stamp, prerequisites={}).document()
+        target.update(target_overrides or {})
+        self.probe_input = PermissionProbeInput(
+            actor=actor,
+            identity=self.identity,
+            subcell_id=subcell_id,
+            statement_sha256=statement_sha256,
+            attempt_sha256=attempt_sha256,
+            stamp=stamp,
+            target=target,
+            hold_seconds=hold_seconds,
+            issued_at=at - timedelta(hours=1),
+            expires_at=at + timedelta(hours=23),
+        )
+        document = self.probe_input.document()
+        document.update(input_overrides or {})
+        self.input_bytes = encode(document)
+        self.ssm = FakeSsm()
+        self.ssm.values[constants.binding_parameter] = encode(binding_document(actor))
+        self.ssm.values[constants.input_parameter] = self.input_bytes
+        if release:
+            self.ssm.values[constants.release_parameter] = build_release_document(
+                actor=actor,
+                task_arn=TASK_ARN,
+                task_definition_arn=probe_revision_arn(actor),
+                image_digest=IMAGE_DIGEST,
+                configuration_digest=CONFIGURATION_DIGEST,
+                identity=self.identity,
+                input_digest=input_digest(self.input_bytes),
+                network_interface_id=INTERFACE_ID,
+                subnet_id=SUBNET_ID,
+                verified_at=at - timedelta(seconds=10),
+            )
+        self.clock = ShiftedClock(base=at)
+        self.sts = FakeSts(task_identity_arn(actor))
+        self.metadata = MetadataSource(metadata_document(actor, Family=constants.probe_task_family))
+        self.constructions = Constructions()
+        self.operation = FakeOperationClient()
+        self.services: list[Operation] = []
+        self.compiled = compiled_probe_task(actor)
+        self.cleanups = 0
+        self.environment_names: tuple[str, ...] = TASK_ENVIRONMENT_NAMES
+        self.environment: dict[str, str] = {
+            METADATA_URI_ENV_VAR: METADATA_URI,
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": CONTAINER_URI,
+        }
+
+    def cleanup(self) -> None:
+        self.cleanups += 1
+
+    def operation_client(self, operation: Operation) -> Any:
+        self.services.append(operation)
+        return self.operation
+
+    def configuration(self, **overrides: Any) -> EntryConfiguration:
+        fields_: dict[str, Any] = {"entry": self.entry, "compiled": self.compiled}
+        fields_.update(overrides)
+        return EntryConfiguration(**fields_)
+
+    def factories(self, **overrides: Any) -> PermissionProbeFactories:
+        build = self.constructions.factory
+        fields_: dict[str, Any] = {
+            "environment_names": lambda: list(self.environment_names),
+            "environment": self.environment.get,
+            "metadata_fetch": self.metadata.fetch,
+            "ssm": build("ssm", self.ssm),
+            "sts": build("sts", self.sts),
+            "operation_client": self.operation_client,
+            "now": self.clock.now,
+            "monotonic": self.clock.monotonic,
+            "sleep": self.clock.sleep,
+            "cleanup": self.cleanup,
+        }
+        fields_.update(overrides)
+        return PermissionProbeFactories(**fields_)
+
+    def run(
+        self, configuration: EntryConfiguration | None = None, **factory_overrides: Any
+    ) -> TaskReceipt:
+        return run_task_entry(
+            entry=self.entry,
+            configuration=self.configuration() if configuration is None else configuration,
+            factories=self.factories(**factory_overrides),
+        )
+
+
+def permission_context(**overrides: Any) -> PermissionContext:
+    """A permission context over the synthetic registration, for resolving probe targets."""
+    from fixtures.production_launch import launch_inputs_document
+    from kalpamani.data.production.sharadar.launch_records import parse_launch_inputs
+    from kalpamani.data.production.sharadar.permission_cells import PermissionBinding
+
+    fields_: dict[str, Any] = {
+        "binding": PermissionBinding(
+            environment_binding_sha256="ab" * 32,
+            policy_declaration_sha256="cd" * 32,
+            registration_sha256="ef" * 32,
+            targets_sha256="12" * 32,
+            partition="aws",
+            region="us-east-1",
+        ),
+        "licensed_bucket": "synthetic-licensed-bucket",
+        "inputs": parse_launch_inputs(encode(launch_inputs_document(probe=True))),
+        "targets": PermissionTargets(
+            foundation_task_role_arn=f"arn:aws:iam::{ACCOUNT}:role/kalpamani-foundation-task",
+            qualification_secret_arn=(
+                f"arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:synthetic-qual-AbCdEf"
+            ),
+            control_bucket_name="synthetic-control-bucket",
+        ),
+        "production_secret": "synthetic/production/sharadar",
+    }
+    fields_.update(overrides)
+    return PermissionContext(**fields_)
+
+
 __all__ = [
     "ACQ",
     "BUILD",
@@ -514,10 +707,13 @@ __all__ = [
     "AcquisitionHarness",
     "BuildHarness",
     "Constructions",
+    "FakeOperationClient",
     "FakeProbe",
     "FakeSts",
     "MetadataSource",
+    "ProbeHarness",
     "VerificationHarness",
+    "permission_context",
     "resolve_inside",
     "resolve_outside",
 ]

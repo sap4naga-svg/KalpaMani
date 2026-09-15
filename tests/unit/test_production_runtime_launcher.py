@@ -974,7 +974,7 @@ class TestCompiledLaunch:
 
 
 # ---------------------------------------------------------------------------
-# The negative release modes (proposed ADR-0047): withheld, mismatched
+# The negative release modes (ADR-0047): withheld, mismatched
 # ---------------------------------------------------------------------------
 
 

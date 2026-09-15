@@ -1,4 +1,4 @@
-"""The R-4 .. R-9 permission subcells (proposed ADR-0047), on fakes and synthetic records only.
+"""The R-4 .. R-9 permission subcells (ADR-0047), on fakes and synthetic records only.
 
 Every subcell traces to an ADR-0036 s.3 phrase; a task-role or deletion-role subcell is
 BLOCKED with its exact dependency and a human role never stands in for it; one operation
@@ -468,25 +468,36 @@ class TestCatalogue:
         assert len({s.subcell_id for s in pc.SUBCELLS}) == len(pc.SUBCELLS)
 
     def test_task_roles_and_the_deletion_role_are_blocked_with_their_dependency(self) -> None:
+        # Proposed ADR-0048: the task-role subcells are executed by the permission-probe
+        # launch (L3_TASK), the ExecuteCommand subcells against the actor's own held probe
+        # task (L3_HELD_TASK); only the deletion role stays BLOCKED, on the governance
+        # decision its dependency names.
         for s in pc.SUBCELLS:
             if s.principal in (pc.Principal.ACQUISITION_TASK, pc.Principal.BUILD_TASK):
-                assert s.layer is pc.Layer.BLOCKED and s.blocked_on == pc.TASK_PROBE_DEPENDENCY
+                assert s.layer is pc.Layer.L3_TASK and s.blocked_on is None
                 assert pc.PRINCIPAL_PROFILE[s.principal] is None
                 # The same operation exists under the human role as its own subcell, never
-                # as evidence for the task role.
+                # as evidence for the task role; a task subcell reads the object the human
+                # prerequisite created.
                 twin = pc.subcell(s.subcell_id.replace("-TASK", "-HUMAN"))
                 assert twin.principal in (pc.Principal.ACQUISITION_HUMAN, pc.Principal.BUILD_HUMAN)
+                assert all(r.endswith("-HUMAN") for r in s.requires)
             elif s.principal is pc.Principal.DELETION_ROLE:
                 assert s.layer is pc.Layer.BLOCKED and s.blocked_on == pc.DELETION_DEPENDENCY
+                assert "ADR-0048" in s.blocked_on and "governance decision" in s.blocked_on
             elif s.operation is pc.Operation.ECS_EXECUTE_COMMAND:
-                # No running task of ours exists to execute into outside an R-1 launch;
-                # a request against a task that does not exist tests no permission.
-                assert s.layer is pc.Layer.BLOCKED
-                assert s.blocked_on == pc.EXECUTE_COMMAND_DEPENDENCY
+                assert s.layer is pc.Layer.L3_HELD_TASK and s.blocked_on is None
+                assert s.target is pc.TargetKind.OWN_TASK
             else:
                 assert s.layer is not pc.Layer.BLOCKED and s.blocked_on is None
-        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.BLOCKED) == 36
-        assert sum(1 for s in pc.SUBCELLS if s.layer is pc.Layer.L3_RUNTIME) == 56
+        by_layer = {layer: sum(1 for s in pc.SUBCELLS if s.layer is layer) for layer in pc.Layer}
+        assert by_layer[pc.Layer.BLOCKED] == 2
+        assert by_layer[pc.Layer.L3_RUNTIME] == 56
+        assert by_layer[pc.Layer.L3_TASK] == 32
+        assert by_layer[pc.Layer.L3_HELD_TASK] == 2
+        assert by_layer[pc.Layer.L3_BY_R1] == 6
+        assert pc.PROBE_LAYERS == {pc.Layer.L3_TASK, pc.Layer.L3_HELD_TASK}
+        assert pc.EXECUTABLE_LAYERS == {pc.Layer.L3_RUNTIME, *pc.PROBE_LAYERS}
 
     def test_the_launchers_positive_operations_are_evidenced_by_r1_only(self) -> None:
         by_r1 = [s for s in pc.SUBCELLS if s.layer is pc.Layer.L3_BY_R1]
@@ -1616,14 +1627,18 @@ class TestDerivation:
         )
         passed = pc.derive_subcell(own, _evidence(), r1_passed={**R1, ProductionActor.BUILD: True})
         assert passed.status is pc.SubcellStatus.PASSED
-        blocked = pc.derive_subcell(pc.subcell("R4-SECRET-GET-TASK"), _evidence(), r1_passed=R1)
+        # A task subcell with no record is UNEXECUTED (proposed ADR-0048), never PASSED;
+        # the deletion role's subcell is BLOCKED with its dependency.
+        task = pc.derive_subcell(pc.subcell("R4-SECRET-GET-TASK"), _evidence(), r1_passed=R1)
+        assert task.status is pc.SubcellStatus.UNEXECUTED
+        blocked = pc.derive_subcell(pc.subcell("R8-GET"), _evidence(), r1_passed=R1)
         assert blocked.status is pc.SubcellStatus.BLOCKED and blocked.reason == (
-            pc.TASK_PROBE_DEPENDENCY
+            pc.DELETION_DEPENDENCY
         )
 
 
 class TestMatrix:
-    """The permission cells inside the verification matrix (proposed ADR-0047)."""
+    """The permission cells inside the verification matrix (ADR-0047)."""
 
     @staticmethod
     def _states(evidence: pc.PermissionEvidence, **r1: bool) -> dict[str, vc.CellState]:
@@ -1676,20 +1691,25 @@ class TestMatrix:
         assert states["R7-QUALIFICATION"].status is vc.CellStatus.UNBOUND
 
     def test_r4_stays_blocked_by_its_task_subcells_however_the_human_ones_read(self) -> None:
+        # Proposed ADR-0048: R-4's task subcells are UNEXECUTED until their probe runs --
+        # the cell never passes on its human half alone -- and R-8 stays BLOCKED.
         human = [
             _bound(s.subcell_id)
             for s in pc.subcells_of("R4-ACQUISITION")
             if s.layer is pc.Layer.L3_RUNTIME and not s.requires
         ]
         states = self._states(_evidence(*human))
-        assert states["R4-ACQUISITION"].status is vc.CellStatus.BLOCKED
-        assert pc.TASK_PROBE_DEPENDENCY in states["R4-ACQUISITION"].reason
+        # The human creators' objects are unsettled (INCONCLUSIVE by precedence) and the
+        # task subcells UNEXECUTED; neither reads PASSED.
+        assert states["R4-ACQUISITION"].status is vc.CellStatus.INCONCLUSIVE
         assert states["R8-DELETION"].status is vc.CellStatus.BLOCKED
         assert pc.DELETION_DEPENDENCY in states["R8-DELETION"].reason
         lines = vc.matrix_lines(states)
         assert any(
-            line.strip().startswith("subcell=R4-SECRET-GET-TASK status=BLOCKED") for line in lines
+            line.strip().startswith("subcell=R4-SECRET-GET-TASK status=UNEXECUTED")
+            for line in lines
         )
+        assert any(line.strip().startswith("subcell=R8-GET status=BLOCKED") for line in lines)
 
     def test_an_inverted_subcell_fails_its_cell_and_the_aggregate(self) -> None:
         r9 = pc.subcells_of("R9-FOUNDATION-TASK")
@@ -1713,17 +1733,23 @@ class TestMatrix:
             if s.layer is pc.Layer.L3_RUNTIME
         ]
         states = self._states(_evidence(*negatives))
-        assert states["R6-LAUNCHERS"].status is vc.CellStatus.BLOCKED
+        assert states["R6-LAUNCHERS"].status is vc.CellStatus.UNEXECUTED
         awaiting = [
             s for s in states["R6-LAUNCHERS"].subcells if s.status is pc.SubcellStatus.AWAITING_R1
         ]
         assert len(awaiting) == 6
         states = self._states(_evidence(*negatives), build=True, acquisition=True)
         assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
-        # The two ExecuteCommand subcells are BLOCKED on a running task of the actor, so
-        # R-6 as a whole stays BLOCKED however its executable subcells read.
-        assert states["R6-LAUNCHERS"].status is vc.CellStatus.BLOCKED
-        assert pc.EXECUTE_COMMAND_DEPENDENCY in states["R6-LAUNCHERS"].reason
+        # The two ExecuteCommand subcells are executed against the actor's own held probe
+        # task (proposed ADR-0048): UNEXECUTED until then, so R-6 as a whole stays
+        # UNEXECUTED however its other subcells read -- never PASSED on them alone.
+        assert states["R6-LAUNCHERS"].status is vc.CellStatus.UNEXECUTED
+        held = [
+            s
+            for s in states["R6-LAUNCHERS"].subcells
+            if pc.subcell(s.subcell_id).layer is pc.Layer.L3_HELD_TASK
+        ]
+        assert len(held) == 2 and all(s.status is pc.SubcellStatus.UNEXECUTED for s in held)
 
 
 # ---------------------------------------------------------------------------
@@ -1942,7 +1968,9 @@ def test_the_plan_prints_the_catalogue_and_constructs_nothing(
     assert t.main("--cell", "R9-FOUNDATION-TASK") == tool.EXIT_PLANNED
     assert capsys.readouterr().out.count("subcell=") == 2
     assert t.main("--subcell", "R4-SECRET-GET-TASK") == tool.EXIT_PLANNED
-    assert "blocked_on: " + pc.TASK_PROBE_DEPENDENCY[:40] in capsys.readouterr().out
+    assert "layer=L3_TASK" in capsys.readouterr().out
+    assert t.main("--subcell", "R8-GET") == tool.EXIT_PLANNED
+    assert "blocked_on: " + pc.DELETION_DEPENDENCY[:40] in capsys.readouterr().out
     assert t.main("--cell", "R0") == tool.EXIT_REFUSED_ARGUMENTS
     assert t.constructions == [] and t.identity_calls == [] and t.client.calls == []
     for canary in CANARIES:
@@ -1999,10 +2027,17 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
         t.main(*execute, caller_identity=lambda _p: caller_identity(launcher_identity_arn(ACQ)))
         == tool.EXIT_REFUSED_IDENTITY
     )
-    for blocked in ("R4-SECRET-GET-TASK", "R6-ACQ-RUN-OWN-REVISION", "R6-ACQ-EXECUTE-COMMAND"):
+    for blocked in ("R6-ACQ-RUN-OWN-REVISION", "R8-GET"):
         assert t.main(*t.execute_argv(blocked, authorization)) == tool.EXIT_REFUSED_SUBCELL
         assert t.main("--prepare-subcell", blocked, *t.base()) == tool.EXIT_REFUSED_SUBCELL
     assert t.main(*t.execute_argv("R4-NOTHING", authorization)) == tool.EXIT_REFUSED_SUBCELL
+    # A probe-layer subcell (proposed ADR-0048) on a registration with no probe target:
+    # preparation refuses at the binding; execution proves both identities first and,
+    # with no launch clients admitted, refuses at the identity -- no client, no record.
+    for probe in ("R4-SECRET-GET-TASK", "R6-ACQ-EXECUTE-COMMAND"):
+        assert t.main("--prepare-subcell", probe, *t.base()) == tool.EXIT_REFUSED_BINDING
+        assert t.main(*t.execute_argv(probe, authorization)) == tool.EXIT_REFUSED_IDENTITY
+    assert t.files("permission-attempt") == [] and t.files("launch-record") == []
     # A refused binding, targets file or declaration: still no client, no record.
     assert (
         t.main(*execute, load_environment_binding=lambda **_kw: None) == tool.EXIT_REFUSED_BINDING
@@ -2467,8 +2502,9 @@ def test_the_matrix_passes_r7_only_through_complete_bound_chains(
     out = capsys.readouterr().out
     assert "cell=R7-QUALIFICATION ref=R-7 kind=PERMISSION_MATRIX status=PASSED" in out
     assert "  subcell=R7-ACQ-PUT-SILVER status=PASSED" in out
-    assert "cell=R4-ACQUISITION ref=R-4 kind=PERMISSION_MATRIX status=BLOCKED" in out
-    assert "cell=R6-LAUNCHERS ref=R-6 kind=PERMISSION_MATRIX status=BLOCKED" in out
+    assert "cell=R4-ACQUISITION ref=R-4 kind=PERMISSION_MATRIX status=UNEXECUTED" in out
+    assert "cell=R6-LAUNCHERS ref=R-6 kind=PERMISSION_MATRIX status=UNEXECUTED" in out
+    assert "cell=R8-DELETION ref=R-8 kind=PERMISSION_MATRIX status=BLOCKED" in out
     assert scenario.clients.constructions == []
     for canary in (*CANARIES, BUCKET):
         assert canary not in out
@@ -2657,13 +2693,14 @@ class TestBoto3Adapter:
             "kalpamani-production-acquisition", "us-east-1", session_factory=_synthetic_session
         )
         transport = _CountingTransport()
+        original_client = adapter._profile_client
 
         def client(service: str) -> Any:
-            built = tool._Boto3PermissionClient._client(adapter, service)
+            built = original_client(service)
             built._endpoint.http_session = transport
             return built
 
-        adapter._client = client
+        adapter._client_for = client
         return adapter, transport
 
     def test_every_service_call_is_one_attempt_with_the_documented_parameters(

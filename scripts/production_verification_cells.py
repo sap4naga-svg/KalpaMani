@@ -318,13 +318,23 @@ def permission_evidence(store: Any, context: Any) -> Any:
     """
     from kalpamani.data.production.sharadar import permission_cells as pc
     from kalpamani.data.production.sharadar.documents import decode_document
-    from kalpamani.data.production.sharadar.launch_records import MAX_RECORD_BYTES
+    from kalpamani.data.production.sharadar.launch_records import (
+        MAX_RECORD_BYTES,
+        LaunchKind,
+        LaunchRecordError,
+        parse_launch_record,
+    )
+    from kalpamani.data.production.sharadar.launch_store import StoreError, bind_record
 
     records: dict[str, list[Any]] = {}
     attempts: dict[str, list[Any]] = {}
     statements: dict[str, list[Any]] = {}
     consumptions: dict[str, Any] = {}
     cleanups: list[Any] = []
+    probe_receipts: dict[str, list[Any]] = {}
+    held_tasks: dict[str, list[Any]] = {}
+    probe_launches: dict[str, Any] = {}
+    unattributed = 0
     malformed = 0
     for digest, raw in store.consumptions(_permission_tool().CONSUMPTION_KIND).items():
         try:
@@ -338,10 +348,50 @@ def permission_evidence(store: Any, context: Any) -> Any:
             malformed += 1
             continue
         consumptions[digest] = parsed
+    # The probe launches the permission tool made (proposed ADR-0048), attributed by the
+    # **reservation** each wrote beside the ledger before RunTask: its workload names the
+    # attempt; the launch records naming its identity (one is the launch, more is a
+    # duplicate the validator refuses) bind to it through the one record-to-reservation
+    # rule; the ledger row of the identity completes the picture. A probe launch record no
+    # reservation attributes is counted as unattributable, never adopted.
+    try:
+        ledger, _ledger_digest = store.read_ledger()
+        reservations = [r for r in store.reservations() if r.kind is LaunchKind.PERMISSION_PROBE]
+    except (StoreError, LaunchRecordError, OSError):
+        malformed += 1
+        ledger, reservations = None, []
+    launches_by_identity: dict[str, list[Any]] = {}
+    for path in store.launch_records():
+        try:
+            launch = parse_launch_record(path.read_bytes())
+        except (LaunchRecordError, OSError, ValueError):
+            continue  # not permission evidence; the R-1 cells report their own records
+        if launch.kind is not LaunchKind.PERMISSION_PROBE:
+            continue
+        launches_by_identity.setdefault(launch.identity, []).append(launch)
+    for reservation in reservations:
+        launches = launches_by_identity.pop(reservation.identity, [])
+        launches.sort(key=lambda r: (r.recorded_at, r.task_arn))
+        record = launches[0] if launches else None
+        attempt_sha256 = reservation.specification.workload["attempt_sha256"]
+        probe_launches[attempt_sha256] = pc.ProbeLaunch(
+            attempt_sha256=attempt_sha256,
+            identity=reservation.identity,
+            reservation=reservation,
+            record=record,
+            binding=None if record is None else bind_record(reservation, record),
+            row=None if ledger is None else ledger.row(reservation.identity),
+            duplicates=max(0, len(launches) - 1),
+        )
+    unattributed = sum(len(v) for v in launches_by_identity.values())
     records_dir: Path = store._records_dir
     if not records_dir.is_dir():
         return pc.PermissionEvidence(
-            consumptions=consumptions, malformed=malformed, context=context
+            consumptions=consumptions,
+            malformed=malformed,
+            context=context,
+            probe_launches=probe_launches,
+            unattributed_launches=unattributed,
         )
     parsers: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]] | None], ...] = (
         ("permission-record", pc.parse_permission_record, records),
@@ -360,7 +410,29 @@ def permission_evidence(store: Any, context: Any) -> Any:
                 cleanups.append(parsed)
             else:
                 sink.setdefault(parsed.subcell_id, []).append(parsed)
+    # The probe evidence completion and the held check wrote, by the attempt each names;
+    # every file is kept, so a duplicate is visible to the validator.
+    by_attempt: tuple[tuple[str, Callable[[Any], Any], dict[str, list[Any]]], ...] = (
+        ("probe-receipt", pc.parse_probe_receipt_evidence, probe_receipts),
+        ("held-task", pc.parse_held_task_evidence, held_tasks),
+    )
+    for prefix, parse, sink in by_attempt:
+        for path in sorted(records_dir.glob(f"{prefix}-*.json")):
+            try:
+                parsed = parse(decode_document(path.read_bytes(), max_bytes=MAX_RECORD_BYTES))
+            except Exception:
+                malformed += 1
+                continue
+            sink.setdefault(parsed.attempt_sha256, []).append(parsed)
     return pc.PermissionEvidence(
+        probe_launches=probe_launches,
+        unattributed_launches=unattributed,
+        probe_receipts={
+            k: tuple(sorted(v, key=lambda r: r.received_at)) for k, v in probe_receipts.items()
+        },
+        held_tasks={
+            k: tuple(sorted(v, key=lambda h: h.observed_at)) for k, v in held_tasks.items()
+        },
         records={k: tuple(sorted(v, key=lambda r: r.started_at)) for k, v in records.items()},
         attempts={k: tuple(sorted(v, key=lambda a: a.started_at)) for k, v in attempts.items()},
         statements={

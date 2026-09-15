@@ -307,6 +307,9 @@ def _rule_stage_gating(model: Model) -> list[str]:
                 # AND only with its own digest; both counts are conjunctions with stage a.
                 "local.production_acquire_verify_count",
                 "local.production_build_verify_count",
+                # Proposed ADR-0048: the permission-probe families, the same rule.
+                "local.production_acquire_probe_count",
+                "local.production_build_probe_count",
             ) or (
                 "local.production_stage_a" in for_each
                 or "local.production_interface_endpoints" in for_each
@@ -778,19 +781,31 @@ def _rule_launch(model: Model) -> list[str]:
                 found.append(f"{td}_verify must run as its own actor's task role")
             if verify.attributes.get("execution_role_arn", "") != "aws_iam_role.task_execution.arn":
                 found.append(f"{td}_verify must use the foundation execution role")
+        # The permission-probe family (proposed ADR-0048): the same task and execution
+        # roles again.
+        probe = model.resources.get(("aws_ecs_task_definition", f"{td}_probe"))
+        if probe is None:
+            found.append(f"task definition {td}_probe is missing")
+        else:
+            if probe.attributes.get("task_role_arn", "") != f"aws_iam_role.{role}[0].arn":
+                found.append(f"{td}_probe must run as its own actor's task role")
+            if probe.attributes.get("execution_role_arn", "") != "aws_iam_role.task_execution.arn":
+                found.append(f"{td}_probe must use the foundation execution role")
         launcher = model.documents.get(f"{td}_launcher", ())
         run = [s for s in _allows(launcher) if "ecs:RunTask" in s.actions]
-        # Exactly two exact ARNs at most: this actor's production revision, and this
-        # actor's verification revision when it is declared. Never a wildcard, never
-        # a family ARN, never the other actor's.
+        # Exactly three exact ARNs at most: this actor's production revision, its
+        # verification revision and its permission-probe revision, each when declared.
+        # Never a wildcard, never a family ARN, never the other actor's.
         expected_run = (
             f"concat([aws_ecs_task_definition.{td}[0].arn],"
-            f"aws_ecs_task_definition.{td}_verify[*].arn,)"
+            f"aws_ecs_task_definition.{td}_verify[*].arn,"
+            f"aws_ecs_task_definition.{td}_probe[*].arn,)"
         )
         if len(run) != 1 or re.sub(r"\s+", "", run[0].raw_resources) != expected_run:
             found.append(
-                f"{actor} launcher must run exactly aws_ecs_task_definition.{td}[0].arn "
-                f"and aws_ecs_task_definition.{td}_verify[*].arn"
+                f"{actor} launcher must run exactly aws_ecs_task_definition.{td}[0].arn, "
+                f"aws_ecs_task_definition.{td}_verify[*].arn and "
+                f"aws_ecs_task_definition.{td}_probe[*].arn"
             )
         elif not _has_condition(run[0], "ArnEquals", "ecs:cluster"):
             found.append(f"{actor} launcher RunTask lacks the ecs:cluster condition")
@@ -830,22 +845,25 @@ def _rule_task_definitions_text(sources: dict[str, str]) -> list[str]:
     for key in ("secrets", "environment", "portMappings", "mountPoints", "volumes"):
         if re.search(rf"^\s*{key}\s*=", text, re.MULTILINE):
             found.append(f"a task definition carries {key}")
-    # Two production containers and two verification containers (proposed ADR-0045),
-    # every one pinned by digest, read-only, with a fixed command.
-    if text.count("@${lookup(var.production_image_digests") != 4:
-        found.append("all four images must be pinned by digest from production_image_digests")
+    # Two production containers, two verification containers (ADR-0045) and two
+    # permission-probe containers (proposed ADR-0048), every one pinned by digest,
+    # read-only, with a fixed command.
+    if text.count("@${lookup(var.production_image_digests") != 6:
+        found.append("all six images must be pinned by digest from production_image_digests")
     if (
         "readonlyRootFilesystem = true" not in text
-        or text.count("readonlyRootFilesystem = true") != 4
+        or text.count("readonlyRootFilesystem = true") != 6
     ):
-        found.append("all four containers must have a read-only root filesystem")
-    if text.count("command") != 4:
+        found.append("all six containers must have a read-only root filesystem")
+    if text.count("command") != 6:
         found.append("each container must fix its command")
     for token in (
         "kalpamani-production-acquire",
         "kalpamani-research-build",
         "kalpamani-production-acquire-verify",
         "kalpamani-research-build-verify",
+        "kalpamani-production-acquire-probe",
+        "kalpamani-research-build-probe",
     ):
         if text.count(f'command   = ["{token}"]') != 1:
             found.append(f"exactly one container fixes the command {token}")

@@ -26,6 +26,7 @@ from fixtures.production_entry import CONTAINER_URI, METADATA_URI, ORIGIN_ADDRES
 from fixtures.production_runtime import compiled_task
 from kalpamani.data.production.sharadar.entry import (
     ENTRY_ACTOR,
+    PROBE_ENTRIES,
     VERIFICATION_ENTRIES,
     EntryConfiguration,
     TaskEntry,
@@ -317,6 +318,11 @@ def _configuration(entry: TaskEntry) -> EntryConfiguration:
             compiled=compiled_verification_task(ENTRY_ACTOR[entry]),
             origin_addresses=ORIGIN_ADDRESSES,
         )
+    if entry in PROBE_ENTRIES:
+        # A probe entry (proposed ADR-0048): the probe family and nothing else.
+        from fixtures.production_runtime import compiled_probe_task
+
+        return EntryConfiguration(entry=entry, compiled=compiled_probe_task(ENTRY_ACTOR[entry]))
     from fixtures.production_build import configuration
 
     return EntryConfiguration(

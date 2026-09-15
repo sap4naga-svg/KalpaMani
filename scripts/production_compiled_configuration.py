@@ -43,11 +43,16 @@ BUILD_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"build_configuration"})
 #: A verification entry (proposed ADR-0045) compiles the origin address set and nothing
 #: else: no secret name, no build configuration.
 VERIFICATION_INPUT_FIELDS: Final[frozenset[str]] = frozenset({"origin_addresses"})
+#: A permission-probe entry (proposed ADR-0048) compiles nothing beyond the code identity:
+#: an empty inputs object, and no secret name, origin or build configuration.
+PROBE_INPUT_FIELDS: Final[frozenset[str]] = frozenset()
 INPUT_FIELDS_BY_ENTRY: Final[dict[str, frozenset[str]]] = {
     "kalpamani-production-acquire": ACQUISITION_INPUT_FIELDS,
     "kalpamani-research-build": BUILD_INPUT_FIELDS,
     "kalpamani-production-acquire-verify": VERIFICATION_INPUT_FIELDS,
     "kalpamani-research-build-verify": VERIFICATION_INPUT_FIELDS,
+    "kalpamani-production-acquire-probe": PROBE_INPUT_FIELDS,
+    "kalpamani-research-build-probe": PROBE_INPUT_FIELDS,
 }
 
 #: Field names whose presence in an inputs file means a secret value is being offered.
@@ -128,7 +133,7 @@ def generate(
 
     entry = select_entry([entry_token])
     if entry is None:
-        return _refuse("the entry is not one of the two closed entries")
+        return _refuse("the entry is not one of the closed entries")
     identity = _code_identity(repository)
     if identity is None:
         return _refuse("the repository is not a clean checkout at a known commit")
@@ -159,6 +164,10 @@ def generate(
                 code_tree=tree,
                 generated_at=instant,
                 build_configuration=parse_build_configuration(inputs["build_configuration"]),
+            )
+        elif entry.value.endswith("-probe"):
+            raw = build_compiled_configuration(
+                entry=entry, code_commit=commit, code_tree=tree, generated_at=instant
             )
         else:
             raw = build_compiled_configuration(

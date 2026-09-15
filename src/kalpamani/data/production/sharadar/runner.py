@@ -67,6 +67,10 @@ from kalpamani.data.production.sharadar.metadata import (
     task_environment_refusal,
 )
 from kalpamani.data.production.sharadar.outcomes import OperationCounts, RunnerOutcome
+from kalpamani.data.production.sharadar.permission_probe import (
+    PermissionProbeInput,
+    parse_permission_probe_input,
+)
 from kalpamani.data.production.sharadar.plan import CompiledPlan, bind_plan
 from kalpamani.data.production.sharadar.release import ReleaseError, ReleaseExpectation
 from kalpamani.data.production.sharadar.vocabulary import (
@@ -141,7 +145,7 @@ class RunnerReport:
     counts: OperationCounts
     barrier: BarrierResult | None
     binding: ProductionRuntimeBinding | None = None
-    admitted_input: AcquisitionInput | BuildInput | None = None
+    admitted_input: AcquisitionInput | BuildInput | PermissionProbeInput | None = None
     plan: CompiledPlan | None = None
     evidence: BootstrapEvidence | None = None
 
@@ -174,8 +178,17 @@ def _admit_input(
     *,
     now: datetime,
     registry: SpentIdentityRegistry | None,
-) -> tuple[str, AcquisitionInput | BuildInput, CompiledPlan | None]:
-    """The identity, the admitted input and (acquisition) the plan compiled from its slice."""
+    probe: bool = False,
+) -> tuple[str, AcquisitionInput | BuildInput | PermissionProbeInput, CompiledPlan | None]:
+    """The identity, the admitted input and (acquisition) the plan compiled from its slice.
+
+    A permission-probe entry (proposed ADR-0048) admits the probe input contract
+    instead of its actor's production input: the same parameter, the same digest over
+    the bytes, a different closed document -- one naming the subcell the probe issues.
+    """
+    if probe:
+        probe_input = parse_permission_probe_input(document, now=now, actor=actor)
+        return probe_input.identity, probe_input, None
     if actor is ProductionActor.ACQUISITION:
         acquisition = parse_acquisition_input(document, now=now, registry=registry)
         return acquisition.run_identity, acquisition, bind_plan(acquisition)
@@ -189,6 +202,7 @@ def run_task_bootstrap(
     compiled: CompiledTask,
     adapters: RunnerAdapters,
     registry: SpentIdentityRegistry | None,
+    probe: bool = False,
 ) -> RunnerReport:
     """The task-side sequence through the release barrier; one sanitized report.
 
@@ -197,7 +211,9 @@ def run_task_bootstrap(
     source is the input's own spent-identity block, ADR-0044 §3) and is not
     consulted for a build. The acquisition plan is compiled **from the
     admitted input's own slice** and its digest compared to the input's; a
-    mismatch refuses the input.
+    mismatch refuses the input. ``probe`` (proposed ADR-0048) admits the permission-probe
+    input contract in place of the actor's production input and changes nothing else:
+    the same environment, binding, self-check, identity proof and release barrier.
     """
     if type(actor) is not ProductionActor or type(compiled) is not CompiledTask:
         raise TypeError("actor and compiled must be exact values")
@@ -236,7 +252,7 @@ def run_task_bootstrap(
         raw_input = adapters.parameters.read_parameter(constants_for(actor).input_parameter)
         digest = input_digest(raw_input)
         identity, admitted, plan = _admit_input(
-            actor, decode_input(raw_input), now=adapters.now(), registry=registry
+            actor, decode_input(raw_input), now=adapters.now(), registry=registry, probe=probe
         )
     except (InputError, Exception):
         return RunnerReport(

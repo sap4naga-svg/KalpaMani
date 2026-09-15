@@ -19,7 +19,10 @@ import pytest
 from fixtures.production_build import configuration
 from fixtures.production_entry import ORIGIN_ADDRESSES
 from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
-from kalpamani.data.production.sharadar.entry import TaskEntry
+from kalpamani.data.production.sharadar.entry import (
+    PROBE_ENTRIES,
+    TaskEntry,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -75,8 +78,11 @@ def _inputs(tmp_path: Path, entry: TaskEntry, **overrides: Any) -> Path:
         }
     elif entry is TaskEntry.BUILD:
         document = {"build_configuration": configuration().document()}
+    elif entry in PROBE_ENTRIES:
+        # A probe entry (proposed ADR-0048) compiles nothing beyond the code identity.
+        document = {}
     else:
-        # A verification entry (proposed ADR-0045) compiles the origin set and nothing else.
+        # A verification entry (ADR-0045) compiles the origin set and nothing else.
         document = {"origin_addresses": sorted(ORIGIN_ADDRESSES)}
     document.update(overrides)
     path = tmp_path / "inputs.json"
@@ -219,9 +225,10 @@ def test_the_packaging_files_wire_the_four_entries_and_nothing_else() -> None:
     compute = (REPO_ROOT / "infra/aws/research-data-plane/production_compute.tf").read_text(
         encoding="utf-8"
     )
-    # Two production task definitions and, under the proposed ADR-0045 declaration, two
-    # verification ones; the Dockerfile has one target per entry.
-    assert compute.count('user      = "10001:10001"') == 4
+    # Two production task definitions, two verification ones (ADR-0045) and, under the
+    # proposed ADR-0048 declaration, two permission-probe ones; the Dockerfile has one
+    # target per entry.
+    assert compute.count('user      = "10001:10001"') == len(TaskEntry) == 6
     assert dockerfile.count("USER 10001:10001") == len(TaskEntry)
     assert "USER kalpamani" not in dockerfile
     assert "groupadd --system --gid 10001 kalpamani" in dockerfile
@@ -234,10 +241,11 @@ def test_the_packaging_files_wire_the_four_entries_and_nothing_else() -> None:
     assert "pip install --no-deps --no-build-isolation ." in dockerfile
     assert dockerfile.count("pip install --no-deps --no-build-isolation .") == 1
     assert "BUILD_BACKEND" in dockerfile
-    # Four targets (proposed ADR-0045): every one traverses its configuration directory
-    # and holds its entry executable to a POSIX shebang.
-    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 4
-    assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 4
+    # Six targets (ADR-0045's four, plus proposed ADR-0048's two probe targets): every
+    # one traverses its configuration directory and holds its entry executable to a
+    # POSIX shebang.
+    assert dockerfile.count('mode("/etc/kalpamani") & 0o055 != 0o055') == 6
+    assert dockerfile.count('startswith(b"#!/bin/sh\\n")') == 6
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert ignore[0].startswith("#") and "*" in ignore
     admitted = [line[1:] for line in ignore if line.startswith("!")]

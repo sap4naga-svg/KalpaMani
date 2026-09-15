@@ -155,11 +155,14 @@ variable "production_image_digests" {
   # `build_verify`. A verification task definition is declared only when its digest is
   # supplied, so the accepted stage-a requirement above is unchanged and a stage can be
   # established, or rotated, with or without verification images. No other key exists.
+  # Proposed ADR-0048: two more OPTIONAL images, keyed `acquisition_probe` and
+  # `build_probe` -- the permission-probe families, declared only when their digest is
+  # supplied, exactly like the verification families. No other key exists.
   validation {
     condition = alltrue([
-      for key in keys(var.production_image_digests) : contains(["acquisition", "build", "acquisition_verify", "build_verify"], key)
+      for key in keys(var.production_image_digests) : contains(["acquisition", "build", "acquisition_verify", "build_verify", "acquisition_probe", "build_probe"], key)
     ])
-    error_message = "production_image_digests keys must be among acquisition, build, acquisition_verify, build_verify."
+    error_message = "production_image_digests keys must be among acquisition, build, acquisition_verify, build_verify, acquisition_probe, build_probe."
   }
 }
 
@@ -309,6 +312,11 @@ locals {
   # only when its own image digest is supplied. Never at stage none.
   production_acquire_verify_count = local.production_stage_a && contains(keys(var.production_image_digests), "acquisition_verify") ? 1 : 0
   production_build_verify_count   = local.production_stage_a && contains(keys(var.production_image_digests), "build_verify") ? 1 : 0
+
+  # Proposed ADR-0048 permission-probe families: the same rule -- stage a or b AND
+  # the family's own image digest supplied. Never at stage none.
+  production_acquire_probe_count = local.production_stage_a && contains(keys(var.production_image_digests), "acquisition_probe") ? 1 : 0
+  production_build_probe_count   = local.production_stage_a && contains(keys(var.production_image_digests), "build_probe") ? 1 : 0
 
   # One account, one operator group, shared with qualification by ADR-0036 s.2.1
   # and s.2.9: the same governed group holds every permission set, and the actors

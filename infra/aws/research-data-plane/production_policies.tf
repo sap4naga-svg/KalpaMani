@@ -882,11 +882,13 @@ data "aws_iam_policy_document" "production_acquire_launcher" {
       effect  = "Allow"
       actions = ["ecs:RunTask"]
       # Exactly this actor's production revision and, when declared, this actor's
-      # verification revision (proposed ADR-0045) -- two exact ARNs at most, never a
-      # family wildcard and never the other actor's.
+      # verification revision (ADR-0045) and this actor's permission-probe revision
+      # (proposed ADR-0048) -- three exact ARNs at most, never a family wildcard and
+      # never the other actor's.
       resources = concat(
         [aws_ecs_task_definition.production_acquire[0].arn],
         aws_ecs_task_definition.production_acquire_verify[*].arn,
+        aws_ecs_task_definition.production_acquire_probe[*].arn,
       )
 
       condition {
@@ -1062,11 +1064,13 @@ data "aws_iam_policy_document" "production_build_launcher" {
       effect  = "Allow"
       actions = ["ecs:RunTask"]
       # Exactly this actor's production revision and, when declared, this actor's
-      # verification revision (proposed ADR-0045) -- two exact ARNs at most, never a
-      # family wildcard and never the other actor's.
+      # verification revision (ADR-0045) and this actor's permission-probe revision
+      # (proposed ADR-0048) -- three exact ARNs at most, never a family wildcard and
+      # never the other actor's.
       resources = concat(
         [aws_ecs_task_definition.production_build[0].arn],
         aws_ecs_task_definition.production_build_verify[*].arn,
+        aws_ecs_task_definition.production_build_probe[*].arn,
       )
 
       condition {

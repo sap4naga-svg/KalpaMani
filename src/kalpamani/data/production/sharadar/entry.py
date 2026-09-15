@@ -43,6 +43,7 @@ from kalpamani.data.production.sharadar.outcomes import (
     count_lines,
     runner_sentence,
 )
+from kalpamani.data.production.sharadar.permission_probe import PermissionProbeObservation
 from kalpamani.data.production.sharadar.probe import ProbeObservation
 from kalpamani.data.production.sharadar.runner import BootstrapEvidence
 from kalpamani.data.production.sharadar.schema_observation import SchemaObservation
@@ -51,6 +52,9 @@ from kalpamani.data.production.sharadar.vocabulary import ProductionActor, const
 if TYPE_CHECKING:  # pragma: no cover - typing only; the modules are imported lazily
     from kalpamani.data.production.sharadar.acquisition_entry import AcquisitionFactories
     from kalpamani.data.production.sharadar.build_entry import BuildFactories
+    from kalpamani.data.production.sharadar.permission_probe_entry import (
+        PermissionProbeFactories,
+    )
     from kalpamani.data.production.sharadar.verification_entry import VerificationFactories
 
 
@@ -66,19 +70,28 @@ class TaskEntry(StrEnum):
     BUILD = "kalpamani-research-build"
     ACQUISITION_VERIFY = "kalpamani-production-acquire-verify"
     BUILD_VERIFY = "kalpamani-research-build-verify"
+    ACQUISITION_PROBE = "kalpamani-production-acquire-probe"
+    BUILD_PROBE = "kalpamani-research-build-probe"
 
 
-#: Which actor each entry runs as. Four entries, two actors, no third actor.
+#: Which actor each entry runs as. Six entries, two actors, no third actor.
 ENTRY_ACTOR: Final[dict[TaskEntry, ProductionActor]] = {
     TaskEntry.ACQUISITION: ProductionActor.ACQUISITION,
     TaskEntry.BUILD: ProductionActor.BUILD,
     TaskEntry.ACQUISITION_VERIFY: ProductionActor.ACQUISITION,
     TaskEntry.BUILD_VERIFY: ProductionActor.BUILD,
+    TaskEntry.ACQUISITION_PROBE: ProductionActor.ACQUISITION,
+    TaskEntry.BUILD_PROBE: ProductionActor.BUILD,
 }
 
-#: The verification entries: bootstrap only, no processing (proposed ADR-0045).
+#: The verification entries: bootstrap only, no processing (ADR-0045).
 VERIFICATION_ENTRIES: Final[frozenset[TaskEntry]] = frozenset(
     {TaskEntry.ACQUISITION_VERIFY, TaskEntry.BUILD_VERIFY}
+)
+#: The permission-probe entries (proposed ADR-0048): the accepted bootstrap, then
+#: exactly one catalogued permission operation under the task role, or a bounded hold.
+PROBE_ENTRIES: Final[frozenset[TaskEntry]] = frozenset(
+    {TaskEntry.ACQUISITION_PROBE, TaskEntry.BUILD_PROBE}
 )
 
 
@@ -87,6 +100,8 @@ def entry_family(entry: TaskEntry) -> str:
     constants = constants_for(ENTRY_ACTOR[entry])
     if entry in VERIFICATION_ENTRIES:
         return constants.verification_task_family
+    if entry in PROBE_ENTRIES:
+        return constants.probe_task_family
     return constants.task_family
 
 
@@ -141,6 +156,23 @@ class TaskOutcome(StrEnum):
     MANIFEST_STATE_UNKNOWN = "MANIFEST_STATE_UNKNOWN"
     MANIFEST_REFUSED = "MANIFEST_REFUSED"
     UNCLASSIFIED = "UNCLASSIFIED"
+    # A permission-probe entry's terminal outcomes (proposed ADR-0048): the accepted
+    # bootstrap released and the task issued its one operation (or held).
+    PROBE_MATCHED = "PROBE_MATCHED"
+    PROBE_INVERTED = "PROBE_INVERTED"
+    PROBE_UNDECIDED = "PROBE_UNDECIDED"
+    PROBE_HELD = "PROBE_HELD"
+
+
+#: The probe entries' terminal outcomes: each carries the probe observation block.
+PROBE_OUTCOMES: Final[frozenset[TaskOutcome]] = frozenset(
+    {
+        TaskOutcome.PROBE_MATCHED,
+        TaskOutcome.PROBE_INVERTED,
+        TaskOutcome.PROBE_UNDECIDED,
+        TaskOutcome.PROBE_HELD,
+    }
+)
 
 
 #: The exit status of every outcome. ``0`` is ``COMPLETED`` alone; no default, no else.
@@ -179,6 +211,13 @@ EXIT_STATUS: Final[dict[TaskOutcome, int]] = {
     TaskOutcome.MANIFEST_STATE_UNKNOWN: 37,
     TaskOutcome.MANIFEST_REFUSED: 38,
     TaskOutcome.UNCLASSIFIED: 40,
+    # Proposed ADR-0048: non-zero on purpose, like VERIFIED_BOOTSTRAP; a probe task is
+    # never a run, and its exit code alone never completes a permission record -- the
+    # verified receipt does.
+    TaskOutcome.PROBE_MATCHED: 41,
+    TaskOutcome.PROBE_INVERTED: 42,
+    TaskOutcome.PROBE_UNDECIDED: 43,
+    TaskOutcome.PROBE_HELD: 44,
 }
 
 #: The one allowlisted sentence per outcome. No key, digest, identifier, ARN or row.
@@ -187,6 +226,16 @@ TASK_SENTENCES: Final[dict[TaskOutcome, str]] = {
     TaskOutcome.VERIFIED_BOOTSTRAP: (
         "verification task stopped at the release barrier: bootstrap verified, no processing"
     ),
+    TaskOutcome.PROBE_MATCHED: (
+        "permission probe issued its one operation: the answer matched the expectation"
+    ),
+    TaskOutcome.PROBE_INVERTED: (
+        "permission probe issued its one operation: the answer inverted the expectation"
+    ),
+    TaskOutcome.PROBE_UNDECIDED: (
+        "permission probe issued its one operation: the answer decided nothing"
+    ),
+    TaskOutcome.PROBE_HELD: "permission probe held for the launcher's check and issued nothing",
     TaskOutcome.REFUSED_ENTRY: "production task refused: no closed entry was selected",
     TaskOutcome.REFUSED_CONFIGURATION: (
         "production task refused: the compiled configuration is incomplete"
@@ -308,6 +357,8 @@ class EntryConfiguration:
             raise ValueError("only the build entry holds a build configuration")
         if self.entry is TaskEntry.BUILD and self.origin_addresses:
             raise ValueError("a build entry holds no provider origin")
+        if self.entry in PROBE_ENTRIES and self.origin_addresses:
+            raise ValueError("a probe entry holds no provider origin")
 
     def __repr__(self) -> str:
         """The entry only. **Never the secret identifier, never an address.**"""
@@ -346,6 +397,9 @@ class TaskReceipt:
     #: them (proposed ADR-0045, Route B): present only on a build REFUSED_NORMALIZATION
     #: receipt, and evidence for owner review -- never an accepted set.
     schema_observation: SchemaObservation | None = None
+    #: The permission-probe observation (proposed ADR-0048): present exactly on a probe
+    #: entry's PROBE_* receipt. What the task's one operation answered, never a value.
+    permission: PermissionProbeObservation | None = None
 
     def __post_init__(self) -> None:
         """Closed members and integers; uncertainty exactly where it is."""
@@ -376,6 +430,32 @@ class TaskReceipt:
                 raise ValueError("a verification task performs no data-plane operation")
         if self.entry in VERIFICATION_ENTRIES and self.outcome is TaskOutcome.COMPLETED:
             raise ValueError("a verification entry never completes a run")
+        if self.entry in PROBE_ENTRIES and self.outcome in (
+            TaskOutcome.COMPLETED,
+            TaskOutcome.VERIFIED_BOOTSTRAP,
+        ):
+            raise ValueError("a probe entry never completes a run and verifies no bootstrap")
+        if self.outcome in PROBE_OUTCOMES:
+            if self.runner is not RunnerOutcome.RELEASED:
+                raise ValueError("a probe outcome follows a released bootstrap")
+            if self.entry not in PROBE_ENTRIES:
+                raise ValueError("only a probe entry reaches a probe outcome")
+            if self.counts.data_plane_operations != 0:
+                raise ValueError("a probe task performs no data-plane operation of the actor")
+        if self.permission is not None and type(self.permission) is not PermissionProbeObservation:
+            raise TypeError("permission must be an exact PermissionProbeObservation or None")
+        if (self.permission is not None) != (self.outcome in PROBE_OUTCOMES):
+            raise ValueError("a probe observation is carried exactly by a probe outcome")
+        if self.permission is not None:
+            held = self.outcome is TaskOutcome.PROBE_HELD
+            if held != (self.permission.held_seconds > 0 and self.permission.operations == 0):
+                raise ValueError("a held probe holds and issues nothing; another does not hold")
+            if not held and self.permission.held_seconds != 0:
+                raise ValueError("only a held probe holds")
+            if not held and self.permission.outcome.value != self.outcome.value.removeprefix(
+                "PROBE_"
+            ):
+                raise ValueError("the probe observation's outcome is the receipt's")
         if self.probe is not None and type(self.probe) is not ProbeObservation:
             raise TypeError("probe must be an exact ProbeObservation or None")
         probed = (
@@ -435,6 +515,15 @@ class TaskReceipt:
             completeness = "COMPLETE" if self.schema_observation.complete else "PARTIAL"
             lines.append(
                 f"schema_observation={completeness} digests={self.schema_observation.digest_count}"
+            )
+        if self.permission is not None:
+            # The subcell, the classes and the counts; never a key, a name or an ARN.
+            lines.append(
+                f"permission_subcell={self.permission.subcell_id} "
+                f"permission_observed={self.permission.observed.value} "
+                f"permission_outcome={self.permission.outcome.value} "
+                f"permission_operations={self.permission.operations} "
+                f"permission_held_seconds={self.permission.held_seconds}"
             )
         # The one machine-readable line, last (ADR-0044 §5). Imported here because the
         # receipt module names this class.
@@ -538,7 +627,13 @@ def run_task_entry(
     *,
     entry: TaskEntry | None,
     configuration: EntryConfiguration | None,
-    factories: AcquisitionFactories | BuildFactories | VerificationFactories | None,
+    factories: (
+        AcquisitionFactories
+        | BuildFactories
+        | VerificationFactories
+        | PermissionProbeFactories
+        | None
+    ),
 ) -> TaskReceipt:
     """Dispatch to the selected entry. ``None`` anywhere is a refusal, not a default.
 
@@ -558,6 +653,17 @@ def run_task_entry(
         if type(factories) is not VerificationFactories:
             return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
         return run_verification_entry(entry=entry, configuration=configuration, factories=factories)
+    if entry in PROBE_ENTRIES:
+        from kalpamani.data.production.sharadar.permission_probe_entry import (
+            PermissionProbeFactories,
+            run_permission_probe_entry,
+        )
+
+        if type(factories) is not PermissionProbeFactories:
+            return refusal_receipt(entry, TaskOutcome.REFUSED_CONFIGURATION)
+        return run_permission_probe_entry(
+            entry=entry, configuration=configuration, factories=factories
+        )
     if entry is TaskEntry.ACQUISITION:
         from kalpamani.data.production.sharadar.acquisition_entry import (
             AcquisitionFactories,
@@ -578,6 +684,8 @@ __all__ = [
     "BOOTSTRAP_OUTCOME",
     "ENTRY_ACTOR",
     "EXIT_STATUS",
+    "PROBE_ENTRIES",
+    "PROBE_OUTCOMES",
     "TASK_SENTENCES",
     "VERIFICATION_ENTRIES",
     "EntryConfiguration",

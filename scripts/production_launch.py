@@ -140,7 +140,7 @@ SENTENCES: Final[dict[str, str]] = {
 
 _ACTORS: Final = ("acquisition", "build")
 _KINDS: Final = ("production", "verification")
-#: The negative release modes of proposed ADR-0047, admitted for a verification launch
+#: The negative release modes of ADR-0047, admitted for a verification launch
 #: only; the ordinary mode is the default and is never spelled on the command line.
 _RELEASE_MODES: Final = ("withheld", "mismatched")
 
