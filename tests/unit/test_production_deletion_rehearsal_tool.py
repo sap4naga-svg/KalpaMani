@@ -276,7 +276,10 @@ class TestRehearsalModesOpen:
             "--receipt-lines",
             str(lines),
         )
-        assert code == tool.EXIT_REFUSED_COMPLETION and len(t.files("rehearsal-record")) == 2
+        # Correction 1: a completion that is already whole says so and changes nothing.
+        assert code == tool.EXIT_COMPLETION_RECORDED and len(t.files("rehearsal-record")) == 2
+        assert rt.SENTENCES["rehearsal_completion_recorded"] in out
+        assert len(t.files("rehearsal-receipt")) == 2
         # The control principal's later verified cleanup confirms the key absent: PASSED.
         control = t.control(tmp_path)
         control.clock.seconds = clients4.launch.clock.seconds + 60.0
@@ -406,9 +409,8 @@ class TestRehearsalModesOpen:
         code, out = _rehearse(t, "R8-GET", refused, inputs, authorization)
         assert code == rt.EXIT_REHEARSAL_NOT_LAUNCHED and "launch=LAUNCH_REFUSED" in out
         assert rt.SENTENCES["rehearsal_not_launched"] in out
-        assert (
-            len(t.files("rehearsal-reservation")) == 1 and t.files("rehearsal-launch-record") == []
-        )
+        assert t.files("rehearsal-launch-record") == []
+        assert len(dl.rehearsal_reservations(t.scenario.store())) == 1
         assert t.scenario.store().consumptions(dr.REHEARSAL_CONSUMPTION_KIND)
         code, _ = _rehearse(
             t, "R8-GET", _RehearsalClients(launch=_launch_fakes()), inputs, authorization

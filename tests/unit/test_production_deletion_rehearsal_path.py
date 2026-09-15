@@ -539,6 +539,11 @@ def _launch_fakes(exit_code: int | None = 50) -> _LaunchFakes:
     return fakes
 
 
+def _prepared_again(t: _Tool) -> dr.RehearsalStatement:
+    """Another R8-GET statement over the same prerequisite, under a fresh stamp."""
+    return dr.prepare_rehearsal("R8-GET", t.evidence(), stamp="20260912T150100Z-abce")
+
+
 def _launch(
     t: _Tool,
     statement: dr.RehearsalStatement,
@@ -673,11 +678,24 @@ class TestRehearsalLaunch:
         run_kwargs = fakes.ecs.calls[0][1]
         assert "overrides" not in run_kwargs
         assert run_kwargs["taskDefinition"] == REHEARSAL_REVISION_ARN
-        [reservation_path] = t.files("rehearsal-reservation")
-        reservation = dl.parse_rehearsal_reservation(reservation_path.read_bytes())
+        # Correction 1: the reservation and its resolution are anchored beside the canonical
+        # ledger (never under the records directory), the reservation retaining the whole
+        # specification; the launch record names the reservation by digest.
+        assert t.files("rehearsal-reservation") == []
+        [reservation] = dl.rehearsal_reservations(store).values()
         assert reservation.statement_sha256 == statement.digest
         assert reservation.authorization_sha256 == digest
+        assert reservation.specification.digest == reservation.specification_sha256
+        assert reservation.started_by == "kalpamani-rehearsal-" + STAMP
+        assert reservation.cluster_arn == CLUSTER_ARN
+        [resolution] = dl.rehearsal_resolutions(store).values()
+        assert resolution.reservation_sha256 == reservation.digest
+        assert resolution.task_state is dl.RehearsalTaskState.OBSERVED_TERMINAL
+        assert resolution.task_id == TASK_ID and resolution.outcome == "LAUNCHED"
+        assert dl.unsettled_rehearsals(store) == []
         record = report.record
+        assert record.reservation_sha256 == reservation.digest
+        assert resolution.launch_record_sha256 == record.digest
         assert record.observed_exit_code == 50 and record.task_id == TASK_ID
         assert record.task_definition_arn == REHEARSAL_REVISION_ARN
         assert record.image_digest == IMAGE_DIGEST
@@ -703,7 +721,7 @@ class TestRehearsalLaunch:
         report2, _ = _launch(t, statement, fakes2)
         assert report2.outcome is dl.RehearsalLaunchOutcome.REFUSED_CONSUMED
         assert report2.run_tasks == 0 and fakes2.ecs.calls == [] and fakes2.ssm.calls == []
-        assert len(t.files("rehearsal-reservation")) == 1
+        assert len(dl.rehearsal_reservations(store)) == 1
 
     def test_refusals_and_interruptions_leave_evidence_and_never_retry(
         self, tmp_path: Path
@@ -725,7 +743,9 @@ class TestRehearsalLaunch:
         assert report.outcome is dl.RehearsalLaunchOutcome.REFUSED_INPUT_EXISTS
         assert report.run_tasks == 0
         assert t.scenario.store().is_consumed(dr.REHEARSAL_CONSUMPTION_KIND, digest)
-        assert len(t.files("rehearsal-reservation")) == 1
+        assert len(dl.rehearsal_reservations(t.scenario.store())) == 1
+        [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
+        assert resolution.task_state is dl.RehearsalTaskState.NOT_STARTED
         assert t.files("rehearsal-launch-record") == []
         # RunTask refused definitively, and RunTask ambiguous: recorded, no retry, the
         # input removed, the reservation kept, the authorization spent.
@@ -739,9 +759,24 @@ class TestRehearsalLaunch:
             report, digest = _launch(t, statement, fakes)
             assert report.outcome is outcome and report.run_tasks == 1
             assert [c[0] for c in fakes.ecs.calls] == ["run_task"]
-            assert fakes.ssm.values == {} and len(t.files("rehearsal-reservation")) == 1
+            assert fakes.ssm.values == {}
             assert t.scenario.store().is_consumed(dr.REHEARSAL_CONSUMPTION_KIND, digest)
             assert t.files("rehearsal-launch-record") == []
+            [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
+            assert resolution.outcome == outcome.value
+            if outcome is dl.RehearsalLaunchOutcome.LAUNCH_AMBIGUOUS:
+                # A task may exist: UNKNOWN, unsettled until a verified cleanup; the next
+                # launch on this ledger refuses before consuming anything.
+                assert resolution.task_state is dl.RehearsalTaskState.UNKNOWN
+                assert len(dl.unsettled_rehearsals(t.scenario.store())) == 1
+                again = _launch_fakes()
+                report2, digest2 = _launch(t, _prepared_again(t), again)
+                assert report2.outcome is dl.RehearsalLaunchOutcome.REFUSED_RECOVERY_PENDING
+                assert again.ecs.calls == [] and again.ssm.calls == []
+                assert not t.scenario.store().is_consumed(dr.REHEARSAL_CONSUMPTION_KIND, digest2)
+            else:
+                assert resolution.task_state is dl.RehearsalTaskState.NOT_STARTED
+                assert dl.unsettled_rehearsals(t.scenario.store()) == []
         # Misplaced (another subnet), a public IP, another revision, another image: stopped,
         # never released, no launch record.
         for name in ("subnet", "public-ip", "revision", "image"):
@@ -763,6 +798,11 @@ class TestRehearsalLaunch:
             assert fakes.ecs.calls[-1][1]["reason"] == dl.STOP_REASON_MISPLACED
             assert dr.REHEARSAL_RELEASE_PARAMETER not in fakes.ssm.names("put_parameter")
             assert fakes.ssm.values == {} and t.files("rehearsal-launch-record") == []
+            [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
+            assert resolution.task_state is dl.RehearsalTaskState.STOPPED
+            assert (
+                resolution.task_id == TASK_ID and dl.unsettled_rehearsals(t.scenario.store()) == []
+            )
         # A stale release: stopped, no launch record.
         t, statement = _statement(tmp_path / "stale-release")
         fakes = _launch_fakes()
@@ -779,6 +819,9 @@ class TestRehearsalLaunch:
         report, _ = _launch(t, statement, fakes)
         assert report.outcome is dl.RehearsalLaunchOutcome.OBSERVATION_EXHAUSTED
         assert report.record is not None and report.record.observed_exit_code is None
+        [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
+        assert resolution.task_state is dl.RehearsalTaskState.STARTED_NOT_TERMINAL
+        assert len(dl.unsettled_rehearsals(t.scenario.store())) == 1
         assert report.describes <= dl.MAX_OBSERVATION_READS
         assert fakes.clock.monotonic() <= dl.OBSERVATION_CEILING_SECONDS
         assert fakes.ssm.values == {}

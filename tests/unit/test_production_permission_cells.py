@@ -1042,6 +1042,23 @@ class TestEngine:
             mutate(broken)
             with pytest.raises(ValueError):
                 pc.parse_permission_cleanup(canonical_bytes(broken))
+        # Correction 1 of PR #109: a deletion-rehearsal launch is settled by this same
+        # rule under its own tag; the record round-trips, and any other tag stays refused.
+        assert pc.CLEANUP_STARTED_BY_PREFIXES == ("kalpamani-permission-", "kalpamani-rehearsal-")
+        rehearsal = pc.TasksToSettle(
+            attempt_sha256="f6" * 32,
+            started_by="kalpamani-rehearsal-" + STAMP,
+            cluster_arn=CLUSTER_ARN,
+            known_task_ids=(),
+        )
+        cleanup = cleanup_with(FakePermissionClient(LISTED_ONE, STOPPED), rehearsal)
+        assert cleanup.tasks[0].started_by == rehearsal.started_by and cleanup.tasks[0].settled
+        assert cleanup.settles_tasks("f6" * 32, ())
+        assert pc.parse_permission_cleanup(canonical_bytes(cleanup.document())) == cleanup
+        foreign = cleanup.document()
+        foreign["tasks"][0]["started_by"] = "kalpamani-production-" + STAMP
+        with pytest.raises(ValueError):
+            pc.parse_permission_cleanup(canonical_bytes(foreign))
 
 
 # ---------------------------------------------------------------------------
