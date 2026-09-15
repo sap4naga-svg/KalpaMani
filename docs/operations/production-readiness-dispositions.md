@@ -296,7 +296,10 @@ result binds only through its whole chain — attempt, statement, bound prerequi
 recomputed against the context in force (the targets document included), the consumed authorization
 — by one validator shared by execution, derivation and cleanup admission, and an ambiguous launch is
 settled only by termination evidence after bounded discovery, never by an empty listing (PR #106
-correction 2). **Empty, partial, simulated or blocked
+correction 2); discovery lists by `startedBy` alone, as the `ListTasks` contract requires, with the
+request shape held at the real adapter's intercepted transport, and a cleanup record whose identity is
+not verified settles nothing wherever cleanup evidence is consumed (PR #106 correction 3). **Empty,
+partial, simulated or blocked
 coverage never passes**, and the aggregate stays `INCOMPLETE` while any of it remains. Acceptance
 would authorize no execution and grant no permission.
 

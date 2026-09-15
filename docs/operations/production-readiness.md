@@ -785,6 +785,25 @@ and `incomplete` are residue, every known task is preserved and described, termi
 settles, exhaustion is never proof of absence, no `RunTask` is ever sent; the control principal's
 `ecs:ListTasks` / `DescribeTasks` / `StopTask` are recorded as deferred, not granted.
 
+### 11.1c Correction 3 on review (PR #106)
+
+Two findings reproduced on synthetic files against `33d7c41c75af242e25a22ae2af8ed633447d27a3` and
+corrected: **valid ECS discovery requests** — the adapter's `ListTasks` had combined `startedBy` with
+`desiredStatus`, which the documented contract refuses (`startedBy` is the only filter when used);
+discovery now lists by `startedBy` alone, cluster, `maxResults` and a returned `nextToken`, for at
+most three pages, preserving exact launch attribution, the page bound and the `undiscovered` /
+`failed` / `incomplete` residue, adding no filter and no permission, and the request body is asserted
+at the real adapter's intercepted transport for every listing (no `RunTask`): a fake `200` alone
+validates no request. The stated limitation: a task that stopped before discovery and aged out of the
+listing is not discoverable this way, and its launch stays `CLEANUP_UNRESOLVED` (ADR-0047 §3.5, §5).
+**Cleanup identity** — a cleanup record whose `identity_verified` is `false` settles nothing: one
+admissibility rule (same binding, no earlier than the record, identity verified) is applied by the
+matrix derivation, the tool's prerequisite availability and its cleanup suppression alike; the
+unverified pass is preserved and reported, and a verified pass settles the same object or launch
+again — held for the object and the task case through the public runner beside verified controls.
+Validated by the focused regressions, the full suite, `ruff`, `mypy` and the docs audit on the
+corrected head; results and limitations in the evidence export.
+
 ### 11.2 Proposed — decided only by ADR-0047's acceptance
 
 The release-mode field on the specification and the record (ADR-0045's contracts, narrowly amended —

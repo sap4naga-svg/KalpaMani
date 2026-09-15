@@ -257,7 +257,14 @@ record's object the target's; and the durable consumption of the authorization, 
 and statement, consumed no later than the attempt started. **A digest-shaped field alone binds
 nothing**: a record whose attempt, statement or consumption is missing, substituted or contradicting
 is `UNBOUND` with the defect named, and a cleanup settles a bound result only by naming its attempt
-and its exact object or launch under the same binding, recorded no earlier than the record. The cell
+and its exact object or launch **and only when it is admissible** — the one rule every consumer of
+cleanup evidence applies (`PermissionCleanup.admissible_for`, used by the matrix derivation, by the
+tool's prerequisite availability and by its cleanup suppression alike): the same binding, recorded
+no earlier than the record, **and the control principal's identity verified**. **A cleanup record
+whose identity is not verified settles nothing**: it is preserved and reported (the reason names it),
+but it never confirms an object removed or a launch terminated, never makes a prerequisite object
+available for a dependent subcell, and never suppresses the next cleanup pass — a verified pass
+settles the same object or launch again. The cell
 runner derives each subcell from the records: a bound `MATCHED` result under the current binding whose
 identity was verified and whose every open object or launch is settled is `PASSED`; **an inversion under the current
 binding never disappears** when a later matched record arrives (a corrected declaration changes the
@@ -282,18 +289,29 @@ aggregate stays `INCOMPLETE` while R-4, R-5 and R-8 are blocked.
 whose identity policy already grants `s3:DeleteObject`) and settles, by exact identity, every object
 a record created or possibly created and every object an unanswered attempt named — confirming each
 absent with one `HeadObject` held to `404` — and every launch a record started or possibly started:
-**bounded discovery** by the attempt's `startedBy` tag — `ListTasks` under each desired status
-(`RUNNING`, then `STOPPED`, which ECS keeps listable for a bounded time), following `nextToken` for
-at most three pages per status — then per known or discovered task one `DescribeTasks` held to
-`STOPPED` and, otherwise, one `StopTask` with the task recorded as residue. **A launch is settled only
-by termination evidence for every task it is known to have started; discovery settles nothing by
-itself.** A discovery that found nothing (delayed visibility looks exactly like absence), a discovery
-that did not answer (`failed`) and a discovery that reached its page bound with a token remaining
-(`incomplete`) each leave the launch unresolved residue, named by its tag and the reason; every task
-known before the discovery is preserved and described; a task found on a later pass is settled then.
-**Discovery exhaustion is never proof of absence, and no `RunTask` is ever sent by the cleanup.** An
-ambiguous launch whose task is never discovered stays `CLEANUP_UNRESOLVED`; an owner mechanism to
-attest such a launch settled is not implemented and not decided here (§5). **An object the R-4 or
+**bounded discovery** by the attempt's `startedBy` tag — `ListTasks` with `startedBy` as **the only
+filter** (the documented `ListTasks` contract: when `startedBy` is used it is the sole filter, so no
+`desiredStatus`, `family`, `serviceName`, `launchType` or `containerInstance` accompanies it), the
+cluster, `maxResults` and, when a page returned one, `nextToken`, following the token for at most
+three pages — then per known or discovered task one `DescribeTasks` held to `STOPPED` and, otherwise,
+one `StopTask` with the task recorded as residue. The request shape is held at the real adapter's
+intercepted transport, not by a fake's answer: **a fake HTTP 200 alone does not validate request
+compatibility.** **A launch is settled only by termination evidence for every task it is known to
+have started; discovery settles nothing by itself.** A discovery that found nothing (delayed
+visibility looks exactly like absence), a discovery that did not answer (`failed`) and a discovery
+that reached its page bound with a token remaining (`incomplete`) each leave the launch unresolved
+residue, named by its tag and the reason; every task known before the discovery is preserved and
+described; a task found on a later pass is settled then. **Discovery exhaustion is never proof of
+absence, and no `RunTask` is ever sent by the cleanup.** **Stopped-task visibility is a stated
+limitation**: without a second filter the listing returns what ECS currently returns for the tag —
+running tasks and recently stopped ones — so a task that stopped before discovery and has aged out
+of the listing is not discoverable by this mechanism; such a launch stays unresolved, and the
+mechanism that would settle it (a status-filtered listing under a different, documented request, or
+an owner attestation) is outside this decision (§5). An ambiguous launch whose task is never
+discovered stays `CLEANUP_UNRESOLVED`; an owner mechanism to attest such a launch settled is not
+implemented and not decided here (§5). **A cleanup pass settles nothing unless its record attests
+the control principal's verified identity** (§3.4): an `identity_verified=false` pass is reported
+and settles no object and no launch. **An object the R-4 or
 R-5 positive writes left for a prepared, not yet recorded dependent subcell is deferred, not removed**
 — kept until that dependent check has run, then settled by the next pass. A key not confirmed absent,
 a task not confirmed stopped, an undiscovered, failed or incomplete discovery, a refused delete or an
@@ -317,6 +335,7 @@ prove them.
 | a **running task of the actor** | the 2 R-6 `ExecuteCommand` subcells | a task of ours runs only during an authorized R-1 launch; executing into it during that launch (and recording the refusal) is a later decision of the verification entries | **not implemented; not authorized by this ADR** |
 | the **control principal's task discovery and stop** (`ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:StopTask` on the governed cluster) | the cleanup's settlement of launches (§3.5) | the R-3 control principal's identity policy grants the S3 operations the cleanup uses; whether it holds these ECS actions is not established here and is not granted by this ADR — until it does, the cleanup records a `failed` discovery as residue | **recorded as deferred (owner inputs D.2); not granted** |
 | an **owner attestation for an undiscovered ambiguous launch** | an ambiguous launch whose task is never discovered (§3.5) | a mechanism that would let the owner record, on evidence outside the cleanup, that no task ran — none is designed; the subcell stays `CLEANUP_UNRESOLVED` | **not implemented; not decided here** |
+| **discovery of a task that stopped before discovery and aged out of the `startedBy` listing** | a launch whose task stopped early (§3.5) | `ListTasks` by `startedBy` returns what ECS currently lists for the tag, and a status filter cannot accompany it; a documented request that lists stopped tasks by another filter, or an attestation, would be a later decision — until then the launch stays `CLEANUP_UNRESOLVED` | **limitation recorded; not implemented; not decided here** |
 | an **execution path for the deletion role** | the 2 R-8 subcells | a deletion task definition, or a runbook step under a separately authorized principal (ADR-0007 holds that no human may assume the role and no deletion task definition exists) | **not implemented; the runbook step stays separately authorized** |
 | the **owner-held targets** | R-4's refused secret, R-4/R-5's refused bucket, R-9 | the private targets document (§3.3) | a value the owner supplies before cloud verification (owner inputs D.1) |
 
@@ -407,3 +426,26 @@ empty list. Now discovery is bounded and explicit (two desired statuses, three p
 settled only by termination evidence, exhaustion is never proof of absence, and no `RunTask` is ever
 sent (§3.5); the control principal's ECS actions are recorded as deferred, not granted (§5). Counts
 unchanged at **56 / 6 / 36**; the task-role, deletion-role and `ExecuteCommand` cases stay blocked.
+
+## 10. Corrections on review (PR #106, correction 3)
+
+Two further findings were reproduced on synthetic files against the corrected head of correction 2
+and corrected. (1) **Invalid ECS discovery requests**: the adapter's `ListTasks` combined
+`startedBy` with `desiredStatus`, and the documented contract makes `startedBy` the only filter when
+it is used — a request the fake accepted with `200` and the service would refuse. Now discovery
+lists by `startedBy` alone (cluster, `startedBy`, `maxResults`, `nextToken` when following a token),
+for at most three pages; the same attribution, the same page bound and the same residue
+(`undiscovered`, `failed`, `incomplete`); no filter, status or permission added; and the request
+shape is asserted at the real adapter's intercepted transport for every listing sent, with no
+`RunTask` — **a fake HTTP 200 alone does not validate request compatibility** (§3.5). The
+consequence is stated rather than worked around: a task that stopped before discovery and aged out
+of the listing is not discoverable by this mechanism, the launch stays unresolved, and the mechanism
+that would settle it is recorded in §5 as a limitation, not implemented and not decided. (2)
+**Cleanup identity**: a complete, valid chain whose cleanup differed only by `identity_verified =
+false` settled its object and its launch, in the matrix, in the tool's prerequisite availability and
+in its cleanup suppression. Now one admissibility rule (`PermissionCleanup.admissible_for`: same
+binding, no earlier than the record, identity verified) is applied wherever cleanup evidence is
+consumed; an unverified pass is preserved for reporting and settles nothing, the reason names it, and
+a verified pass settles the same object or launch again (§3.4, §3.5) — held by object and task cases
+through the public runner beside their verified controls. Counts unchanged at **56 / 6 / 36**; the
+task-role, deletion-role and `ExecuteCommand` cases stay blocked; ADR-0047 stays PROPOSED.

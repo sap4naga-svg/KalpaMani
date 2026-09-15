@@ -309,8 +309,15 @@ def test_the_adr_names_the_release_modes_the_contracts_and_the_tool() -> None:
     assert "the digest of the owner's private targets document" in ADR_PLAIN
     assert "bind_result" in ADR_TEXT and "PermissionContext" in ADR_TEXT
     assert "targets_sha256" in pc.PermissionBinding.__slots__
-    assert pc.DISCOVERY_DESIRED_STATUSES == ("RUNNING", "STOPPED")
-    assert pc.DISCOVERY_MAX_PAGES == 3 and "three pages per status" in ADR_PLAIN
+    assert not hasattr(pc, "DISCOVERY_DESIRED_STATUSES")  # correction 3: startedBy alone
+    assert pc.DISCOVERY_MAX_PAGES == 3 and "for at most three pages" in ADR_PLAIN
+    assert "## 10. Corrections on review (PR #106, correction 3)" in ADR_TEXT
+    assert "startedBy as the only filter" in ADR_PLAIN and "no desiredStatus, family" in ADR_PLAIN
+    assert "a fake HTTP 200 alone does not validate request compatibility" in ADR_PLAIN
+    assert "Stopped-task visibility is a stated limitation" in ADR_PLAIN
+    assert "A cleanup record whose identity is not verified settles nothing" in ADR_PLAIN
+    assert "admissible_for" in ADR_TEXT
+    assert "limitation recorded; not implemented; not decided here" in ADR_PLAIN
     assert "recorded as deferred (owner inputs D.2); not granted" in ADR_PLAIN
     assert "--prepare-subcell" in ADR_TEXT and "LaunchStore.consume" in ADR_TEXT
     for status in pc.SubcellStatus:
