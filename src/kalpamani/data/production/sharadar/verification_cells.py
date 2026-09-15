@@ -1277,7 +1277,7 @@ _SUBCELL_PRECEDENCE: Final[tuple[tuple[SubcellStatus, CellStatus], ...]] = (
     (SubcellStatus.HISTORICAL, CellStatus.HISTORICAL),
     (SubcellStatus.CLEANUP_UNRESOLVED, CellStatus.INCONCLUSIVE),
     (SubcellStatus.UNDECIDED, CellStatus.INCONCLUSIVE),
-    # A launched probe whose receipt is not yet verified (proposed ADR-0048): the cell
+    # A launched probe whose receipt is not yet verified (ADR-0048): the cell
     # is INCONCLUSIVE until the record is completed -- never PASSED on an exit code.
     (SubcellStatus.AWAITING_RECEIPT, CellStatus.INCONCLUSIVE),
     (SubcellStatus.AWAITING_R1, CellStatus.UNEXECUTED),

@@ -468,7 +468,7 @@ class TestCatalogue:
         assert len({s.subcell_id for s in pc.SUBCELLS}) == len(pc.SUBCELLS)
 
     def test_task_roles_and_the_deletion_role_are_blocked_with_their_dependency(self) -> None:
-        # Proposed ADR-0048: the task-role subcells are executed by the permission-probe
+        # ADR-0048: the task-role subcells are executed by the permission-probe
         # launch (L3_TASK), the ExecuteCommand subcells against the actor's own held probe
         # task (L3_HELD_TASK); only the deletion role stays BLOCKED, on the governance
         # decision its dependency names.
@@ -1627,7 +1627,7 @@ class TestDerivation:
         )
         passed = pc.derive_subcell(own, _evidence(), r1_passed={**R1, ProductionActor.BUILD: True})
         assert passed.status is pc.SubcellStatus.PASSED
-        # A task subcell with no record is UNEXECUTED (proposed ADR-0048), never PASSED;
+        # A task subcell with no record is UNEXECUTED (ADR-0048), never PASSED;
         # the deletion role's subcell is BLOCKED with its dependency.
         task = pc.derive_subcell(pc.subcell("R4-SECRET-GET-TASK"), _evidence(), r1_passed=R1)
         assert task.status is pc.SubcellStatus.UNEXECUTED
@@ -1691,7 +1691,7 @@ class TestMatrix:
         assert states["R7-QUALIFICATION"].status is vc.CellStatus.UNBOUND
 
     def test_r4_stays_blocked_by_its_task_subcells_however_the_human_ones_read(self) -> None:
-        # Proposed ADR-0048: R-4's task subcells are UNEXECUTED until their probe runs --
+        # ADR-0048: R-4's task subcells are UNEXECUTED until their probe runs --
         # the cell never passes on its human half alone -- and R-8 stays BLOCKED.
         human = [
             _bound(s.subcell_id)
@@ -1741,7 +1741,7 @@ class TestMatrix:
         states = self._states(_evidence(*negatives), build=True, acquisition=True)
         assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
         # The two ExecuteCommand subcells are executed against the actor's own held probe
-        # task (proposed ADR-0048): UNEXECUTED until then, so R-6 as a whole stays
+        # task (ADR-0048): UNEXECUTED until then, so R-6 as a whole stays
         # UNEXECUTED however its other subcells read -- never PASSED on them alone.
         assert states["R6-LAUNCHERS"].status is vc.CellStatus.UNEXECUTED
         held = [
@@ -2031,7 +2031,7 @@ def test_execution_refuses_before_any_client_on_automation_profile_identity_and_
         assert t.main(*t.execute_argv(blocked, authorization)) == tool.EXIT_REFUSED_SUBCELL
         assert t.main("--prepare-subcell", blocked, *t.base()) == tool.EXIT_REFUSED_SUBCELL
     assert t.main(*t.execute_argv("R4-NOTHING", authorization)) == tool.EXIT_REFUSED_SUBCELL
-    # A probe-layer subcell (proposed ADR-0048) on a registration with no probe target:
+    # A probe-layer subcell (ADR-0048) on a registration with no probe target:
     # preparation refuses at the binding; execution proves both identities first and,
     # with no launch clients admitted, refuses at the identity -- no client, no record.
     for probe in ("R4-SECRET-GET-TASK", "R6-ACQ-EXECUTE-COMMAND"):

@@ -182,7 +182,7 @@ def _admit_input(
 ) -> tuple[str, AcquisitionInput | BuildInput | PermissionProbeInput, CompiledPlan | None]:
     """The identity, the admitted input and (acquisition) the plan compiled from its slice.
 
-    A permission-probe entry (proposed ADR-0048) admits the probe input contract
+    A permission-probe entry (ADR-0048) admits the probe input contract
     instead of its actor's production input: the same parameter, the same digest over
     the bytes, a different closed document -- one naming the subcell the probe issues.
     """
@@ -211,7 +211,7 @@ def run_task_bootstrap(
     source is the input's own spent-identity block, ADR-0044 §3) and is not
     consulted for a build. The acquisition plan is compiled **from the
     admitted input's own slice** and its digest compared to the input's; a
-    mismatch refuses the input. ``probe`` (proposed ADR-0048) admits the permission-probe
+    mismatch refuses the input. ``probe`` (ADR-0048) admits the permission-probe
     input contract in place of the actor's production input and changes nothing else:
     the same environment, binding, self-check, identity proof and release barrier.
     """

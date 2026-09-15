@@ -1,4 +1,4 @@
-"""The R-4 .. R-9 permission subcells (ADR-0036 s.3; ADR-0047; proposed ADR-0048).
+"""The R-4 .. R-9 permission subcells (ADR-0036 s.3; ADR-0047; ADR-0048).
 
 ADR-0036 s.3 states each of R-4 .. R-9 as one row: a principal, what must succeed and what
 must be refused. A row is not executable; this module expands each row into **subcells**,
@@ -13,14 +13,14 @@ every object a subcell created is confirmed removed.
 ``L3_RUNTIME`` -- one real request under the principal's own profile, counted; ``L3_BY_R1``
 -- the launcher's positive operations, which the R-1 bootstrap launch already performs and
 records (no second task is started to prove them); ``L3_TASK`` -- one real request issued
-**by the actor's permission-probe task under its own task role** (proposed ADR-0048): the
+**by the actor's permission-probe task under its own task role** (ADR-0048): the
 tool launches the probe through the accepted launch sequence with the subcell's bound
 statement as its input, the probe issues exactly that operation after the release barrier,
 and the workstation completes the record only from the probe's verified receipt;
 ``L3_HELD_TASK`` -- the launcher's ``ExecuteCommand`` refusal against its own probe task,
 launched to hold for the check and issue nothing; ``BLOCKED`` -- a subcell no accepted
 mechanism can execute: the deletion role has no execution path (no human may assume it
-and no deletion task definition exists), and the path proposed ADR-0048 s.4 designs is a
+and no deletion task definition exists), and the path ADR-0048 s.4 designs is a
 governance decision this module does not take. A blocked subcell blocks its cell;
 simulation (L2) is not executed by this module and could never pass a subcell.
 
@@ -213,7 +213,7 @@ class Layer(StrEnum):
     BLOCKED = "BLOCKED"
 
 
-#: The layers a permission-probe launch executes (proposed ADR-0048).
+#: The layers a permission-probe launch executes (ADR-0048).
 PROBE_LAYERS: Final[frozenset[Layer]] = frozenset({Layer.L3_TASK, Layer.L3_HELD_TASK})
 #: The layers the records decide: one runtime request, one probe launch, or one held probe.
 EXECUTABLE_LAYERS: Final[frozenset[Layer]] = frozenset({Layer.L3_RUNTIME, *PROBE_LAYERS})
@@ -222,9 +222,10 @@ EXECUTABLE_LAYERS: Final[frozenset[Layer]] = frozenset({Layer.L3_RUNTIME, *PROBE
 DELETION_DEPENDENCY: Final = (
     "the deletion role has no execution path: no human may assume it, no deletion task "
     "definition exists and no principal holds iam:PassRole for it (ADR-0007, verified); "
-    "proposed ADR-0048 s.4 designs a governed rehearsal path (a rehearsal family, a "
-    "rehearsal launcher passing exactly that role to ECS, the role's two bootstrap "
-    "parameters), and whether to open it is a governance decision taken only by that "
+    "ADR-0048 s.4 designs a governed rehearsal path (a rehearsal family, a rehearsal "
+    "launcher passing exactly that role to ECS, the role's two bootstrap parameters), "
+    "proposed ADR-0049 s.3 implements it offline and presents the decision to open it "
+    "(D-1), and whether to open it is a governance decision taken only by that "
     "decision's acceptance -- not by this module"
 )
 
@@ -822,6 +823,7 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
         subcell_id="R8-LIST-AND-DELETE",
         cell_id="R8-DELETION",
         principal=Principal.DELETION_ROLE,
+        requires=("R4-PUT-PAYLOAD-HUMAN",),
         operation=Operation.S3_DELETE,
         target=TargetKind.BRONZE_PRODUCTION_PAYLOAD,
         expectation=_ALLOW,
@@ -834,6 +836,7 @@ SUBCELLS: Final[tuple[Subcell, ...]] = (
         subcell_id="R8-GET",
         cell_id="R8-DELETION",
         principal=Principal.DELETION_ROLE,
+        requires=("R4-PUT-PAYLOAD-HUMAN",),
         operation=Operation.S3_GET,
         target=TargetKind.BRONZE_PRODUCTION_PAYLOAD,
         expectation=_DENY,
@@ -1033,7 +1036,7 @@ class ResolvedTarget:
 def resolved_target_from(document: Mapping[str, Any]) -> ResolvedTarget:
     """A resolved target rebuilt from its closed document, or ``ValueError``.
 
-    The probe task rebuilds the target its input carries (proposed ADR-0048); the
+    The probe task rebuilds the target its input carries (ADR-0048); the
     digest of the rebuilt target is the digest the statement bound.
     """
     fields_ = {
@@ -1206,7 +1209,7 @@ def resolve_target(
         else ProductionActor.ACQUISITION
     )
     # A launcher's refused launches are aimed at (derivations of) its verification
-    # revision; its ExecuteCommand (proposed ADR-0048) at its own held probe task, whose
+    # revision; its ExecuteCommand (ADR-0048) at its own held probe task, whose
     # revision is the registered permission-probe family's -- a registration without one
     # cannot resolve that target.
     own_kind = (
@@ -1321,7 +1324,7 @@ class PermissionClient(Protocol):
 #: The error codes Secrets Manager, SSM, ECS and EC2 answer a refused request with: an
 #: ``AccessDeniedException`` (HTTP 400) or ``UnauthorizedOperation``, where S3 answers
 #: ``AccessDenied`` (403). The R-3 classifier reads S3 alone; a permission subcell issues
-#: every one of these services, so its denials are classified here (proposed ADR-0048).
+#: every one of these services, so its denials are classified here (ADR-0048).
 _SERVICE_DENIAL_CODES: Final[frozenset[str]] = frozenset(
     {"AccessDeniedException", "UnauthorizedOperation"}
 )
@@ -1444,10 +1447,10 @@ PERMISSION_ATTEMPT_CONTRACT_ID: Final = "kalpamani-permission-attempt/v1"
 PERMISSION_RECORD_CONTRACT_ID: Final = "kalpamani-permission-record/v1"
 PERMISSION_CLEANUP_CONTRACT_ID: Final = "kalpamani-permission-cleanup/v1"
 #: The verified receipt of one probe launch, kept beside the permission record it
-#: completed (proposed ADR-0048 s.2.5): the receipt document as collected, bound to the
+#: completed (ADR-0048 s.2.5): the receipt document as collected, bound to the
 #: launch record by that record's digest, re-verified by the validator on every read.
 PROBE_RECEIPT_CONTRACT_ID: Final = "kalpamani-probe-receipt-evidence/v1"
-#: The held-task precondition one launcher check was admitted on (proposed ADR-0048 s.3):
+#: The held-task precondition one launcher check was admitted on (ADR-0048 s.3):
 #: the fresh description of the launched probe task, or why no check was made.
 HELD_TASK_CONTRACT_ID: Final = "kalpamani-held-task-evidence/v1"
 MAX_PERMISSION_RECORD_BYTES: Final = 32 * 1024
@@ -2193,7 +2196,7 @@ def _issue(
             platform_version=target.platform_version,
         )
     if op is Operation.ECS_EXECUTE_COMMAND:
-        # Against the actor's own held probe task (proposed ADR-0048): the one moment a
+        # Against the actor's own held probe task (ADR-0048): the one moment a
         # released, running, attributable task of ours exists to execute into.
         assert target.cluster_arn is not None and target.task_arn is not None
         return client.execute_command(cluster_arn=target.cluster_arn, task_arn=target.task_arn)
@@ -2216,7 +2219,7 @@ class SubcellIssue:
 
     Shared by the workstation (which wraps it into a :class:`PermissionRecord` at once)
     and the probe task (which carries it home in its receipt as a
-    :class:`PermissionProbeObservation`, proposed ADR-0048). Classes, counts, ids.
+    :class:`PermissionProbeObservation`, ADR-0048). Classes, counts, ids.
     """
 
     observed: ObservedClass
@@ -2817,7 +2820,7 @@ def parse_permission_record(raw: object) -> PermissionRecord:
     ):
         raise ValueError("permission record: field")
     if probe:
-        # A probe-layer record (proposed ADR-0048): the one started task is the probe
+        # A probe-layer record (ADR-0048): the one started task is the probe
         # task itself, under the session's tag, never possibly started; a task subcell's
         # one operation (or none, when the probe refused before it); a held subcell's one
         # ExecuteCommand plus the stop an unexpected session provoked (or none, when the
@@ -3221,7 +3224,7 @@ class PermissionEvidence:
     cleanups: tuple[PermissionCleanup, ...] = ()
     malformed: int = 0
     context: PermissionContext | None = None
-    #: The probe launches the tool made (proposed ADR-0048), by the digest of the
+    #: The probe launches the tool made (ADR-0048), by the digest of the
     #: attempt each answers -- read from the **reservation** beside the ledger (the
     #: durable pre-launch attribution), with the launch record that names it, the ledger
     #: row of its identity, and how many further launch records name the same identity.
@@ -3294,7 +3297,7 @@ class ChainDefect(StrEnum):
     TARGET_MISMATCH = "TARGET_MISMATCH"
     CONSUMPTION_MISSING = "CONSUMPTION_MISSING"
     CONSUMPTION_MISMATCH = "CONSUMPTION_MISMATCH"
-    # A probe-layer result (proposed ADR-0048) binds through its launch, its receipt and
+    # A probe-layer result (ADR-0048) binds through its launch, its receipt and
     # its ledger row as well; each is required, exact, and never chosen among several.
     LAUNCH_MISSING = "LAUNCH_MISSING"
     LAUNCH_DUPLICATE = "LAUNCH_DUPLICATE"
@@ -3347,7 +3350,7 @@ def _bind_probe_evidence(
     attempt: PermissionAttempt,
     evidence: PermissionEvidence,
 ) -> tuple[ProbeLaunch, VerifiedReceipt, HeldTaskEvidence | None]:
-    """The probe-layer half of the one validator (proposed ADR-0048).
+    """The probe-layer half of the one validator (ADR-0048).
 
     Required, and held to each other and to the permission chain: exactly one probe
     launch attributed to this attempt by its reservation, with exactly one launch record
@@ -3502,7 +3505,7 @@ def bind_result(
     the attempt's and the record's object the target's; and the durable consumption of
     the authorization, naming this subcell and statement, consumed no later than the
     attempt started. A digest-shaped field alone binds nothing. A probe-layer
-    result (proposed ADR-0048) binds through :func:`_bind_probe_evidence` as well: its
+    result (ADR-0048) binds through :func:`_bind_probe_evidence` as well: its
     reservation-attributed launch, its re-verified receipt, its ledger row and, held, its
     precondition evidence.
     """
@@ -3814,7 +3817,7 @@ def derive_subcell(
         and latest.outcome is SubcellOutcome.UNDECIDED
         and latest.observed is ObservedClass.NOT_EXERCISED
     ):
-        # A probe that refused before its operation (proposed ADR-0048): nothing was
+        # A probe that refused before its operation (ADR-0048): nothing was
         # issued and no identity was proven for it; the answer decided nothing, and the
         # subcell is not re-executed automatically.
         return SubcellState(

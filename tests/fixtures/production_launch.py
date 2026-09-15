@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Final
 
 from fixtures.production_runtime import (
     BUILD_ID,
@@ -103,7 +103,12 @@ def ledger_document(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
 
 
 def task_definition_document(
-    actor: ProductionActor, *, verification: bool = False, probe: bool = False, **overrides: Any
+    actor: ProductionActor,
+    *,
+    verification: bool = False,
+    probe: bool = False,
+    log_destination: bool = False,
+    **overrides: Any,
 ) -> dict[str, Any]:
     """The owner's transcription of one registered revision (synthetic)."""
     constants = constants_for(actor)
@@ -130,8 +135,25 @@ def task_definition_document(
         "command": family,
         "image_digest": IMAGE_DIGEST,
     }
+    if log_destination:
+        document["log_destination"] = log_destination_document(family)
     document.update(overrides)
     return document
+
+
+#: The synthetic research log group (the declaration's ``/kalpamani/<name_prefix>/research``).
+LOG_GROUP: Final = "/kalpamani/synthetic/research"
+
+
+def log_destination_document(family: str) -> dict[str, Any]:
+    """The registered log destination of one family, as the declaration names it: the
+    container is the family's short name, the stream prefix ``production-`` + container."""
+    container = family.removeprefix("kalpamani-production-").removeprefix("kalpamani-research-")
+    return {
+        "log_group": LOG_GROUP,
+        "stream_prefix": f"production-{container}",
+        "container": container,
+    }
 
 
 def target_document(
@@ -294,6 +316,7 @@ class FakeClients:
     launcher_ssm: FakeSsm = field(default_factory=FakeSsm)
     human_sts: FakeSts | None = None
     launcher_sts: FakeSts | None = None
+    logs_fake: FakeLogs = field(default_factory=lambda: FakeLogs())
     constructions: list[tuple[str, str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -329,20 +352,54 @@ class FakeClients:
         self.constructions.append(("ssm", profile))
         return self.human_ssm if self._profile_kind(profile) == "human" else self.launcher_ssm
 
+    def logs(self, profile: str) -> Any:
+        self.constructions.append(("logs", profile))
+        assert self._profile_kind(profile) == "launcher"
+        return self.logs_fake
+
+
+@dataclass
+class FakeLogs:
+    """A CloudWatch Logs-shaped fake: a queue of ``GetLogEvents`` answers.
+
+    Each queued answer is a dict response (``events`` / ``nextForwardToken``), an
+    exception to raise, or a callable of the request kwargs. The last answer repeats.
+    """
+
+    answers: list[Any] = field(default_factory=list)
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def get_log_events(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        if not self.answers:
+            raise AssertionError("no get_log_events answer queued")
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if callable(answer):
+            answer = answer(kwargs)
+        if isinstance(answer, BaseException):
+            raise answer
+        response = dict(answer)
+        # A real SDK answer carries its metadata; a queued dict is the payload alone.
+        response.setdefault("ResponseMetadata", {"HTTPStatusCode": 200})
+        return response
+
 
 __all__ = [
     "ACQ",
     "BLD",
     "BUILD_ID",
     "GENERATION_RECORD_DIGESTS",
+    "LOG_GROUP",
     "PROBE_GENERATION_RECORD_DIGESTS",
     "R3_DIGEST",
     "FakeClients",
+    "FakeLogs",
     "FakeSts",
     "authorization_document",
     "launch_inputs_document",
     "ledger_document",
     "ledger_row",
+    "log_destination_document",
     "specification_digest_for",
     "target_document",
     "task_definition_document",

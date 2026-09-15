@@ -319,7 +319,7 @@ def _configuration(entry: TaskEntry) -> EntryConfiguration:
             origin_addresses=ORIGIN_ADDRESSES,
         )
     if entry in PROBE_ENTRIES:
-        # A probe entry (proposed ADR-0048): the probe family and nothing else.
+        # A probe entry (ADR-0048): the probe family and nothing else.
         from fixtures.production_runtime import compiled_probe_task
 
         return EntryConfiguration(entry=entry, compiled=compiled_probe_task(ENTRY_ACTOR[entry]))

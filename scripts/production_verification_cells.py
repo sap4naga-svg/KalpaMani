@@ -348,7 +348,7 @@ def permission_evidence(store: Any, context: Any) -> Any:
             malformed += 1
             continue
         consumptions[digest] = parsed
-    # The probe launches the permission tool made (proposed ADR-0048), attributed by the
+    # The probe launches the permission tool made (ADR-0048), attributed by the
     # **reservation** each wrote beside the ledger before RunTask: its workload names the
     # attempt; the launch records naming its identity (one is the launch, more is a
     # duplicate the validator refuses) bind to it through the one record-to-reservation

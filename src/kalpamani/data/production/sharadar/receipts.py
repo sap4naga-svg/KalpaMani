@@ -89,7 +89,7 @@ from kalpamani.data.production.sharadar.schema_observation import (
 #: verification probe observation and the Route B per-dataset schema observation --
 #: each carried exactly by the one outcome that produces it, and null everywhere else.
 #: A v1 receipt is refused (SCHEMA_VERSION_UNKNOWN); no v1 receipt was ever emitted by a task.
-#: Version 3 (proposed ADR-0048): one more closed, nullable block -- ``permission`` --
+#: Version 3 (ADR-0048): one more closed, nullable block -- ``permission`` --
 #: carried exactly by a permission-probe entry's PROBE_* receipt. A v2 validator refuses
 #: the field; the collector and the workstation read v3 alone.
 RECEIPT_CONTRACT_ID: Final = "kalpamani-task-receipt/v3"
@@ -151,7 +151,7 @@ LEDGER_OUTCOME_OF: Final[dict[TaskOutcome, str | None]] = {
     TaskOutcome.MANIFEST_STATE_UNKNOWN: None,
     TaskOutcome.MANIFEST_REFUSED: "HALTED",
     TaskOutcome.UNCLASSIFIED: None,
-    # A probe task issued its one operation or held (proposed ADR-0048): its identity
+    # A probe task issued its one operation or held (ADR-0048): its identity
     # was consumed by a probe launch; the row says PROBED and never COMPLETED or
     # VERIFIED. What the operation answered is the permission record's, not the row's.
     TaskOutcome.PROBE_MATCHED: "PROBED",
@@ -387,7 +387,7 @@ class VerifiedReceipt:
     probe: ProbeObservation | None = None
     #: The Route B schema observation -- evidence for owner review, never an accepted set.
     schema_observation: SchemaObservation | None = None
-    #: The permission-probe observation (proposed ADR-0048) -- what the probe's one
+    #: The permission-probe observation (ADR-0048) -- what the probe's one
     #: operation answered; the workstation's permission record is completed from it.
     permission: PermissionProbeObservation | None = None
 
@@ -523,7 +523,7 @@ def verify_receipt(document: object, *, expectation: ReceiptExpectation) -> Veri
     if outcome is TaskOutcome.COMPLETED and entry in VERIFICATION_ENTRIES:
         raise _refuse(ReceiptDefect.EVIDENCE_CONTRADICTS_OUTCOME)
     # A probe entry never completes a run and verifies no bootstrap; only a probe entry
-    # reaches a probe outcome (proposed ADR-0048).
+    # reaches a probe outcome (ADR-0048).
     if entry in PROBE_ENTRIES and outcome in (
         TaskOutcome.COMPLETED,
         TaskOutcome.VERIFIED_BOOTSTRAP,

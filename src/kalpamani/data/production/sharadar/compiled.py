@@ -90,7 +90,7 @@ _BUILD_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"build_configuration"}
 #: actor-specific beyond it -- no secret name, no build configuration -- so a
 #: verification image carries no capability its entry must not hold.
 _VERIFICATION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"origin_addresses"}
-#: A permission-probe entry's file (proposed ADR-0048): the common fields and nothing
+#: A permission-probe entry's file (ADR-0048): the common fields and nothing
 #: else -- no secret name, no origin address set, no build configuration. The subcell a
 #: probe issues comes from its input, never from the image.
 _PROBE_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS

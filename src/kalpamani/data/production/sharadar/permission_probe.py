@@ -1,4 +1,4 @@
-"""The permission-probe contracts shared by the task and the workstation (proposed ADR-0048).
+"""The permission-probe contracts shared by the task and the workstation (ADR-0048).
 
 A task-role permission subcell (ADR-0047 s.3) is exercised by a **permission-probe task**:
 the actor's probe entry, launched by the actor's launcher through the accepted launch

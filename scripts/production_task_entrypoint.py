@@ -343,7 +343,7 @@ def _factories(entry: Any, working_directory: Any, *, clients: Any = None) -> An
         def operation_client(operation: Any) -> Any:
             # The one service the subcell's operation names, over the task's isolated,
             # container-credentialed session; any other service is refused before a
-            # client exists (proposed ADR-0048).
+            # client exists (ADR-0048).
             return single_service_client(
                 operation, lambda service: _client(TaskService(service), clients)
             )

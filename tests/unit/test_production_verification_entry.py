@@ -94,7 +94,7 @@ def _production_configuration(actor: Any) -> EntryConfiguration:
 
 class TestVocabulary:
     def test_four_entries_two_actors_and_the_verification_families(self) -> None:
-        # Six entries since proposed ADR-0048: the two probe entries beside the four.
+        # Six entries since ADR-0048: the two probe entries beside the four.
         assert set(TaskEntry) == {
             TaskEntry.ACQUISITION_PROBE,
             TaskEntry.BUILD_PROBE,

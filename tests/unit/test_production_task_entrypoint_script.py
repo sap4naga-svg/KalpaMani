@@ -539,7 +539,7 @@ def test_the_working_root_is_the_task_definitions_tmpfs() -> None:
     )
     assert entrypoint.TASK_WORKING_ROOT == "/work"
     # Two production containers, two verification containers (ADR-0045) and two
-    # permission-probe containers (proposed ADR-0048).
+    # permission-probe containers (ADR-0048).
     assert compute.count('containerPath = "/work"') == 6
     assert compute.count("readonlyRootFilesystem = true") == 6
     assert "dir=TASK_WORKING_ROOT" in EXECUTABLE and "mkdtemp(" in EXECUTABLE

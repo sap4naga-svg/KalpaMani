@@ -1,4 +1,4 @@
-"""The R-4 .. R-9 permission-subcell tool (ADR-0036 s.3; ADR-0047; proposed ADR-0048).
+"""The R-4 .. R-9 permission-subcell tool (ADR-0036 s.3; ADR-0047; ADR-0048).
 
 **Refuses by default.**
 
@@ -36,7 +36,7 @@ recorded; an answer that leaves a write or a launch open is recorded as possibly
 Every record is written exclusively under the owner's records directory beside the launch
 records, where the cell runner derives the matrix from them.
 
-**A task-role subcell is executed by a probe launch** (proposed ADR-0048). The same order to
+**A task-role subcell is executed by a probe launch** (ADR-0048). The same order to
 the attempt record; then, instead of a client, the accepted launch sequence under the actor's
 human and launcher profiles (both identities proven through the accepted bootstrap, as the
 launch tool proves them): the probe input -- the subcell, the statement and attempt digests,
@@ -91,6 +91,9 @@ from kalpamani.data.qualify.sharadar.runtime_binding import (  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-permission-subcell"
 CLEANUP_FLAG: Final = "--i-am-the-owner-authorizing-permission-cleanup"
+#: One bounded receipt collection from a probe launch's own log stream (proposed ADR-0049
+#: s.2): a logs read under the actor's launcher profile after that identity is proven.
+COLLECT_FLAG: Final = "--i-am-the-owner-authorizing-receipt-collection"
 #: The consumption namespace beside the ledger (:meth:`LaunchStore.consume`).
 CONSUMPTION_KIND: Final = "permission_authorization"
 TARGETS_ENV_VAR: Final = "KALPAMANI_PRODUCTION_PERMISSION_TARGETS_FILE"
@@ -154,6 +157,9 @@ EXIT_REFUSED_RESERVATION: Final = 22
 EXIT_RECOVERED: Final = 0
 EXIT_REFUSED_RECOVERY: Final = 23
 EXIT_COMPLETION_RECORDED: Final = 24
+EXIT_COLLECTION_NOT_COLLECTED: Final = 25
+EXIT_REFUSED_DESTINATION: Final = 26
+EXIT_REFUSED_REHEARSAL_CLOSED: Final = 27
 
 SENTENCES: Final[dict[str, str]] = {
     "planned": "permission subcell plan printed; nothing was performed",
@@ -225,6 +231,18 @@ SENTENCES: Final[dict[str, str]] = {
     "completion_recorded": (
         "permission subcell already completed from this receipt; the record, the receipt "
         "evidence and the ledger row are present and nothing was changed"
+    ),
+    "collection_not_collected": (
+        "receipt not collected within the budget: the collection is recorded, the subcell "
+        "stays as it was, and nothing is established about whether a receipt exists"
+    ),
+    "refused_destination": (
+        "permission cells refused: the registration names no log destination for the probe "
+        "entry, or not this entry's"
+    ),
+    "refused_rehearsal_closed": (
+        "permission cells refused: the deletion rehearsal path is implemented offline and "
+        "CLOSED pending the governance decision (ADR-0049 D-1); the R-8 subcells stay BLOCKED"
     ),
 }
 
@@ -669,7 +687,7 @@ def execute_subcell(
 ) -> pc.PermissionRecord | ProbeLaunchResult:
     """The authorized branch: one subcell, on injected seams.
 
-    A runtime subcell returns its record; a probe-layer subcell (proposed ADR-0048)
+    A runtime subcell returns its record; a probe-layer subcell (ADR-0048)
     returns the launch it made and, for a held subcell, the record written at once.
     """
     if running_under_automation(env, modules):
@@ -1299,12 +1317,23 @@ def _completions(cell: pc.Subcell, admitted: _Admitted, evidence: Any) -> list[_
     return found
 
 
+def _receipt_text(parsed: argparse.Namespace, receipt_text: str | None) -> str:
+    """The receipt lines: the hand-read file, or the collector's line."""
+    if receipt_text is not None:
+        return receipt_text
+    try:
+        return Path(parsed.receipt_lines).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
+
+
 def complete_subcell(
     subcell_id: str,
     parsed: argparse.Namespace,
     *,
     env: Mapping[str, str],
     seams: dict[str, Any],
+    receipt_text: str | None = None,
 ) -> tuple[pc.PermissionRecord, bool]:
     """Complete a launched probe subcell from its hand-read receipt. Offline; no client.
 
@@ -1358,9 +1387,9 @@ def complete_subcell(
     if not pending and len(candidates) == 1 and candidates[0].receipts:
         # Already whole: the same receipt changes nothing and says so; another refuses.
         try:
-            text = Path(parsed.receipt_lines).read_bytes().decode("utf-8")
+            text = _receipt_text(parsed, receipt_text)
             document = decode_receipt_line(collect_receipt_line(text.splitlines()))
-        except (OSError, UnicodeDecodeError, ReceiptError):
+        except ReceiptError:
             raise PermissionToolRefusalError(
                 "refused_completion", EXIT_REFUSED_COMPLETION
             ) from None
@@ -1376,10 +1405,10 @@ def complete_subcell(
     if launch.duplicates or launch.binding is not pc.RecordBinding.BOUND:
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
     try:
-        text = Path(parsed.receipt_lines).read_bytes().decode("utf-8")
+        text = _receipt_text(parsed, receipt_text)
         document = decode_receipt_line(collect_receipt_line(text.splitlines()))
         verified = verify_receipt(document, expectation=launch_record.expectation())
-    except (OSError, UnicodeDecodeError, ReceiptError):
+    except ReceiptError:
         raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION) from None
     # The receipt's outcome must be the exit the launcher observed at the terminal state.
     from kalpamani.data.production.sharadar.entry import EXIT_STATUS
@@ -1497,6 +1526,150 @@ def complete_subcell(
             "refused_record_write", EXIT_REFUSED_RECORD_WRITE
         ) from None
     return record, True
+
+
+def collect_receipt_for_subcell(
+    subcell_id: str,
+    parsed: argparse.Namespace,
+    *,
+    env: Mapping[str, str],
+    modules: Mapping[str, object],
+    seams: dict[str, Any],
+) -> str:
+    """The probe launch's receipt line from its own stream (proposed ADR-0049 s.2), or refuse.
+
+    Exactly one launched, incomplete attempt of the subcell under the current binding; the
+    registered probe target's log destination held to the probe entry; the actor's
+    launcher identity proven through the accepted human bootstrap; then one bounded
+    collection under that profile, recorded (``receipt-collection``) whatever its outcome.
+    A collection already recorded as COLLECTED for this launch is reused and the stream is
+    not read again. The line then completes the subcell through :func:`complete_subcell`
+    -- the same verifier, the same evidence, the same binding rules as a hand-read receipt.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+    from kalpamani.data.production.sharadar.documents import decode_document
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+    from kalpamani.data.production.sharadar.receipt_collector import (
+        COLLECTION_CONTRACT_ID,
+        CollectionOutcome,
+        CollectorError,
+        SdkLogsClient,
+        collect_receipt,
+        destination_for,
+    )
+    from kalpamani.data.production.sharadar.runner import HumanBootstrapOutcome, human_bootstrap
+    from kalpamani.data.production.sharadar.vocabulary import IdentityPath, constants_for
+
+    if running_under_automation(env, modules):
+        raise PermissionToolRefusalError(
+            "refused_execution_context", EXIT_REFUSED_EXECUTION_CONTEXT
+        )
+    try:
+        cell = pc.subcell(subcell_id)
+    except ValueError:
+        raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL) from None
+    if cell.layer not in pc.PROBE_LAYERS:
+        raise PermissionToolRefusalError("refused_subcell", EXIT_REFUSED_SUBCELL)
+    now: Callable[[], datetime] = seams["now"]
+    admitted = _admit(
+        parsed,
+        env,
+        expected_account=seams["expected_account"],
+        load_environment_binding=seams["load_environment_binding"],
+        read_private=seams["read_private"],
+        declaration_dir=seams.get("declaration_dir", DECLARATION_DIR),
+        root_source=seams.get("root_source"),
+    )
+    evidence = _evidence(admitted)
+    candidates = _completions(cell, admitted, evidence)
+    pending = [c for c in candidates if not c.complete]
+    if len(pending) == 1:
+        launch = pending[0].launch
+    elif not pending and len(candidates) == 1:
+        # Already whole: a recorded collection is handed back so the completion can say
+        # so; a completion made from a hand-read receipt has nothing to collect.
+        launch = candidates[0].launch
+    else:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    launch_record = launch.record
+    assert launch_record is not None
+    if launch.duplicates or launch.binding is not pc.RecordBinding.BOUND:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    probe_target = _probe_target(admitted, cell)
+    if probe_target.task_definition_arn != launch_record.task_definition_arn:
+        raise PermissionToolRefusalError("refused_completion", EXIT_REFUSED_COMPLETION)
+    try:
+        destination = destination_for(
+            launch_record.entry, probe_target.task_definition.log_destination
+        )
+    except CollectorError:
+        raise PermissionToolRefusalError("refused_destination", EXIT_REFUSED_DESTINATION) from None
+    record_digest = pc.launch_record_digest(launch_record)
+    for path in sorted(admitted.store._records_dir.glob("receipt-collection-*.json")):
+        try:
+            document = decode_document(path.read_bytes(), max_bytes=lr.MAX_RECORD_BYTES)
+        except Exception:  # noqa: S112 - an unreadable record is not this launch's evidence
+            continue
+        if (
+            type(document) is dict
+            and document.get("contract_id") == COLLECTION_CONTRACT_ID
+            and document.get("identity") == launch.identity
+            and document.get("launch_record_sha256") == record_digest
+            and document.get("outcome") == CollectionOutcome.COLLECTED.value
+            and type(document.get("receipt_line")) is str
+        ):
+            return str(document["receipt_line"])
+    if not pending:
+        raise PermissionToolRefusalError("completion_recorded", EXIT_COMPLETION_RECORDED)
+    actor = pc.PRINCIPAL_ACTOR[cell.principal]
+    assert actor is not None
+    constants = constants_for(actor)
+    launch_clients = seams["launch_clients"]
+    try:
+        bootstrap = human_bootstrap(
+            actor=actor,
+            path=IdentityPath.LAUNCHER,
+            environment=env.get,
+            caller_identity=lambda: launch_clients.sts(
+                constants.launcher_profile
+            ).get_caller_identity(),
+            root_source=seams.get("root_source"),
+            security_of=seams.get("security_of"),
+        )
+    except Exception:
+        raise PermissionToolRefusalError("refused_identity", EXIT_REFUSED_IDENTITY) from None
+    if bootstrap.outcome is not HumanBootstrapOutcome.IDENTITY_PROVEN:
+        raise PermissionToolRefusalError("refused_identity", EXIT_REFUSED_IDENTITY)
+    try:
+        client = SdkLogsClient(lambda _service: launch_clients.logs(constants.launcher_profile))
+    except Exception:
+        raise PermissionToolRefusalError("refused_dependency", EXIT_REFUSED_DEPENDENCY) from None
+    collected = collect_receipt(
+        destination=destination,
+        task_id=launch_record.task_id,
+        client=client,
+        now=now,
+        monotonic=seams["monotonic"],
+        sleep=seams["sleep"],
+    )
+    try:
+        admitted.store.write_record(
+            "receipt-collection",
+            collected.document(identity=launch.identity, launch_record_sha256=record_digest),
+            at=collected.finished_at,
+        )
+    except StoreError:
+        raise PermissionToolRefusalError(
+            "refused_record_write", EXIT_REFUSED_RECORD_WRITE
+        ) from None
+    print(
+        f"collection={collected.outcome.value} requests={collected.requests} "
+        f"pages={collected.pages} events_scanned={collected.events_scanned} "
+        f"distinct_receipt_lines={collected.distinct_receipt_lines}"
+    )
+    if collected.receipt_line is None:
+        raise PermissionToolRefusalError("collection_not_collected", EXIT_COLLECTION_NOT_COLLECTED)
+    return collected.receipt_line
 
 
 def _same_result(existing: pc.PermissionRecord, established: pc.PermissionRecord) -> bool:
@@ -1908,7 +2081,7 @@ class _Boto3PermissionClient(SdkPermissionClient):
     transport attempt with finite connect and read timeouts. Each client is built lazily
     from the one session, so a subcell constructs only the service it uses. The
     operations themselves are the shared :class:`SdkPermissionClient`'s (the probe task
-    issues the same requests over its own credentials, proposed ADR-0048).
+    issues the same requests over its own credentials, ADR-0048).
     """
 
     __slots__ = ("_config", "_session")
@@ -1971,6 +2144,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute-subcell")
     parser.add_argument("--complete-subcell")
     parser.add_argument("--recover-probe-launch")
+    parser.add_argument("--collect-receipt")
+    parser.add_argument("--rehearse-deletion")
+    parser.add_argument(COLLECT_FLAG, dest="collection_authorized", action="store_true")
     parser.add_argument("--receipt-lines", type=Path)
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--cleanup", action="store_true")
@@ -2018,16 +2194,30 @@ def main(
     except SystemExit:
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
+    if parsed.rehearse_deletion is not None:
+        # The deletion rehearsal path (proposed ADR-0049 s.3): implemented offline, closed
+        # until the governance decision opens it. Refused before any path or flag is read.
+        from kalpamani.data.production.sharadar.deletion_rehearsal import REHEARSAL_PATH_OPEN
+
+        if not REHEARSAL_PATH_OPEN:
+            print(SENTENCES["refused_rehearsal_closed"])
+            return EXIT_REFUSED_REHEARSAL_CLOSED
+        print(SENTENCES["refused_arguments"])
+        return EXIT_REFUSED_ARGUMENTS
     modes = sum(
         (
             parsed.execute_subcell is not None,
             parsed.prepare_subcell is not None,
             parsed.complete_subcell is not None,
             parsed.recover_probe_launch is not None,
+            parsed.collect_receipt is not None,
             parsed.cleanup,
             parsed.check_record is not None,
         )
     )
+    if parsed.collection_authorized != (parsed.collect_receipt is not None):
+        print(SENTENCES["refused_arguments"])
+        return EXIT_REFUSED_ARGUMENTS
     if modes > 1 or (parsed.receipt_lines is not None and parsed.complete_subcell is None):
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
@@ -2084,6 +2274,14 @@ def main(
     ):
         print(SENTENCES["refused_arguments"])
         return EXIT_REFUSED_ARGUMENTS
+    if parsed.collect_receipt is not None and (
+        parsed.authorized
+        or parsed.cleanup_authorized
+        or parsed.authorization is not None
+        or parsed.receipt_lines is not None
+    ):
+        print(SENTENCES["refused_arguments"])
+        return EXIT_REFUSED_ARGUMENTS
     environment = dict(os.environ) if env is None else dict(env)
     seams: dict[str, Any] = {
         "now": (lambda: datetime.now(tz=UTC)) if now is None else now,
@@ -2122,6 +2320,21 @@ def main(
             )
             for line in result_lines(completed):
                 print(line)
+            print(SENTENCES["completed"])
+            return EXIT_COMPLETED
+        if parsed.collect_receipt is not None:
+            line = collect_receipt_for_subcell(
+                parsed.collect_receipt,
+                parsed,
+                env=environment,
+                modules=sys.modules if modules is None else modules,
+                seams=seams,
+            )
+            completed, _written = complete_subcell(
+                parsed.collect_receipt, parsed, env=environment, seams=seams, receipt_text=line
+            )
+            for line_ in result_lines(completed):
+                print(line_)
             print(SENTENCES["completed"])
             return EXIT_COMPLETED
         if parsed.recover_probe_launch is not None:

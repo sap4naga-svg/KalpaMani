@@ -307,7 +307,7 @@ def _rule_stage_gating(model: Model) -> list[str]:
                 # AND only with its own digest; both counts are conjunctions with stage a.
                 "local.production_acquire_verify_count",
                 "local.production_build_verify_count",
-                # Proposed ADR-0048: the permission-probe families, the same rule.
+                # ADR-0048: the permission-probe families, the same rule.
                 "local.production_acquire_probe_count",
                 "local.production_build_probe_count",
             ) or (
@@ -781,7 +781,7 @@ def _rule_launch(model: Model) -> list[str]:
                 found.append(f"{td}_verify must run as its own actor's task role")
             if verify.attributes.get("execution_role_arn", "") != "aws_iam_role.task_execution.arn":
                 found.append(f"{td}_verify must use the foundation execution role")
-        # The permission-probe family (proposed ADR-0048): the same task and execution
+        # The permission-probe family (ADR-0048): the same task and execution
         # roles again.
         probe = model.resources.get(("aws_ecs_task_definition", f"{td}_probe"))
         if probe is None:
@@ -846,7 +846,7 @@ def _rule_task_definitions_text(sources: dict[str, str]) -> list[str]:
         if re.search(rf"^\s*{key}\s*=", text, re.MULTILINE):
             found.append(f"a task definition carries {key}")
     # Two production containers, two verification containers (ADR-0045) and two
-    # permission-probe containers (proposed ADR-0048), every one pinned by digest,
+    # permission-probe containers (ADR-0048), every one pinned by digest,
     # read-only, with a fixed command.
     if text.count("@${lookup(var.production_image_digests") != 6:
         found.append("all six images must be pinned by digest from production_image_digests")

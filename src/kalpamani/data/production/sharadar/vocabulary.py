@@ -52,7 +52,7 @@ class ActorConstants:
     #: the same task role and placement, the verification image, and a task that
     #: stops at the release barrier. Never the production family.
     verification_task_family: str
-    #: The permission-probe task-definition family (proposed ADR-0048): the same actor,
+    #: The permission-probe task-definition family (ADR-0048): the same actor,
     #: the same task role and placement, the verification image, and a task that issues
     #: exactly one catalogued permission operation after the release barrier, or holds.
     #: Never the production family.

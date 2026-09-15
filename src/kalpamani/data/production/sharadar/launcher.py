@@ -86,7 +86,7 @@ PLACEMENT_POLL_INTERVAL_SECONDS: Final = 5.0
 PLACEMENT_CEILING_SECONDS: Final = 120.0
 OBSERVE_POLL_INTERVAL_SECONDS: Final = 15.0
 OBSERVE_CEILING_SECONDS: Final = 3600.0
-#: The held-task precondition (proposed ADR-0048 s.3): after the release is written, the
+#: The held-task precondition (ADR-0048 s.3): after the release is written, the
 #: launched probe task is described afresh until it reports RUNNING, at this interval and
 #: for at most this long, before the one ExecuteCommand check is issued. The ceiling sits
 #: inside the probe's own hold (180 s after its bootstrap, ceiling 600 s), so a task that
@@ -159,7 +159,7 @@ class LaunchHandle:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HeldTask:
     """What a fresh ``DescribeTasks`` established about the launched probe task at the
-    moment the launcher's check was admitted (proposed ADR-0048 s.3): the task, the
+    moment the launcher's check was admitted (ADR-0048 s.3): the task, the
     revision and image it reported, its ``lastStatus`` and when it was observed. This is
     what proves the probe task was *available* -- running, on the registered revision and
     image, released by this sequence -- and nothing more: whether the service evaluates
@@ -208,7 +208,7 @@ class LaunchReport:
     #: ``WITHHELD`` no release was written; under ``MISMATCHED`` the release named a
     #: task ARN derived from, and never equal to, the launched task's.
     release_mode: ReleaseMode = ReleaseMode.NORMAL
-    #: The held-task precondition's outcome (proposed ADR-0048 s.3), and the fresh
+    #: The held-task precondition's outcome (ADR-0048 s.3), and the fresh
     #: description the check was admitted on -- present exactly when ``INVOKED``.
     held_check: HeldCheckOutcome = HeldCheckOutcome.NOT_APPLICABLE
     held_task: HeldTask | None = None
@@ -393,7 +393,7 @@ def launch_authorized_run(
 ) -> LaunchReport:
     """Run the whole launch sequence for one authorized run; one sanitized report.
 
-    ``while_running`` (proposed ADR-0048) is invoked at most once, after the release is
+    ``while_running`` (ADR-0048) is invoked at most once, after the release is
     written and before observation begins, and only once the **held-task precondition**
     holds: a fresh ``DescribeTasks`` of the task this sequence started reports it
     ``RUNNING`` on the registered revision with the registered image, polled at
@@ -652,7 +652,7 @@ def launch_authorized_run(
                 raise _AbortedError(LaunchOutcome.REFUSED_RELEASE_WRITE) from None
             release_written = True
 
-        # Step 8a (proposed ADR-0048 s.3): the held-task precondition, then the
+        # Step 8a (ADR-0048 s.3): the held-task precondition, then the
         # launcher's one check against its own released, running probe task. The task is
         # described afresh until it reports RUNNING on the registered revision with the
         # registered image; anything else -- stopped first, not yet running at the
