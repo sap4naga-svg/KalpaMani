@@ -778,7 +778,9 @@ class TestRehearsalLaunch:
                 assert resolution.task_state is dl.RehearsalTaskState.NOT_STARTED
                 assert dl.unsettled_rehearsals(t.scenario.store()) == []
         # Misplaced (another subnet), a public IP, another revision, another image: stopped,
-        # never released, no launch record.
+        # never released, no launch record. Correction 2: the stop is acknowledged AND the
+        # exact task is then observed STOPPED (the queued descriptions end STOPPED), which is
+        # what settles the reservation -- never the acknowledgement alone.
         for name in ("subnet", "public-ip", "revision", "image"):
             fakes = _launch_fakes()
             if name == "subnet":
@@ -788,14 +790,22 @@ class TestRehearsalLaunch:
             elif name == "revision":
                 running = _task("RUNNING")
                 running["taskDefinitionArn"] = REHEARSAL_REVISION_ARN.replace(":3", ":9")
-                fakes.ecs.descriptions = [running]
+                fakes.ecs.descriptions = [running, _task("STOPPED", exit_code=None)]
             else:
-                fakes.ecs.descriptions = [_task("RUNNING", image_digest="sha256:" + "ab" * 32)]
+                fakes.ecs.descriptions = [
+                    _task("RUNNING", image_digest="sha256:" + "ab" * 32),
+                    _task("STOPPED", exit_code=None),
+                ]
             t, statement = _statement(tmp_path / name)
             report, _ = _launch(t, statement, fakes)
             assert report.outcome is dl.RehearsalLaunchOutcome.MISPLACED, name
-            assert report.stops == 1 and fakes.ecs.calls[-1][0] == "stop_task"
-            assert fakes.ecs.calls[-1][1]["reason"] == dl.STOP_REASON_MISPLACED
+            calls = [c[0] for c in fakes.ecs.calls]
+            assert report.stops == 1 and calls.count("stop_task") == 1
+            assert calls[calls.index("stop_task") + 1 :] == ["describe_tasks"] * (
+                len(calls) - calls.index("stop_task") - 1
+            )
+            assert calls[-1] == "describe_tasks"
+            assert fakes.ecs.names("stop_task")[0]["reason"] == dl.STOP_REASON_MISPLACED
             assert dr.REHEARSAL_RELEASE_PARAMETER not in fakes.ssm.names("put_parameter")
             assert fakes.ssm.values == {} and t.files("rehearsal-launch-record") == []
             [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
@@ -803,14 +813,19 @@ class TestRehearsalLaunch:
             assert (
                 resolution.task_id == TASK_ID and dl.unsettled_rehearsals(t.scenario.store()) == []
             )
-        # A stale release: stopped, no launch record.
+        # A stale release: stopped and observed STOPPED, no launch record.
         t, statement = _statement(tmp_path / "stale-release")
         fakes = _launch_fakes()
         fakes.ssm.values[dr.REHEARSAL_RELEASE_PARAMETER] = b"stale"
         report, _ = _launch(t, statement, fakes)
         assert report.outcome is dl.RehearsalLaunchOutcome.STALE_RELEASE and report.stops == 1
-        assert fakes.ecs.calls[-1][1]["reason"] == dl.STOP_REASON_STALE_RELEASE
+        assert fakes.ecs.names("stop_task")[0]["reason"] == dl.STOP_REASON_STALE_RELEASE
+        stale_calls = [c[0] for c in fakes.ecs.calls]
+        assert stale_calls.count("stop_task") == 1 and stale_calls[-1] == "describe_tasks"
         assert t.files("rehearsal-launch-record") == []
+        [resolution] = dl.rehearsal_resolutions(t.scenario.store()).values()
+        assert resolution.task_state is dl.RehearsalTaskState.STOPPED
+        assert resolution.task_id == TASK_ID and dl.unsettled_rehearsals(t.scenario.store()) == []
         # Observation exhausted: released, the task never seen stopped within 120 reads /
         # 600 s; the record says so with no exit, and completes nothing.
         t, statement = _statement(tmp_path / "exhausted")
