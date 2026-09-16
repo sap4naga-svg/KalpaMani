@@ -133,3 +133,20 @@ def test_the_adr_records_review_correction_1_and_the_regressions_exist() -> None
     assert "No refusal code was added or removed" in ADR_PLAIN
     assert (REPO_ROOT / "tests" / "unit" / "test_exploratory_isolation_correction_1.py").is_file()
     assert "at least the four mandatory limitations" in ADR_PLAIN
+
+
+def test_the_adr_records_slice_2_as_an_implementation_event_and_not_an_acceptance() -> None:
+    assert "## 9. Slice 2" in ADR_TEXT
+    assert "records no acceptance event and takes no decision" in ADR_PLAIN
+    assert "The status line of this ADR is unchanged by it" in ADR_PLAIN
+    assert "as a synthetic fixture, not as owner selections" in ADR_PLAIN
+    assert "establishes software behaviour only" in ADR_PLAIN
+    assert "no bridge reads production Gold objects" in ADR_PLAIN
+    assert "superseded in part by" in ADR_PLAIN
+    assert "fourth" in ADR_PLAIN and "vendor-scoped package" in ADR_PLAIN
+    assert "Status: " + PROPOSED in ADR_TEXT
+    for module in ("resolution", "dataset", "m0", "report"):
+        assert f"kalpamani.data.exploratory.{module}" in ADR_TEXT
+        assert (REPO_ROOT / "src/kalpamani/data/exploratory" / f"{module}.py").is_file()
+    assert (REPO_ROOT / "tests/unit/test_m0_exploratory_path.py").is_file()
+    assert (REPO_ROOT / "tests/fixtures/m0_exploratory.py").is_file()

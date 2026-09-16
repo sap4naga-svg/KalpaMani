@@ -153,6 +153,13 @@ benchmark; a backtest runner; a portfolio ledger; a report; any research-mode ga
 slice under its own authorization, reviewed against the M0 research specification the owner holds
 outside this repository, and none is implied by accepting this ADR.
 
+> **HISTORICAL — the state as of the pull request that introduced this ADR, superseded in part by
+> §9 (2026-09-15).** A later, separately authorized slice implemented the exploratory resolution, a
+> Silver-to-exploratory bridge, benchmark A, the M0 runner, two terminal ledgers and a report,
+> **offline and on synthetic fixtures only**. The text above records what this ADR itself decided and
+> implemented, and it is not rewritten; what §9 records is a later event, and it changes neither the
+> status of this ADR nor the decisions §6 keeps pending.
+
 ## 5. Acceptance and execution authority are separate
 
 **Acceptance** (the merge of this ADR's pull request) establishes the vocabulary and the contracts and
@@ -205,3 +212,49 @@ No refusal code was added or removed; the exact-type opt-in, the production isol
 decision (§6) are unchanged; the accepted vocabularies, gate, availability policy and Breakout Long
 thresholds are untouched. The status of this ADR is unchanged: proposed, no authority while the pull
 request is open.
+
+## 9. Slice 2 — the synthetic end-to-end M0 path (2026-09-15, a later and separately authorized slice)
+
+**This section records an implementation event; it records no acceptance event and takes no decision.**
+The status line of this ADR is unchanged by it. Recording whether the acceptance clause above has been
+satisfied by a merge is a status synchronization the owner directs separately; this slice did not
+perform it and does not anticipate it.
+
+Under a written authorization limited to **repository implementation and synthetic testing**, the
+components §4 named as not implemented were written **offline, on synthetic fixtures only**, in the
+same research-only package:
+
+| component | module | what it does and does not do |
+|---|---|---|
+| exploratory availability and membership resolution | `kalpamani.data.exploratory.resolution` | `resolve_as_dated` assigns every Silver row an `ExploratoryAvailability` (`EXPLORATORY_HINDSIGHT` / `AS_DATED` / `ASSUMED_HISTORICAL`) whose governing time is the close of the bar's own session, the open before a listing, or the open on or after an action date. It is **not** an `Availability` of the accepted vocabulary, it derives no P-2 or P-3 bound, and the accepted `build_universe` refuses its layer by exact type. `decide_membership` re-uses the accepted universe indexing and decision clauses unchanged, with 252 history sessions and the M0 §14 floors, and a conformance test holds it equal to the accepted build under equal bounds |
+| the Silver-to-exploratory bridge | `kalpamani.data.exploratory.dataset` | `ExploratoryDataset` and `publish` produce an `ExploratoryPublication` carrying the mandatory limitations, the qualification claim `NONE` and a content digest; they **never** produce a `VerifiedPublication`. The bridge consumes a `SilverLayer` object; **no bridge reads production Gold objects or an ADR-0040 manifest from any store**, and none is implemented |
+| benchmark A | `kalpamani.data.exploratory.dataset.build_benchmark_a` | `M0-EW-UNIVERSE`: the equal-weighted return of the members decided at the previous session's decision instant, so no session's return selects its own membership; a missing bar is a zero return (optimistic) or a total loss (loss ledger). `BENCHMARK_SELF_REFERENCE` is declared. This is the **synthetic fixture's** benchmark, not an O-2 selection |
+| the M0 runner | `kalpamani.data.exploratory.m0` | `run_m0` admits only `breakout-long-m0-exploratory-v1` (derived from `breakout-long/r1-research`, D1–D11 recorded), evaluates the unchanged Breakout Long module at the signal instant, executes at the following open with the M0 §14 execution layer (final-fill rejection preserving both sizing limits, prior-session ADDV only, deterministic exit and ranking precedence, causal terminal recognition), and produces two reconciled terminal ledgers (`optimistic`, `total_loss`), the B0 baselines, the cost and idle sensitivities, independent development and validation initialization and a frozen trial digest. `M0_SYNTHETIC_FIXTURE` carries the §14 settings **as a synthetic fixture, not as owner selections**; a `REAL` data kind is refused unless the configuration is `OWNER_SELECTED` with every O-1…O-11 selection recorded — there is no fallback |
+| the report | `kalpamani.data.exploratory.report` | a Markdown and JSON rendering labelled `SYNTHETIC / EXPLORATORY_HINDSIGHT`, opening with the bias statement and the D1–D11 differences |
+
+**What the slice establishes, and what it does not.** The synthetic fixture (`tests/fixtures/m0_exploratory.py`)
+exercises entries, stop and time exits, constraint skips, a missing bar, a split and a delisting; the
+integration tests (`tests/unit/test_m0_exploratory_path.py`) demonstrate the distinct membership, signal
+and execution instants, the prior-session ADDV invariance, the final-fill rejection without resizing, the
+deterministic precedence and ranking, the causal terminal recognition, the two reconciled ledgers, the
+independent initialization with a frozen trial digest, the benchmark's independence from same-session
+returns, the continued refusal of every production consumer, and identical repeated runs. **Every figure is
+synthetic; a passing synthetic run establishes software behaviour only** — no strategy performance, no
+point-in-time qualification, no P1–P9 result, no G2 criterion and no promotion criterion. **Nothing was run
+on licensed data, no acquisition occurred, no image was built or published, no AWS, Terraform or provider
+request was made, and no broker activity occurred.** The accepted Brain gate, the accepted Breakout Long
+thresholds, production P-2 and P-3, D-1 and the closed rehearsal path are unchanged, and tests assert each.
+
+**One guard admission, carrying this ADR's authority and no more.** The vendor-name boundary guards
+(`test_sharadar_provider_boundary.py`, `test_sharadar_qualification_boundary.py`) admit
+`kalpamani.data.exploratory` as a **fourth** vendor-scoped package, because the research path reads the
+accepted Sharadar-shaped Silver, session and universe contracts unchanged and keeps the accepted
+`sharadar:<permaticker>` identity rather than re-implementing either. The admission is recorded in the
+guards with its reason, a fifth package still fails, the package may still reach no runtime, store,
+binding, SDK or network, and no accepted module imports it. Like the A1-surface admission slice 1 made,
+it is a guard change made under a PROPOSED ADR and stands or falls with it.
+
+**What stays pending after this slice.** Every decision §6 lists (O-1…O-11, D-1); the bridge from real
+production Gold objects; the acquisition of any data window; any real-data execution, which requires an
+explicit, validated `OWNER_SELECTED` configuration and its own written authorization; and the status
+synchronization that would record this ADR's acceptance event, which is the owner's.

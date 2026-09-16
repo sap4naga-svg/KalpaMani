@@ -485,8 +485,20 @@ QUALIFY_PACKAGE = SRC / "kalpamani" / "data" / "qualify" / "sharadar"
 #: credential, prefixes and datasets these contracts bind.
 PRODUCTION_PACKAGE = SRC / "kalpamani" / "data" / "production" / "sharadar"
 
-#: Every package permitted to hold vendor knowledge. Named, so a fourth still fails.
-VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE, PRODUCTION_PACKAGE)
+#: The research-only exploratory package (proposed ADR-0051, slice 2): a fourth
+#: vendor-scoped package, admitted under the PROPOSED ADR only, because it reads the
+#: accepted Sharadar-shaped Silver, session and universe contracts unchanged and
+#: keeps the accepted ``sharadar:<permaticker>`` identity. It reaches no runtime,
+#: store, binding or network, and no accepted module imports it.
+EXPLORATORY_PACKAGE = SRC / "kalpamani" / "data" / "exploratory"
+
+#: Every package permitted to hold vendor knowledge. Named, so a fifth still fails.
+VENDOR_SCOPED_PACKAGES = (
+    PROVIDER_PACKAGE,
+    QUALIFY_PACKAGE,
+    PRODUCTION_PACKAGE,
+    EXPLORATORY_PACKAGE,
+)
 
 PROVIDER_DESCRIBED = (
     SRC / "kalpamani" / "data" / "__init__.py",
