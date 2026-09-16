@@ -29,8 +29,11 @@ from kalpamani.data.exploratory.contracts import (
     _contract,
     _exact_str,
     _refuse,
+    parse_limitations,
 )
 from kalpamani.data.exploratory.vocabulary import (
+    MANDATORY_LIMITATIONS,
+    PRODUCTION_PROFILE_NAMES,
     ExploratoryDerivation,
     ExploratoryLimitation,
     ExploratoryProfile,
@@ -85,9 +88,11 @@ class ResearchSpecification:
     version: str
     admits_profile: ExploratoryProfile
     admits_derivation: ExploratoryDerivation
-    #: The limitations this specification acknowledges. An input set declaring a limitation
-    #: the specification does not acknowledge is refused: the consumer must know what it
-    #: is consuming.
+    #: The limitations this specification acknowledges -- at least the mandatory four, or
+    #: the specification is refused at construction (it could never consume anything, and
+    #: its existence would read as unawareness). An input set declaring a limitation the
+    #: specification does not acknowledge is refused: the consumer must know what it is
+    #: consuming.
     declared_limitations: frozenset[ExploratoryLimitation]
     #: The accepted strategy specification this research specification derives from.
     base_strategy_version: str
@@ -108,6 +113,8 @@ class ResearchSpecification:
             type(item) is not ExploratoryLimitation for item in self.declared_limitations
         ):
             raise _refuse(ExploratoryDefect.LIMITATION_UNKNOWN)
+        if not MANDATORY_LIMITATIONS <= self.declared_limitations:
+            raise _refuse(ExploratoryDefect.LIMITATION_MISSING)
         _text(self.base_strategy_version, limit=_VERSION_MAX)
         if (
             type(self.differences) is not tuple
@@ -152,15 +159,7 @@ def parse_research_specification(document: object) -> ResearchSpecification:
         derivation = ExploratoryDerivation(_exact_str(fields["admits_derivation"]))
     except ValueError:
         raise _refuse(ExploratoryDefect.DERIVATION_UNKNOWN) from None
-    raw_limitations = fields["declared_limitations"]
-    if type(raw_limitations) is not list or len(set(raw_limitations)) != len(raw_limitations):
-        raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
-    limitations: set[ExploratoryLimitation] = set()
-    for item in raw_limitations:
-        try:
-            limitations.add(ExploratoryLimitation(_exact_str(item)))
-        except ValueError:
-            raise _refuse(ExploratoryDefect.LIMITATION_UNKNOWN) from None
+    limitations = parse_limitations(fields["declared_limitations"])
     raw_differences = fields["differences"]
     if type(raw_differences) is not list:
         raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
@@ -171,7 +170,7 @@ def parse_research_specification(document: object) -> ResearchSpecification:
         version=_exact_str(fields["version"]),
         admits_profile=profile,
         admits_derivation=derivation,
-        declared_limitations=frozenset(limitations),
+        declared_limitations=limitations,
         base_strategy_version=_exact_str(fields["base_strategy_version"]),
         differences=tuple(_exact_str(item) for item in raw_differences),
         trial=fields["trial"],
@@ -182,16 +181,23 @@ def _is_production_consumer(consumer: object) -> bool:
     """Whether ``consumer`` declares an accepted point-in-time profile anywhere it could.
 
     An accepted ``StrategySpec`` carries ``data.required_profile``; any object carrying an
-    accepted ``InformationSetProfile`` under either spelling is a production consumer and is
-    named as such in the refusal. Attribute access is guarded: an object that raises on
-    inspection is simply not a research specification.
+    accepted ``InformationSetProfile`` member -- or its exact name as a string -- under
+    either spelling is a production consumer and is named as such in the refusal. Every
+    attribute access is guarded: an object that raises on inspection is simply not a
+    research specification, and nothing raises past the rule.
     """
-    for holder in (consumer, getattr(consumer, "data", None)):
+    try:
+        holders = (consumer, getattr(consumer, "data", None))
+    except Exception:  # inspection must never raise past the rule
+        return False
+    for holder in holders:
         try:
             profile = getattr(holder, "required_profile", None)
         except Exception:  # inspection must never raise past the rule
             return False
         if type(profile) is InformationSetProfile:
+            return True
+        if type(profile) is str and profile in PRODUCTION_PROFILE_NAMES:
             return True
     return False
 

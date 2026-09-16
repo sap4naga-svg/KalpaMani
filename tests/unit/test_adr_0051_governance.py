@@ -123,3 +123,13 @@ def test_the_status_documents_carry_one_proposed_row_each_and_agree() -> None:
         assert "ACCEPTED / IN FORCE" not in matching[0], name
         rows[name] = matching[0]
     assert rows["CLAUDE.md"] == rows["README.md"]
+
+
+def test_the_adr_records_review_correction_1_and_the_regressions_exist() -> None:
+    assert "## 8. Review correction 1" in ADR_TEXT
+    assert "56556d9e3d823323c8124913d0754b9d0b0af7d3" in ADR_TEXT
+    assert "reproduced on that head by a regression before it was corrected" in ADR_PLAIN
+    assert "admit never raises" in ADR_PLAIN
+    assert "No refusal code was added or removed" in ADR_PLAIN
+    assert (REPO_ROOT / "tests" / "unit" / "test_exploratory_isolation_correction_1.py").is_file()
+    assert "at least the four mandatory limitations" in ADR_PLAIN

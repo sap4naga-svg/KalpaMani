@@ -116,14 +116,17 @@ likewise named refusals.
 
 `admit(consumer, inputs)` returns `ADMITTED` only when `consumer` is exactly a `ResearchSpecification`
 whose profile and derivation are the input set's and whose acknowledged limitations cover the set's.
-**Any object carrying an accepted `required_profile`** — the accepted `StrategySpec` of Breakout Long
-first among them — is `REFUSED_PRODUCTION_CONSUMER`; anything else is
-`REFUSED_NOT_A_RESEARCH_SPECIFICATION`; a lookalike with the right attributes but the wrong type is
-refused; inspection that raises is refused. There is no duck-typed opt-in.
+**Any object carrying an accepted `required_profile`** — the enumeration member or its exact name as a
+string, directly or under `data` — the accepted `StrategySpec` of Breakout Long first among them — is
+`REFUSED_PRODUCTION_CONSUMER`; anything else is `REFUSED_NOT_A_RESEARCH_SPECIFICATION`; a lookalike with
+the right attributes but the wrong type is refused; inspection that raises at any attribute is refused,
+and `admit` never raises. There is no duck-typed opt-in.
 
 ### 3.3 A research specification is derived, versioned and counted
 
-It names its `base_strategy_version`, enumerates at least one difference, and carries a trial number;
+It names its `base_strategy_version`, enumerates at least one difference, acknowledges **at least the
+four mandatory limitations** (a specification that ignores one could never consume anything and would
+read as unawareness — it is refused at construction, `LIMITATION_MISSING`), and carries a trial number;
 its digest is the parameter identity a trial ledger records. A research specification identical to its
 base would be the base, and is refused.
 
@@ -179,3 +182,26 @@ computation on any row: the tests use synthetic documents only.
 - Every exploratory artefact says on its face what it assumed and what it does not claim.
 - G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT COMPLETE, backtesting stays NOT STARTED,
   live trading stays HARD-DISABLED. Nothing was run to produce this decision.
+
+## 8. Review correction 1 (2026-09-15, within the open pull request)
+
+Independent review of the submitted head `56556d9e3d823323c8124913d0754b9d0b0af7d3` found that §3's
+"never a raw exception" and §3.2's "inspection that raises is refused" did not hold everywhere, and that two
+admission labels and one schema check were weaker than stated. Each was **reproduced on that head by a
+regression before it was corrected**, beside a valid control (`tests/unit/test_exploratory_isolation_correction_1.py`):
+
+| finding on 56556d9e | correction |
+|---|---|
+| a consumer whose `data` attribute raised propagated a `RuntimeError` out of `admit` | every attribute access in the production-consumer inspection is guarded; `admit` never raises |
+| a consumer carrying a production profile **by name** (`"PROVIDER_REALISTIC_PIT"` as a string) was refused under the generic code, under-reporting the attempt | the exact accepted name as a string is a production consumer, `REFUSED_PRODUCTION_CONSUMER` |
+| a non-string identifier or digest passed straight to a constructor reached `re.fullmatch` and raised `TypeError` | constructors reuse the parsers' typed grammar checks: `FIELD_MALFORMED` |
+| a wrong-typed `provenance` on a publication was labelled `PROFILE_MISSING` | `None` is `PROFILE_MISSING`; any other wrong type is `FIELD_MALFORMED` |
+| an unhashable item in a limitations list reached `set()` and raised `TypeError` | items are typed before any set is built (one shared `parse_limitations`) |
+| `schema_version` accepted `true` and `1.0` for `1` (Python equality) | exact `int`, not `bool`, equal to 1: `CONTRACT_MISMATCH` |
+| a lone-surrogate string raised `UnicodeEncodeError` before any refusal | `DOCUMENT_MALFORMED` |
+| a research specification could be constructed and parsed without acknowledging a mandatory limitation | refused at construction and at parsing, `LIMITATION_MISSING` (§3.3) |
+
+No refusal code was added or removed; the exact-type opt-in, the production isolation and every pending
+decision (§6) are unchanged; the accepted vocabularies, gate, availability policy and Breakout Long
+thresholds are untouched. The status of this ADR is unchanged: proposed, no authority while the pull
+request is open.

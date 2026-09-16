@@ -123,9 +123,11 @@ def _closed_fields(document: object, fields: frozenset[str]) -> dict[str, Any]:
 
 
 def _contract(document: dict[str, Any], contract_id: str) -> None:
+    version = document.get("schema_version")
     if (
         document.get("contract_id") != contract_id
-        or document.get("schema_version") != SCHEMA_VERSION
+        or type(version) is not int  # bool and float compare equal to 1; neither is a version
+        or version != SCHEMA_VERSION
     ):
         raise _refuse(ExploratoryDefect.CONTRACT_MISMATCH)
 
@@ -152,7 +154,11 @@ def _canonical(document: dict[str, Any]) -> bytes:
 
 def decode_document(text: str | bytes) -> dict[str, Any]:
     """One JSON object from text, refusing duplicates at any depth and oversize input."""
-    raw = text.encode("utf-8") if isinstance(text, str) else text
+    try:
+        raw = text.encode("utf-8") if isinstance(text, str) else text
+    except UnicodeEncodeError:
+        # A lone surrogate has no byte form at all; it is not a document.
+        raise _refuse(ExploratoryDefect.DOCUMENT_MALFORMED) from None
     if type(raw) is not bytes or len(raw) > MAX_DOCUMENT_BYTES:
         raise _refuse(ExploratoryDefect.DOCUMENT_MALFORMED)
     try:
@@ -164,6 +170,22 @@ def decode_document(text: str | bytes) -> dict[str, Any]:
     if type(document) is not dict:
         raise _refuse(ExploratoryDefect.DOCUMENT_MALFORMED)
     return document
+
+
+def parse_limitations(raw: object) -> frozenset[ExploratoryLimitation]:
+    """A list of distinct limitation names, every item typed before any set is built."""
+    if type(raw) is not list:
+        raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
+    names = [_exact_str(item) for item in raw]
+    if len(set(names)) != len(names):
+        raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
+    limitations: set[ExploratoryLimitation] = set()
+    for name in names:
+        try:
+            limitations.add(ExploratoryLimitation(name))
+        except ValueError:
+            raise _refuse(ExploratoryDefect.LIMITATION_UNKNOWN) from None
+    return frozenset(limitations)
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +236,7 @@ class ExploratoryProvenance:
             raise _refuse(ExploratoryDefect.LIMITATION_UNKNOWN)
         if not MANDATORY_LIMITATIONS <= self.limitations:
             raise _refuse(ExploratoryDefect.LIMITATION_MISSING)
-        if DIGEST_RE.fullmatch(self.source_manifest_digest or "") is None:
-            raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
+        _digest(self.source_manifest_digest)
 
     def document(self) -> dict[str, Any]:
         """The closed document. Round-trips through :func:`parse_provenance`."""
@@ -272,21 +293,13 @@ def parse_provenance(document: object) -> ExploratoryProvenance:
         raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
     if _exact_str(fields["production_qualification"]) != QualificationClaim.NONE.value:
         raise _refuse(ExploratoryDefect.QUALIFICATION_CLAIMED)
-    raw_limitations = fields["limitations"]
-    if type(raw_limitations) is not list or len(set(raw_limitations)) != len(raw_limitations):
-        raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
-    limitations: set[ExploratoryLimitation] = set()
-    for item in raw_limitations:
-        try:
-            limitations.add(ExploratoryLimitation(_exact_str(item)))
-        except ValueError:
-            raise _refuse(ExploratoryDefect.LIMITATION_UNKNOWN) from None
+    limitations = parse_limitations(fields["limitations"])
     if _exact_str(fields["source_manifest_contract"]) != SOURCE_MANIFEST_CONTRACT:
         raise _refuse(ExploratoryDefect.CONTRACT_MISMATCH)
     return ExploratoryProvenance(
         profile=profile,
         derivation=derivation,
-        limitations=frozenset(limitations),
+        limitations=limitations,
         source_manifest_digest=_digest(fields["source_manifest_digest"]),
     )
 
@@ -316,12 +329,12 @@ class ExploratoryPublication:
     provenance: ExploratoryProvenance
 
     def __post_init__(self) -> None:
-        if IDENTITY_RE.fullmatch(self.publication_id or "") is None:
-            raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
-        if DIGEST_RE.fullmatch(self.content_digest or "") is None:
-            raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
-        if type(self.provenance) is not ExploratoryProvenance:
+        _identity(self.publication_id)
+        _digest(self.content_digest)
+        if self.provenance is None:
             raise _refuse(ExploratoryDefect.PROFILE_MISSING)
+        if type(self.provenance) is not ExploratoryProvenance:
+            raise _refuse(ExploratoryDefect.FIELD_MALFORMED)
 
     @property
     def classification(self) -> str:
@@ -452,6 +465,7 @@ __all__ = [
     "ExploratoryPublication",
     "decode_document",
     "parse_input_set",
+    "parse_limitations",
     "parse_provenance",
     "parse_publication",
 ]
