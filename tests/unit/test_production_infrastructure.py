@@ -1077,6 +1077,61 @@ def _principal_raw(model: Model, document: str) -> str:
     return ""
 
 
+# EC2's documented constraint on security-group and security-group-rule descriptions
+# (CreateSecurityGroup, AuthorizeSecurityGroupIngress/Egress): "strings less than 256
+# characters from the following set: a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*". Terraform's
+# provider schema and `terraform validate` do not check it -- the API refuses the rule
+# at apply time -- which is how the 2026-09-16 stage-a apply created 55 of 57 resources
+# and was refused on the two S3 egress rules whose description carried an apostrophe.
+EC2_DESCRIPTION_CHARSET = re.compile(r"^[a-zA-Z0-9. _\-:/()#,@\[\]+=&;{}!$*]*$")
+EC2_DESCRIPTION_MAX_LENGTH = 255
+_DESCRIBED_RESOURCE_TYPES = (
+    "aws_security_group",
+    "aws_vpc_security_group_egress_rule",
+    "aws_vpc_security_group_ingress_rule",
+)
+_DESCRIBED_BLOCK = re.compile(
+    r'resource\s+"(?P<type>aws_security_group|aws_vpc_security_group_egress_rule|'
+    r'aws_vpc_security_group_ingress_rule)"\s+"(?P<name>[^"]+)"\s*\{(?P<body>.*?)^\}',
+    re.S | re.M,
+)
+_DESCRIPTION = re.compile(r'^\s*description\s*=\s*"(?P<text>[^"]*)"', re.M)
+
+
+def _rule_security_group_descriptions(sources: dict[str, str]) -> list[str]:
+    """Every security-group and rule description is a literal EC2 will accept.
+
+    The check is on the tracked text, statement by statement, so a description that
+    would be refused only at apply time is refused here first. A description that is
+    not a plain string literal (an interpolation) is reported too: the API constraint
+    applies to the rendered value, and a value this suite cannot read is a value it
+    cannot vouch for.
+    """
+    found: list[str] = []
+    for file, text in sources.items():
+        if not file.startswith("production_"):
+            continue
+        for block in _DESCRIBED_BLOCK.finditer(text):
+            address = f"{block.group('type')}.{block.group('name')}"
+            body = block.group("body")
+            literal = _DESCRIPTION.search(body)
+            if literal is None:
+                if re.search(r"^\s*description\s*=", body, re.M):
+                    found.append(f"{address}: description is not a plain string literal")
+                continue
+            value = literal.group("text")
+            if len(value) > EC2_DESCRIPTION_MAX_LENGTH:
+                found.append(
+                    f"{address}: description exceeds {EC2_DESCRIPTION_MAX_LENGTH} characters"
+                )
+            if EC2_DESCRIPTION_CHARSET.fullmatch(value) is None:
+                bad = sorted({c for c in value if EC2_DESCRIPTION_CHARSET.fullmatch(c) is None})
+                found.append(
+                    f"{address}: description uses characters outside EC2's documented set: {bad!r}"
+                )
+    return found
+
+
 def violations(sources: dict[str, str]) -> list[str]:
     model = build_model(sources)
     return (
@@ -1089,6 +1144,7 @@ def violations(sources: dict[str, str]) -> list[str]:
         + _rule_launch(model)
         + _rule_task_definitions_text(sources)
         + _rule_network(model, sources)
+        + _rule_security_group_descriptions(sources)
     )
 
 
@@ -1626,6 +1682,12 @@ def _mutate(sources: dict[str, str], file: str, old: str, new: str) -> dict[str,
 #: triple-quoted so no source line is long; each is an exact substring of the real file.
 MUTATIONS: list[tuple[str, str, str, str]] = [
     (
+        "production_network.tf",
+        'description       = "HTTPS to S3 through the gateway endpoint prefix list."',
+        'description       = "HTTPS to S3 through the gateway endpoint\'s prefix list."',
+        "characters outside EC2's documented set",
+    ),
+    (
         "production_principals.tf",
         """resource "aws_ssoadmin_account_assignment" "production_build_launcher" {
   count = local.production_count_b""",
@@ -1878,3 +1940,67 @@ def test_the_repository_wide_role_guards_use_the_exact_attachment_mapping() -> N
     audit = (PROJECT_ROOT / "scripts" / "phase3_docs_audit.py").read_text(encoding="utf-8")
     assert "ADR_0036_APPROVED_ATTACHMENTS" in audit
     assert 'name.startswith("production_")' not in audit
+
+
+class TestSecurityGroupDescriptions:
+    """The 2026-09-16 apply defect, pinned: EC2 refuses an apostrophe in a rule description."""
+
+    def test_the_two_s3_egress_rules_carry_the_corrected_literal(
+        self, sources: dict[str, str]
+    ) -> None:
+        text = sources["production_network.tf"]
+        for name in ("production_build_s3", "production_acquisition_s3"):
+            block = re.search(
+                r'resource "aws_vpc_security_group_egress_rule" "' + name + r'" \{(.*?)^\}',
+                text,
+                re.S | re.M,
+            )
+            assert block is not None, name
+            literal = _DESCRIPTION.search(block.group(1))
+            assert literal is not None, name
+            assert (
+                literal.group("text") == "HTTPS to S3 through the gateway endpoint prefix list."
+            ), name
+
+    def test_every_description_is_within_the_documented_set(self, sources: dict[str, str]) -> None:
+        assert _rule_security_group_descriptions(sources) == []
+
+    @pytest.mark.parametrize(
+        ("literal", "offending"),
+        [
+            ("HTTPS to S3 through the gateway endpoint's prefix list.", "'"),
+            ("Provider origin \u2013 HTTPS", "\u2013"),  # an EN DASH, written as an escape
+            ("DNS over UDP\tto the resolver", "\t"),
+            ("a" * 256, None),
+        ],
+    )
+    def test_refused_literals_are_reported(self, literal: str, offending: str | None) -> None:
+        source = (
+            'resource "aws_vpc_security_group_egress_rule" "probe" {\n'
+            f'  description = "{literal}"\n'
+            "}\n"
+        )
+        found = _rule_security_group_descriptions({"production_probe.tf": source})
+        assert found, literal
+        if offending is not None:
+            # the rule reports the offending characters in repr form, so a tab reads as
+            assert repr(offending)[1:-1] in found[0]
+
+    def test_an_interpolated_description_is_reported(self) -> None:
+        source = (
+            'resource "aws_security_group" "probe" {\n  description = local.some_description\n}\n'
+        )
+        assert _rule_security_group_descriptions({"production_probe.tf": source}) == [
+            "aws_security_group.probe: description is not a plain string literal"
+        ]
+
+    def test_the_accepted_set_is_exactly_the_documented_one(self) -> None:
+        documented = "a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*"
+        accepted = "".join(
+            chr(c) for c in range(0x20, 0x7F) if EC2_DESCRIPTION_CHARSET.fullmatch(chr(c))
+        )
+        expanded = set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789. _-:/()#,@[]+=&;{}!$*"
+        )
+        assert set(accepted) == expanded, documented
+        assert "'" not in expanded and '"' not in expanded and "\\" not in expanded
