@@ -447,3 +447,47 @@ def test_the_exploratory_package_imports_no_production_runtime_and_no_network() 
         assert not any(
             name == bad or name.startswith(bad + ".") for name in names for bad in forbidden
         ), module.__name__
+
+
+# The accepted production *contract* modules the research path may read: pure data shapes and
+# deterministic clauses, none of which constructs a client, reads a binding or reaches a store.
+_ACCEPTED_CONTRACT_MODULES = frozenset(
+    {
+        "kalpamani.data.production.sharadar.availability",
+        "kalpamani.data.production.sharadar.sessions",
+        "kalpamani.data.production.sharadar.silver",
+        "kalpamani.data.production.sharadar.universe",
+    }
+)
+
+
+def test_every_exploratory_module_reads_only_accepted_contracts_and_no_runtime() -> None:
+    """The later modules may read accepted contract shapes; none may reach a task runtime, a
+    binding, a store, a launcher, a network or the AWS SDK."""
+    forbidden_exact = (
+        "boto3",
+        "botocore",
+        "socket",
+        "urllib",
+        "http",
+        "subprocess",
+        "kalpamani.data.storage",
+        "kalpamani.broker",
+        "kalpamani.execution",
+    )
+    package = SRC / "data" / "exploratory"
+    modules = sorted(package.glob("*.py"))
+    assert len(modules) >= 8, [m.name for m in modules]
+    for path in modules:
+        names = _imports_of(path)
+        for name in names:
+            assert not any(name == bad or name.startswith(bad + ".") for bad in forbidden_exact), (
+                path.name,
+                name,
+            )
+            if name.startswith("kalpamani.data.production"):
+                assert name in _ACCEPTED_CONTRACT_MODULES, (path.name, name)
+            if name.startswith("kalpamani.data.ingest"):
+                # The dataset vocabulary only: never the client, transport, secrets,
+                # composition or any other module of the provider package.
+                assert name == "kalpamani.data.ingest.sharadar.datasets", (path.name, name)
