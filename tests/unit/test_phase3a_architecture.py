@@ -367,6 +367,12 @@ def test_the_data_package_holds_only_the_authorized_a1_surface() -> None:
         "objectstore.py",
         "contracts",
         "curate",
+        # Proposed ADR-0051: the exploratory research isolation foundation -- a research-only
+        # vocabulary and closed provenance/admission contracts. Deliberately a sibling of the
+        # accepted packages and imported by none of them (test_exploratory_isolation.py holds
+        # the direction), so exploratory evidence cannot reach an accepted result, gate or
+        # build. Contracts only: no bridge, no runner, no data.
+        "exploratory",
         "ingest",
         "live",
         "normalize",
