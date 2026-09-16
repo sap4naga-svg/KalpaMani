@@ -455,6 +455,7 @@ def test_the_exploratory_package_imports_no_production_runtime_and_no_network() 
 _ACCEPTED_CONTRACT_MODULES = frozenset(
     {
         "kalpamani.data.production.sharadar.availability",
+        "kalpamani.data.production.sharadar.pagination",
         "kalpamani.data.production.sharadar.sessions",
         "kalpamani.data.production.sharadar.silver",
         "kalpamani.data.production.sharadar.universe",

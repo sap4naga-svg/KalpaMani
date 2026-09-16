@@ -130,7 +130,9 @@ def test_the_status_documents_carry_one_proposed_row_each_and_agree() -> None:
         assert "ACCEPTED / IN FORCE" in matching[0], name
         assert "PR #111 merged" in matching[0], name
         assert "PROPOSED — NOT IN FORCE" not in matching[0], name
-        assert "PR #112 OPEN / unmerged" in matching[0], name
+        assert "PR #112 OPEN / unmerged" not in matching[0], name
+        assert "PR #112 MERGED 2026-09-16T10:18:46Z" in matching[0], name
+        assert "88053d378bb8391d6cee8be22b2b94e9c0632083" in matching[0], name
         rows[name] = matching[0]
     assert rows["CLAUDE.md"] == rows["README.md"]
 
@@ -210,3 +212,87 @@ def test_the_adr_records_correction_2_and_the_code_carries_the_corrected_o7_o10_
         "NEXT_OBSERVED_CLOSE",
         "UNRESOLVED",
     ]
+
+
+def test_the_adr_records_the_adapter_slice_and_the_module_exists() -> None:
+    assert "## 12. Slice 3" in ADR_TEXT
+    for phrase in (
+        "never an A1 VerifiedPublication",
+        "REVISIONS_EXCLUDED_BY_TIME",
+        "CONFIGURATION_UNBOUND",
+        "history_sessions must be 252",
+        "Gold is refused by name",
+        "an approximation stated in the module",
+        "reads no licensed object",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "src/kalpamani/data/exploratory/adapter.py").is_file()
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter.py").is_file()
+    assert (REPO_ROOT / "tests/fixtures/m0_build_artifacts.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert adapter.REQUIRED_HISTORY_SESSIONS == 252
+    assert adapter.MANIFEST_CONTRACT == "kalpamani-production-build-manifest/v1"
+    assert "NOT_A_SILVER_ARTIFACT" in [d.value for d in adapter.AdapterDefect]
+
+
+def test_the_adr_records_the_adapter_correction_and_the_bound_path_exists() -> None:
+    import inspect
+
+    assert "## 13. Slice 3, review correction 1" in ADR_TEXT
+    for phrase in (
+        "bind_configuration",
+        "BoundConfiguration",
+        "CONFIGURATION_INCONSISTENT",
+        "AS_OF_BEFORE_BUILD",
+        "MANIFEST_VALUE_UNSUPPORTED",
+        "digest-bound configuration as the authority",
+        "re-derives",
+        "does not recompute",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter_correction_1.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert set(inspect.signature(adapter.build_dataset).parameters) == {
+        "assembly",
+        "configuration",
+        "as_of",
+    }
+    members = {d.value for d in adapter.AdapterDefect}
+    assert {
+        "CONFIGURATION_INCONSISTENT",
+        "AS_OF_BEFORE_BUILD",
+        "MANIFEST_VALUE_UNSUPPORTED",
+    } <= members
+
+
+def test_the_adr_records_adapter_correction_2_and_the_evidence_version_is_carried() -> None:
+    from dataclasses import fields
+
+    assert "### 13.1 Review correction 2" in ADR_TEXT
+    for phrase in (
+        "evidence_version",
+        "validated and discarded, never reconciled",
+        "8 demonstrated acceptance defects",
+        "1 missing-API failure",
+        "The counts are right and the total is not",
+        "69 tests (58 failed, 7 errored, 4 passed)",
+        "ten tests were added",
+        "one was removed",
+        "42 demonstrated acceptance defects",
+        "18 missing-API errors and failures",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter_correction_2.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert "evidence_version" in {f.name for f in fields(adapter.BoundConfiguration)}
+
+
+def test_the_adr_records_the_pr_112_merge_beside_its_stale_sentences() -> None:
+    assert "### 13.2 Slice 3 integration correction" in ADR_TEXT
+    assert ADR_TEXT.count("[True when written. PR #112 has since merged") == 3
+    assert "88053d378bb8391d6cee8be22b2b94e9c0632083" in ADR_TEXT
+    assert "bc07918003c0d25ca250aa4c2097a465748ccac7" in ADR_TEXT
+    assert "left as written" in ADR_PLAIN

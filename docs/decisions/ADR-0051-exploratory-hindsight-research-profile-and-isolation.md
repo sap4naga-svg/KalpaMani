@@ -24,7 +24,7 @@ open it was proposed and carried no authority — true then, and not rewritten. 
 authorized no real-data run, no acquisition, no image build or publication, no Terraform plan or apply, no AWS or
 provider request, no compute and no spend**, and it implies nothing about any later pull request: the synthetic M0
 path of §9 and its correction of §10 are carried by **PR #112, which is OPEN and unmerged**, and acceptance of this
-ADR is not acceptance of that pull request. The decisions §6 lists stay **pending**. This paragraph was written by
+ADR is not acceptance of that pull request. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.] The decisions §6 lists stay **pending**. This paragraph was written by
 the correction cycle §10 records, under an authorization that directed the acceptance event to be recorded; the
 slice §9 records had been directed not to record it, which is why §9 says so and is not rewritten.
 
@@ -308,7 +308,7 @@ is recorded in the paragraph following the status line, the status rows in `CLAU
 synchronized, the audit registry names the merge, and the present-tense claims that the ADR was still proposed
 are corrected where they were claims rather than history. **This status correction accepts the vocabulary and
 isolation decision only**: it selects none of O-1…O-11, authorizes no real-data run, and does not imply acceptance
-of PR #112, which stays OPEN and unmerged.
+of PR #112, which stays OPEN and unmerged. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.]
 
 ## 11. Review correction 2 of the synthetic M0 path (2026-09-16, within open PR #112)
 
@@ -322,4 +322,178 @@ first** (`tests/unit/test_m0_exploratory_correction_2.py`, 8 tests) and run agai
 | **2 — O-7 misassigned.** `OwnerSelections` carried a sizing choice at O-7 and a final-fill choice at O-10; the owner decision form defines **O-7 = events** (event-blind or wait for an event entity) and **O-10 = sizing and sequencing** (the CLAUDE.md §6 research parameters with one-pass sizing, final-fill rejection preserving both limits, and the ranking) | `o7_event_handling: EventHandlingChoice {EVENT_BLIND, WAIT_FOR_EVENT_ENTITY}` — only `EVENT_BLIND` is executable (it is D2; no event entity exists), `WAIT_FOR_EVENT_ENTITY` is `REFUSED_UNSUPPORTED_SELECTION`; `o10_sizing_and_sequencing: SizingSequencingChoice {CLAUDE_S6_FINAL_FILL_REJECTION, CLAUDE_S6_ONE_RESIZING_ITERATION}` — only rejection is executable. The former names (`SizingPolicyChoice`, `FinalFillPolicyChoice`, `o7_sizing_policy`, `o10_final_fill_policy`) are removed, so the substitution is **rejected** by the signature and never reinterpreted. The serialized record keys `O-7` / `O-10` carry the corrected values and are bound into the trial record and digest through the configuration document; the synthetic fixture still carries no selections at all |
 
 **No owner decision is selected by this correction**; none of O-1…O-11 is taken, no real-data run is authorized, and
-PR #112 stays OPEN and unmerged.
+PR #112 stays OPEN and unmerged. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.]
+
+## 12. Slice 3 — the exploratory adapter (2026-09-16, a later and separately authorized slice)
+
+**An implementation event; no decision and no execution.** Under an authorization limited to repository
+implementation and synthetic tests, `kalpamani.data.exploratory.adapter` was written to turn an **admitted production
+build's published bytes** into the objects the M0 runner reads, so that a future real-data run has one bounded, refusable
+input path instead of a hand-built one. It reads bytes only — it has no store client, no read path and no principal — and
+it emits an `ExploratoryPublication` through the existing `publish`, **never** an A1 `VerifiedPublication`.
+
+| function | what it binds, and what it refuses |
+|---|---|
+| `parse_manifest(bytes)` | the accepted `kalpamani-production-build-manifest/v1`, parsed totally (closed key set at every level, exact types, duplicate keys refused, one contract version); yields the build's `as_of`, calendar version, configuration digest, commit, accepted-schemas version, observed schema digests, identity counts, pagination summary, the `served` counts (admitted / superseded / **excluded by time**), the `resolution_map` rule counts, the universe rule, the outputs (name → key, digest, bytes, rows, disposition) and the build input's runs with their payload digests |
+| `parse_silver_artifact(name, bytes, expected_sha256, expected_bytes)` | one of `silver-tickers` / `silver-stocks` / `silver-actions` only (`NOT_A_SILVER_ARTIFACT` otherwise — **Gold is refused by name**); byte count and SHA-256 verified **before** parsing; every row document closed; each row back into the accepted `RowVersion` with its provenance; a redelivery gap's run ids are counted, their instants **never invented** (the artifact does not carry them) |
+| `assemble_layer(manifest, artifacts)` | every dataset present and listed under `outputs` with a confirmed disposition; row count as listed; every row's provenance bound to a run and a payload digest the manifest's build input names (`PROVENANCE_UNBOUND`); **`REVISIONS_EXCLUDED_BY_TIME`** if any `served` count says the build could not serve a revision at its `as_of` — rows the research layer would silently lack are a refusal, not an omission |
+| `calendar_from_configuration(bytes, manifest)` | the compiled build configuration whose **canonical digest equals the manifest's `configuration_digest`** (`CONFIGURATION_UNBOUND` otherwise) and whose calendar version equals the manifest's; the sessions carry `open_at` only — **the exploratory close is `open_at + 6h30`, an approximation stated in the module, not an exchange schedule, and early closes are not represented** |
+| `rule_from_manifest(manifest)` | the accepted `UniverseRule` the build decided under; **`history_sessions` must be 252** (`RULE_HISTORY_NOT_ACCEPTED`) — the accepted module's own requirement, end to end |
+| `build_dataset(assembly, calendar, rule, as_of=None)` | `resolve_as_dated` → the accepted membership clauses → benchmark A; `as_of` defaults to the build's and may not precede it; the dataset's `source_manifest_digest` is the manifest's SHA-256 |
+| `publish_from_build(dataset, publication_id, limitations)` | the existing `publish`: an `ExploratoryPublication`, `LICENSED_DERIVED`, provenance naming the manifest |
+
+**Proven on synthetic artifacts produced by the accepted producer** (`tests/fixtures/m0_build_artifacts.py`: the M0 synthetic
+layer, re-keyed the production way, pushed through `availability.resolve`, `universe.build_universe`, `gold.build_gold` and
+`build_manifest.build_manifest_document`; and the existing end-to-end build scenario's own published objects) by the ten
+acceptance cases of the readiness packet (`tests/unit/test_exploratory_adapter.py`): (1) the adapted build and the direct
+path yield identical layer, membership and benchmark digests and identical M0 trades under one trial digest; (2) a flipped byte
+or a wrong byte count is refused before parsing; (3) the manifest is parsed totally; (4) a missing or unlisted artifact, an
+unconfirmed disposition, an excluded revision or an unbound provenance is refused; (5) the calendar is the build's own or is
+refused, and its close is the stated approximation; (6) a rule without 252 history sessions is refused; (7) provenance round-trips
+exactly and gap instants are never invented; (8) the adapter imports only accepted contract modules, its output is exploratory
+and every production consumer still refuses it; (9) Gold is not consumed and is refused by name; (10) the adapter takes bytes only
+(no store, file or SDK call, checked structurally) and the real build scenario's objects round-trip, its 3-session rule refused.
+
+**What the slice does not do.** It reads no licensed object — no principal, profile or path for that exists, and O-6 decides
+where such a read would run; it runs nothing on real data (`run_m0` still refuses a `REAL` kind without a typed, complete
+`OWNER_SELECTED` configuration); it selects none of O-1…O-11 or F-4…F-8 and does not select the fractional-settlement policy;
+it changes no production module, P-2/P-3 rule, accepted threshold or build output. One correction to the readiness packet's
+trace is recorded here: the excluded-by-time count the adapter must refuse lives in the manifest's **`served`** entries, not in
+`resolution_map` (which carries the P-2 / P-3 / gated-evidence counts).
+
+## 13. Slice 3, review correction 1 — the adapter's two boundaries (2026-09-16, a later and separately authorized correction)
+
+**A correction event; no decision and no execution.** Independent review of the slice 3 head
+(`9fb52b5e47c2ec6e0826ea3b4161772e752c20ce`) found two boundaries the adapter left open, both reproduced by
+tests against that unchanged head before anything was corrected (`tests/unit/test_exploratory_adapter_correction_1.py`).
+
+**Finding 1 — the configuration binding did not survive to dataset construction.** `calendar_from_configuration`
+verified the compiled configuration's canonical digest against the manifest, and then `build_dataset` accepted **any**
+calendar and **any** rule a caller supplied, checking only `calendar.version == manifest.calendar_version` and
+`rule.history_sessions == 252`. A calendar with the right version and other sessions or opens, or a rule with 252
+sessions and another price floor, ADDV floor, window or decision margin, was read as the build's. The correction:
+`bind_configuration(document, manifest=…)` is now the **only** way a calendar or rule enters the module. It checks the
+digest **first** (`CONFIGURATION_UNBOUND` before any field is read), parses the configuration document totally (the
+closed shape `BuildConfiguration.document()` writes), derives the calendar and rule from those bytes, and **reconciles
+every fact the producer writes twice** — the rule document, the calendar version, `as_of`, the commit, the
+accepted-schemas version, the source-schema and transformation versions, and the observed schema digests (which must
+be a subset of the accepted set) — with the **digest-bound configuration as the authority**: a manifest that repeats one
+differently is `CONFIGURATION_INCONSISTENT` (the calendar version keeps its own `CALENDAR_VERSION_MISMATCH`). It
+returns a `BoundConfiguration` carrying the exact bytes, the digest and the derived objects. `build_dataset(assembly,
+configuration=…, as_of=None)` takes **only** that: it requires the configuration's digest to equal the assembly's
+manifest's, **re-derives** the calendar and rule from the carried bytes and refuses if the carried objects differ
+(`CONFIGURATION_INCONSISTENT`) — so a substituted calendar or an edited rule is refused whatever its version or history
+count says — and applies the 252-session requirement to the build's own rule (`RULE_HISTORY_NOT_ACCEPTED`). The research
+`as_of` override is preserved as a research parameter, distinct from build metadata: a later instant is allowed, an
+earlier or naive one is `AS_OF_BEFORE_BUILD`. `calendar_from_configuration` and `rule_from_manifest` remain for
+inspection (the first is `bind_configuration(...).calendar`); neither reaches dataset construction, and no parallel
+unchecked path exists.
+
+**Finding 2 — manifest validation stopped at the top level.** `parse_manifest` closed the top-level key set and the few
+nested blocks it read (`identity`, `served`, `resolution_map`, `outputs`, `build_input.runs`) with a single
+`MANIFEST_FIELD_MALFORMED`, and left the rest unread: `build_input` and `source_versions` were open mappings,
+`transformation` was read by `.get()`, `completed_at`, `census`, `undecidable_sessions`, `quality`, `limitations`,
+`spinoff_excluded_securities`, `restrictions`, `unresolved_contracts` and `empty_reason` were not validated at all,
+`entries` was never compared to the digest lists, and no fixed value — classification, profile, policy, version, mode,
+token, disposition — was held to the contract. The correction derives the exact schema from the accepted producer
+(`build_manifest_document` and the component contracts it composes) and validates **every** field: closed keys at
+every depth with one vocabulary (`MANIFEST_KEY_UNKNOWN` for an extra key, `MANIFEST_MALFORMED` for a missing key or a
+non-object, `MANIFEST_FIELD_MALFORMED` for a wrong type or grammar — hex-64 digests, the 40-hex commit, the build-id
+grammar, aware instants, ISO dates, non-negative counts, booleans, `str | None`); `entries == len(payload_digests) ==
+len(record_digests)`; unique run ids, artifact names, artifact keys and census sessions; `checks_run` and
+`checks_not_run` disjoint and duplicate-free; and every fixed contract value held to the accepted vocabulary as the new
+`MANIFEST_VALUE_UNSUPPORTED` — the schema version, `LICENSED`, `PROVIDER_REALISTIC_PIT`, the source-schema, silver,
+adjustment, action-selection, resolution, pagination and quality-plan versions, `SPLIT_ONLY` /
+`FORWARD_BASE_NORMALIZED`, the acquisition modes, the limitation tokens, the restriction scope and the two confirmed
+dispositions (`WRITTEN`, `ALREADY_PRESENT` — ADR-0040). The pagination record's fixed statements are taken from the
+accepted `PaginationSummary.document()` itself. Genuinely dynamic maps — pagination group labels, quality check names,
+finding scopes and severities, restricted and spinoff-excluded security identifiers, the evidence version — are validated
+in type and shape (non-empty text, non-negative counts), not in membership. Values the adapter cannot import without
+reaching a runtime module (the source-schema version, the quality-plan version, the adjustment policy, convention and
+derivation version, the dispositions) are pinned and held equal to the producer's by a unit test.
+
+**Regressions and validation.** 78 targeted tests [the count is corrected by the correction 2 note at the end of
+this section: the run against the unchanged head was of a 69-test draft of the file]: against the unchanged head, 58
+failed, 7 errored (no `bind_configuration`) and 4 passed (defects the head already refused: a negative served count, a non-integer pagination
+count, a non-integer row count, a duplicated artifact); on the corrected tree all pass, together with the eleven
+acceptance cases (case 4 now expects the unconfirmed disposition refused at parse; cases 5 and 6 exercise the
+substituted calendar and rule through `BoundConfiguration`; case 10 binds the real scenario's 3-session rule faithfully
+and refuses it at construction), the isolation and architecture guards, and the full suite. One fixture change: the M0
+layer as an admitted build would carry it now bears the accepted pagination policy version instead of the fixture's own
+`"synthetic"` label, which the producer never writes.
+
+**Limitations, stated.** The adapter validates manifest **shape and vocabulary**; it does not recompute `run_id`
+(`derive_run_id` needs the build inputs it cannot have), the ledger digest, the census or quality arithmetic, or the
+Gold artifacts' digests (it does not read Gold). A producer that changes a fixed value has changed the contract, and the
+adapter refuses until it is reviewed against the new value. Nothing else moved: no licensed object is read, no owner
+decision is selected, no real-data run occurs, and P-2/P-3, the accepted thresholds and the 252-session requirement are
+unchanged.
+
+### 13.1 Review correction 2 — the evidence version, and the correction 1 accounting (2026-09-16, within open PR #113)
+
+**A correction event; no decision and no execution.** Independent review of the correction 1 head
+(`47b70d531fd548edeee02708dc4b2b46bffdb577`) found one repeated fact that §13's reconciliation left out, and one
+miscount in §13's own record. Both were reproduced before anything was corrected.
+
+**The finding — the evidence version was validated and discarded, never reconciled.** The producer writes the
+availability evidence's version twice: as `evidence.version` in the digested configuration document and as
+`transformation.evidence_version` in the manifest (`resolved.evidence_version`, which `availability.resolve` takes
+from the same `AvailabilityEvidence`). `bind_configuration` validated the configuration's `evidence` block and dropped
+the version it returned; `parse_manifest` admitted the manifest's field as dynamic text (it is not a value the adapter
+can pin — §13); and nothing compared the two. A manifest whose `transformation.evidence_version` disagreed with the
+digest-bound configuration was therefore bound, and `build_dataset` constructed a dataset under it — the one repeated
+fact for which "the digest-bound configuration is the authority" did not hold. The regressions
+(`tests/unit/test_exploratory_adapter_correction_2.py`, 12 tests) were run against the unchanged head first: **9 failed
+and 3 passed** — **8 demonstrated acceptance defects** (four disagreeing versions, each bound by `bind_configuration`
+and each built into a dataset by `build_dataset`: `DID NOT RAISE`), **1 missing-API failure** (`BoundConfiguration`
+had no `evidence_version` attribute — an `AttributeError`, not an acceptance demonstration), and 3 controls the head
+already satisfied (the fixture's two documents agree; a configuration-side edit is `CONFIGURATION_UNBOUND` because the
+digest is checked first; the valid round trip). The correction: `bind_configuration` keeps the validated
+`evidence.version` and reconciles it with `manifest.transformation_versions["evidence_version"]` — a disagreement is
+`CONFIGURATION_INCONSISTENT`, in the same clause family as every other repeated fact; `BoundConfiguration` carries the
+reconciled `evidence_version` beside the other reconciled facts; and `build_dataset`'s re-derivation compares it, so a
+configuration bound to a consistent manifest and offered against an assembly whose manifest repeats the version
+differently, or a carried value the bytes do not derive, is `CONFIGURATION_INCONSISTENT` at construction. Only the
+manifest side can reach that comparison: editing the configuration document's own `evidence.version` changes its
+canonical digest and is refused as `CONFIGURATION_UNBOUND` before any field is read. On the corrected tree the 12
+regressions, the 78 correction 1 regressions and the eleven acceptance cases pass, with the isolation, architecture and
+governance guards and the full suite. Nothing else moved: no defect member was added, no signature changed, the
+producer's contracts are untouched, and no manifest value became pinned.
+
+**The accounting correction.** §13 and the correction 1 record stated that 78 targeted tests were run against the
+unchanged head `9fb52b5e` with 58 failing, 7 erroring and 4 passing. **The counts are right and the total is not**: the
+preserved log of that run lists **69** tests (58 failed, 7 errored, 4 passed). The committed file has 78: after the head
+run, ten tests were added (nine nested-manifest cases — `adjustment_derivation_version`, `silver_normalization_version`,
+`pagination policy_version`, `quality plan_version`, `restriction scope`, `pagination fixed statement altered`,
+`quality checks overlap`, `census duplicate session`, `outputs duplicated key` — and
+`test_the_pinned_fixed_values_are_the_producers`) and one was removed (the manifest-disagreement parametrization ran
+as eight unnamed `<lambda>` cases on the head and is committed as seven named cases; which of the eight was dropped is
+not recoverable from the log, and is not guessed). Those eleven were never run against `9fb52b5e`; every count above is
+of the 69 that were. The 69 also mix outcomes that §13 did not separate. Classified by re-running the committed file
+against `9fb52b5e` (the correction 2 evidence; the eight `<lambda>` cases are classified through their seven committed
+successors, which fail the same way): **42 demonstrated acceptance defects** — nested-manifest cases where
+`parse_manifest` did not raise; **4 passes** — defects the head already refused; **5 cases the head refused under a
+different member** than the corrected vocabulary names — four under `MANIFEST_FIELD_MALFORMED` where
+`MANIFEST_KEY_UNKNOWN` / `MANIFEST_MALFORMED` is now distinguished, and the unsupported-classification case under a
+member other than the then-absent `MANIFEST_VALUE_UNSUPPORTED`; and **18 missing-API errors and failures**, which
+demonstrate that an API was absent and not that a document was accepted — the 7 errors (the `bound` fixture:
+`adapter.bind_configuration` did not exist), the eight `<lambda>` cases and the not-the-producer's-shape case (the same
+absent function), the signature test (`calendar=` / `rule=` still present), and
+`test_r2_valid_producer_manifests_remain_accepted` (`BuildManifestView.completed_at` absent). The original log is
+preserved unaltered; the correction 2 evidence carries this classification beside it.
+
+### 13.2 Slice 3 integration correction — the recorded PR #112 merge (2026-09-16, within open PR #113)
+
+**A status correction; no decision and no execution.** Three present-tense sentences in this document (the acceptance
+paragraph after the status line, the end of §10 and the end of §11) and the ADR-0051 rows of `CLAUDE.md` and `README.md`
+said that PR #112 was open and unmerged. That was true when each was written and had been stale since **PR #112 merged at
+2026-09-16T10:18:46Z** — merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents
+`bc16801efbfd9d8c5a9b947f888da64d7dadf72a` (the PR #111 merge, this ADR's acceptance event) then
+`bf8bd18718bb3bad89602e7a108ddb0677342eb6` (the reviewed PR #112 head after its two corrections), merge tree
+`bc07918003c0d25ca250aa4c2097a465748ccac7` identical to the reviewed head tree, `origin/main` read back equal to the merge
+commit (the recorded merge evidence, verified before the merge by the isolated identity and gate). Slice 3 (§12) was written
+on that merge commit as its baseline and its correction 1 (§13) left the rows' wording unchanged; correction 2 (§13.1)
+observed the staleness and did not change it. The three sentences are **left as written** with a bracketed note each; the two
+status rows now record the merge in the same words; the audit registry comment and the governance test that pinned the old
+wording are updated. **Nothing about PR #112's contents is re-decided by this**: the synthetic M0 path is on `main` as merged,
+every figure it produces is synthetic, and the merge of PR #112 selected no owner decision and authorized no real-data run.
