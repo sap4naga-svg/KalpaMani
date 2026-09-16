@@ -412,8 +412,9 @@ in type and shape (non-empty text, non-negative counts), not in membership. Valu
 reaching a runtime module (the source-schema version, the quality-plan version, the adjustment policy, convention and
 derivation version, the dispositions) are pinned and held equal to the producer's by a unit test.
 
-**Regressions and validation.** 78 targeted tests: against the unchanged head, 58 failed, 7 errored (no
-`bind_configuration`) and 4 passed (defects the head already refused: a negative served count, a non-integer pagination
+**Regressions and validation.** 78 targeted tests [the count is corrected by the correction 2 note at the end of
+this section: the run against the unchanged head was of a 69-test draft of the file]: against the unchanged head, 58
+failed, 7 errored (no `bind_configuration`) and 4 passed (defects the head already refused: a negative served count, a non-integer pagination
 count, a non-integer row count, a duplicated artifact); on the corrected tree all pass, together with the eleven
 acceptance cases (case 4 now expects the unconfirmed disposition refused at parse; cases 5 and 6 exercise the
 substituted calendar and rule through `BoundConfiguration`; case 10 binds the real scenario's 3-session rule faithfully
@@ -427,3 +428,56 @@ Gold artifacts' digests (it does not read Gold). A producer that changes a fixed
 adapter refuses until it is reviewed against the new value. Nothing else moved: no licensed object is read, no owner
 decision is selected, no real-data run occurs, and P-2/P-3, the accepted thresholds and the 252-session requirement are
 unchanged.
+
+### 13.1 Review correction 2 — the evidence version, and the correction 1 accounting (2026-09-16, within open PR #113)
+
+**A correction event; no decision and no execution.** Independent review of the correction 1 head
+(`47b70d531fd548edeee02708dc4b2b46bffdb577`) found one repeated fact that §13's reconciliation left out, and one
+miscount in §13's own record. Both were reproduced before anything was corrected.
+
+**The finding — the evidence version was validated and discarded, never reconciled.** The producer writes the
+availability evidence's version twice: as `evidence.version` in the digested configuration document and as
+`transformation.evidence_version` in the manifest (`resolved.evidence_version`, which `availability.resolve` takes
+from the same `AvailabilityEvidence`). `bind_configuration` validated the configuration's `evidence` block and dropped
+the version it returned; `parse_manifest` admitted the manifest's field as dynamic text (it is not a value the adapter
+can pin — §13); and nothing compared the two. A manifest whose `transformation.evidence_version` disagreed with the
+digest-bound configuration was therefore bound, and `build_dataset` constructed a dataset under it — the one repeated
+fact for which "the digest-bound configuration is the authority" did not hold. The regressions
+(`tests/unit/test_exploratory_adapter_correction_2.py`, 12 tests) were run against the unchanged head first: **9 failed
+and 3 passed** — **8 demonstrated acceptance defects** (four disagreeing versions, each bound by `bind_configuration`
+and each built into a dataset by `build_dataset`: `DID NOT RAISE`), **1 missing-API failure** (`BoundConfiguration`
+had no `evidence_version` attribute — an `AttributeError`, not an acceptance demonstration), and 3 controls the head
+already satisfied (the fixture's two documents agree; a configuration-side edit is `CONFIGURATION_UNBOUND` because the
+digest is checked first; the valid round trip). The correction: `bind_configuration` keeps the validated
+`evidence.version` and reconciles it with `manifest.transformation_versions["evidence_version"]` — a disagreement is
+`CONFIGURATION_INCONSISTENT`, in the same clause family as every other repeated fact; `BoundConfiguration` carries the
+reconciled `evidence_version` beside the other reconciled facts; and `build_dataset`'s re-derivation compares it, so a
+configuration bound to a consistent manifest and offered against an assembly whose manifest repeats the version
+differently, or a carried value the bytes do not derive, is `CONFIGURATION_INCONSISTENT` at construction. Only the
+manifest side can reach that comparison: editing the configuration document's own `evidence.version` changes its
+canonical digest and is refused as `CONFIGURATION_UNBOUND` before any field is read. On the corrected tree the 12
+regressions, the 78 correction 1 regressions and the eleven acceptance cases pass, with the isolation, architecture and
+governance guards and the full suite. Nothing else moved: no defect member was added, no signature changed, the
+producer's contracts are untouched, and no manifest value became pinned.
+
+**The accounting correction.** §13 and the correction 1 record stated that 78 targeted tests were run against the
+unchanged head `9fb52b5e` with 58 failing, 7 erroring and 4 passing. **The counts are right and the total is not**: the
+preserved log of that run lists **69** tests (58 failed, 7 errored, 4 passed). The committed file has 78: after the head
+run, ten tests were added (nine nested-manifest cases — `adjustment_derivation_version`, `silver_normalization_version`,
+`pagination policy_version`, `quality plan_version`, `restriction scope`, `pagination fixed statement altered`,
+`quality checks overlap`, `census duplicate session`, `outputs duplicated key` — and
+`test_the_pinned_fixed_values_are_the_producers`) and one was removed (the manifest-disagreement parametrization ran
+as eight unnamed `<lambda>` cases on the head and is committed as seven named cases; which of the eight was dropped is
+not recoverable from the log, and is not guessed). Those eleven were never run against `9fb52b5e`; every count above is
+of the 69 that were. The 69 also mix outcomes that §13 did not separate. Classified by re-running the committed file
+against `9fb52b5e` (the correction 2 evidence; the eight `<lambda>` cases are classified through their seven committed
+successors, which fail the same way): **42 demonstrated acceptance defects** — nested-manifest cases where
+`parse_manifest` did not raise; **4 passes** — defects the head already refused; **5 cases the head refused under a
+different member** than the corrected vocabulary names — four under `MANIFEST_FIELD_MALFORMED` where
+`MANIFEST_KEY_UNKNOWN` / `MANIFEST_MALFORMED` is now distinguished, and the unsupported-classification case under a
+member other than the then-absent `MANIFEST_VALUE_UNSUPPORTED`; and **18 missing-API errors and failures**, which
+demonstrate that an API was absent and not that a document was accepted — the 7 errors (the `bound` fixture:
+`adapter.bind_configuration` did not exist), the eight `<lambda>` cases and the not-the-producer's-shape case (the same
+absent function), the signature test (`calendar=` / `rule=` still present), and
+`test_r2_valid_producer_manifests_remain_accepted` (`BuildManifestView.completed_at` absent). The original log is
+preserved unaltered; the correction 2 evidence carries this classification beside it.

@@ -17,7 +17,8 @@ bytes back into the objects, refusing anything it cannot bind:
 * the **compiled build configuration**, whose canonical digest must equal the manifest's
   ``configuration_digest`` -- the calendar the build actually used, not a look-alike -- and whose
   every repeated fact (the rule, the calendar version, ``as_of``, the commit, the schema and
-  transformation versions, the observed schema digests) must agree with what the manifest says;
+  transformation versions, the evidence version, the observed schema digests) must agree with
+  what the manifest says;
 * the **rule**, which must be the accepted rule with **252 history sessions**.
 
 **The binding survives to dataset construction.** :func:`bind_configuration` is the one place a
@@ -1117,6 +1118,8 @@ class BoundConfiguration:
     decision_sessions: tuple[date, ...]
     accepted_schemas_version: str
     accepted_schema_digests: dict[str, frozenset[str]]
+    #: ``evidence.version`` -- the fact the manifest repeats as ``transformation.evidence_version``.
+    evidence_version: str
 
 
 def _parse_calendar(value: Any) -> SessionCalendar:
@@ -1197,9 +1200,9 @@ def bind_configuration(document: bytes, *, manifest: BuildManifestView) -> Bound
     ``configuration_digest`` is ``CONFIGURATION_UNBOUND`` before any field is read; then total
     parsing; then reconciliation of every fact the producer writes twice. **The digest-bound
     configuration is the authority**: a manifest that repeats the rule, the calendar version,
-    ``as_of``, the commit, the accepted-schemas version or a transformation version differently,
-    or that observed a schema digest the accepted set does not contain, is
-    ``CONFIGURATION_INCONSISTENT`` -- whatever its own digest field says.
+    ``as_of``, the commit, the accepted-schemas version, a transformation version or the
+    evidence version differently, or that observed a schema digest the accepted set does not
+    contain, is ``CONFIGURATION_INCONSISTENT`` -- whatever its own digest field says.
     """
     if type(manifest) is not BuildManifestView:
         raise TypeError("manifest must be a BuildManifestView")
@@ -1214,7 +1217,7 @@ def bind_configuration(document: bytes, *, manifest: BuildManifestView) -> Bound
         for dataset, digests in _mapping(schemas["digests"], _C).items()
     }
     calendar = _parse_calendar(top["calendar"])
-    _validate_evidence(top["evidence"])
+    evidence_version = _validate_evidence(top["evidence"])
     rule = _rule_from_document(
         top["universe_rule"], malformed=AdapterDefect.RULE_MALFORMED, require_history=False
     )
@@ -1241,6 +1244,8 @@ def bind_configuration(document: bytes, *, manifest: BuildManifestView) -> Bound
         raise _refuse(_I)
     if any(versions[name] != manifest.transformation_versions[name] for name in _REPEATED_VERSIONS):
         raise _refuse(_I)
+    if evidence_version != manifest.transformation_versions["evidence_version"]:
+        raise _refuse(_I)
     for dataset in _DATASETS:
         observed = set(manifest.observed_schema_digests[dataset])
         if not observed <= accepted_digests.get(dataset, frozenset()):
@@ -1255,6 +1260,7 @@ def bind_configuration(document: bytes, *, manifest: BuildManifestView) -> Bound
         decision_sessions=decision_sessions,
         accepted_schemas_version=schemas_version,
         accepted_schema_digests=accepted_digests,
+        evidence_version=evidence_version,
     )
 
 
@@ -1298,6 +1304,7 @@ def _verify_bound(configuration: BoundConfiguration, *, manifest: BuildManifestV
         or rebound.decision_sessions != configuration.decision_sessions
         or rebound.accepted_schemas_version != configuration.accepted_schemas_version
         or rebound.accepted_schema_digests != configuration.accepted_schema_digests
+        or rebound.evidence_version != configuration.evidence_version
     ):
         raise _refuse(_I)
 

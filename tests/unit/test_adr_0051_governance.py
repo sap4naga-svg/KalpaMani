@@ -263,3 +263,26 @@ def test_the_adr_records_the_adapter_correction_and_the_bound_path_exists() -> N
         "AS_OF_BEFORE_BUILD",
         "MANIFEST_VALUE_UNSUPPORTED",
     } <= members
+
+
+def test_the_adr_records_adapter_correction_2_and_the_evidence_version_is_carried() -> None:
+    from dataclasses import fields
+
+    assert "### 13.1 Review correction 2" in ADR_TEXT
+    for phrase in (
+        "evidence_version",
+        "validated and discarded, never reconciled",
+        "8 demonstrated acceptance defects",
+        "1 missing-API failure",
+        "The counts are right and the total is not",
+        "69 tests (58 failed, 7 errored, 4 passed)",
+        "ten tests were added",
+        "one was removed",
+        "42 demonstrated acceptance defects",
+        "18 missing-API errors and failures",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter_correction_2.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert "evidence_version" in {f.name for f in fields(adapter.BoundConfiguration)}
