@@ -8,13 +8,27 @@ publishes exactly the material to rebuild them -- **as bytes** -- and this modul
 bytes back into the objects, refusing anything it cannot bind:
 
 * the **build manifest** (``kalpamani-production-build-manifest/v1``), parsed totally: a
-  closed key set at every level, exact types, duplicate keys refused;
+  closed key set at every level, exact types, duplicate keys refused, every fixed contract value
+  (profile, classification, policies, versions, modes, tokens, dispositions) held to the accepted
+  vocabulary, and every field validated whether or not the research path reads it;
 * the three **Silver artifacts** (``silver-tickers``, ``silver-stocks``, ``silver-actions``):
   digest and byte count verified against the manifest's ``outputs`` **before** a byte is parsed,
   every row document closed, every row's provenance bound to a run the manifest names;
 * the **compiled build configuration**, whose canonical digest must equal the manifest's
-  ``configuration_digest`` -- the calendar the build actually used, not a look-alike;
+  ``configuration_digest`` -- the calendar the build actually used, not a look-alike -- and whose
+  every repeated fact (the rule, the calendar version, ``as_of``, the commit, the schema and
+  transformation versions, the observed schema digests) must agree with what the manifest says;
 * the **rule**, which must be the accepted rule with **252 history sessions**.
+
+**The binding survives to dataset construction.** :func:`bind_configuration` is the one place a
+calendar or a rule enters this module, and it returns a :class:`BoundConfiguration` that carries
+the verified bytes beside the objects derived from them. :func:`build_dataset` takes only that --
+never a caller-supplied calendar or rule -- re-verifies the digest against the assembly's manifest
+and re-derives the calendar and rule from the bytes, so a substituted calendar with the right
+version but other sessions, or a rule with 252 sessions but another floor, is
+``CONFIGURATION_INCONSISTENT`` rather than read. The research ``as_of`` override (a later instant,
+never an earlier one -- ``AS_OF_BEFORE_BUILD``) is a parameter of the research, not a build fact,
+and is kept distinct from inconsistent build metadata.
 
 Two refusals carry the point of the exercise. ``REVISIONS_EXCLUDED_BY_TIME``: the artifacts hold
 the latest revision **admissible under production P-2 at the build's** ``as_of``; a manifest whose
@@ -42,21 +56,37 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
+from kalpamani.data.contracts.vocabulary import (
+    AcquisitionMode,
+    AdjustmentConvention,
+    AdjustmentPolicy,
+    DataClassification,
+    LimitationToken,
+)
 from kalpamani.data.exploratory.contracts import ExploratoryPublication
 from kalpamani.data.exploratory.dataset import ExploratoryDataset, build_benchmark_a, publish
 from kalpamani.data.exploratory.resolution import decide_membership_all, resolve_as_dated
 from kalpamani.data.exploratory.vocabulary import ExploratoryLimitation
 from kalpamani.data.ingest.sharadar.datasets import SharadarDataset
-from kalpamani.data.production.sharadar.pagination import PaginationSummary
+from kalpamani.data.production.sharadar.availability import (
+    ACTION_SELECTION_VERSION,
+    RESOLUTION_POLICY_VERSION,
+    RESOLVED_PROFILE,
+)
+from kalpamani.data.production.sharadar.pagination import (
+    PAGINATION_POLICY_VERSION,
+    PaginationSummary,
+)
 from kalpamani.data.production.sharadar.sessions import Session as CalendarSession
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import (
+    SILVER_NORMALIZATION_VERSION,
     Provenance,
     RowVersion,
     SilverDataset,
@@ -80,6 +110,32 @@ MAX_MANIFEST_BYTES: Final = 16 * 1024 * 1024
 MAX_ARTIFACT_BYTES: Final = 2 * 1024 * 1024 * 1024
 MAX_CONFIGURATION_BYTES: Final = 16 * 1024 * 1024
 _HEX64: Final = frozenset("0123456789abcdef")
+_BUILD_ID_CHARS: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+)
+_COMMIT_LENGTH: Final = 40
+
+#: Fixed contract values the accepted producer writes and this adapter cannot import without
+#: reaching a runtime module: pinned here, and held equal to the producer's by a unit test.
+#: A producer that changes one of them has changed the contract; the adapter then refuses
+#: (``MANIFEST_VALUE_UNSUPPORTED``) until it is reviewed against the new value.
+SOURCE_SCHEMA_VERSION: Final = "sharadar-csv-production-v1"
+ADJUSTMENT_DERIVATION_VERSION: Final = "sharadar-adjusted-bars-v2"
+QUALITY_PLAN_VERSION: Final = "breakout-long-ingest-v1"
+ADJUSTMENT_POLICY: Final = AdjustmentPolicy.SPLIT_ONLY
+ADJUSTMENT_CONVENTION: Final = AdjustmentConvention.FORWARD_BASE_NORMALIZED
+#: The two dispositions a confirmed content-addressed write can carry (ADR-0040).
+CONFIRMED_DISPOSITIONS: Final = frozenset({"WRITTEN", "ALREADY_PRESENT"})
+_FIXED_TRANSFORMATION_VERSIONS: Final[dict[str, str]] = {
+    "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
+    "adjustment_policy": ADJUSTMENT_POLICY.value,
+    "adjustment_convention": ADJUSTMENT_CONVENTION.value,
+    "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
+    "action_selection_version": ACTION_SELECTION_VERSION,
+    "resolution_policy_version": RESOLUTION_POLICY_VERSION,
+    "pagination_policy_version": PAGINATION_POLICY_VERSION,
+    "quality_plan_version": QUALITY_PLAN_VERSION,
+}
 
 
 class AdapterDefect(StrEnum):
@@ -90,6 +146,7 @@ class AdapterDefect(StrEnum):
     MANIFEST_KEY_UNKNOWN = "MANIFEST_KEY_UNKNOWN"
     MANIFEST_KEY_DUPLICATE = "MANIFEST_KEY_DUPLICATE"
     MANIFEST_FIELD_MALFORMED = "MANIFEST_FIELD_MALFORMED"
+    MANIFEST_VALUE_UNSUPPORTED = "MANIFEST_VALUE_UNSUPPORTED"
     ARTIFACT_NOT_IN_MANIFEST = "ARTIFACT_NOT_IN_MANIFEST"
     ARTIFACT_DIGEST_MISMATCH = "ARTIFACT_DIGEST_MISMATCH"
     ARTIFACT_BYTES_MISMATCH = "ARTIFACT_BYTES_MISMATCH"
@@ -102,6 +159,8 @@ class AdapterDefect(StrEnum):
     REVISIONS_EXCLUDED_BY_TIME = "REVISIONS_EXCLUDED_BY_TIME"
     CONFIGURATION_MALFORMED = "CONFIGURATION_MALFORMED"
     CONFIGURATION_UNBOUND = "CONFIGURATION_UNBOUND"
+    CONFIGURATION_INCONSISTENT = "CONFIGURATION_INCONSISTENT"
+    AS_OF_BEFORE_BUILD = "AS_OF_BEFORE_BUILD"
     CALENDAR_VERSION_MISMATCH = "CALENDAR_VERSION_MISMATCH"
     RULE_MALFORMED = "RULE_MALFORMED"
     RULE_HISTORY_NOT_ACCEPTED = "RULE_HISTORY_NOT_ACCEPTED"
@@ -213,6 +272,67 @@ def _texts(value: Any, defect: AdapterDefect) -> tuple[str, ...]:
     return tuple(_text(item, defect) for item in value)
 
 
+def _hex64s(value: Any, defect: AdapterDefect) -> tuple[str, ...]:
+    return tuple(_hex64(item, defect) for item in _texts(value, defect))
+
+
+def _days(value: Any, defect: AdapterDefect) -> tuple[date, ...]:
+    if type(value) is not list:
+        raise _refuse(defect)
+    return tuple(_day(item, defect) for item in value)
+
+
+def _boolean(value: Any, defect: AdapterDefect) -> bool:
+    if type(value) is not bool:
+        raise _refuse(defect)
+    return value
+
+
+def _nonempty(value: Any, defect: AdapterDefect) -> str:
+    text = _text(value, defect)
+    if not text:
+        raise _refuse(defect)
+    return text
+
+
+def _commit(value: Any, defect: AdapterDefect) -> str:
+    text = _text(value, defect)
+    if len(text) != _COMMIT_LENGTH or set(text) - _HEX64:
+        raise _refuse(defect)
+    return text
+
+
+def _build_id(value: Any, defect: AdapterDefect) -> str:
+    text = _text(value, defect)
+    if not 1 <= len(text) <= 64 or set(text) - _BUILD_ID_CHARS or text[0] in "._-":
+        raise _refuse(defect)
+    return text
+
+
+def _sequence(value: Any, defect: AdapterDefect) -> list[Any]:
+    if type(value) is not list:
+        raise _refuse(defect)
+    return value
+
+
+def _fixed(
+    value: Any, expected: str, *, malformed: AdapterDefect, unsupported: AdapterDefect
+) -> str:
+    text = _text(value, malformed)
+    if text != expected:
+        raise _refuse(unsupported)
+    return text
+
+
+def _member(
+    value: Any, members: frozenset[str], *, malformed: AdapterDefect, unsupported: AdapterDefect
+) -> str:
+    text = _text(value, malformed)
+    if text not in members:
+        raise _refuse(unsupported)
+    return text
+
+
 # ---------------------------------------------------------------------------
 # The manifest view
 # ---------------------------------------------------------------------------
@@ -244,20 +364,109 @@ _MANIFEST_KEYS: Final = frozenset(
         "completed_at",
     }
 )
-_OUTPUT_KEYS: Final = frozenset({"artifact", "key", "sha256", "bytes", "rows", "disposition"})
+_BUILD_INPUT_KEYS: Final = frozenset({"ledger_digest", "runs", "objects_read", "input_bytes"})
 _RUN_KEYS: Final = frozenset(
     {"run_id", "plan_digest", "acquisition_mode", "entries", "payload_digests", "record_digests"}
 )
-_IDENTITY_KEYS: Final = frozenset(
-    {"duplicate_rows", "unmapped_symbols", "ambiguous_symbols", "rows_excluded_for_identity"}
+_SOURCE_KEYS: Final = frozenset(
+    {"source_schema_version", "accepted_schemas_version", "observed_schema_digests"}
 )
-_SERVED_KEYS: Final = frozenset(
-    {"dataset", "revisions_admitted", "revisions_superseded", "revisions_excluded_by_time"}
+_TRANSFORMATION_KEYS: Final = frozenset(
+    {
+        "silver_normalization_version",
+        "universe_rule",
+        "adjustment_policy",
+        "adjustment_convention",
+        "adjustment_derivation_version",
+        "action_selection_version",
+        "resolution_policy_version",
+        "pagination_policy_version",
+        "calendar_version",
+        "quality_plan_version",
+        "evidence_version",
+        "commit",
+        "configuration_digest",
+    }
+)
+_RULE_KEYS: Final = frozenset(
+    {
+        "universe_rule_version",
+        "decision_margin_seconds",
+        "history_sessions",
+        "addv_window_sessions",
+        "price_floor",
+        "addv_floor",
+        "eligible_exchanges",
+        "common_stock_categories",
+    }
 )
 _RESOLUTION_KEYS: Final = frozenset(
     {"dataset", "P-2", "P-3/DELIVERY_WINDOW", "gated_evidence_ignored"}
 )
+_SERVED_KEYS: Final = frozenset(
+    {"dataset", "revisions_admitted", "revisions_superseded", "revisions_excluded_by_time"}
+)
+#: The pagination record as the accepted contract writes it: the two dynamic maps plus the fixed
+#: statements of what the admission does and does not establish, taken from the contract itself.
+_PAGINATION_FIXED: Final[dict[str, Any]] = {
+    key: value
+    for key, value in PaginationSummary(
+        policy_version=PAGINATION_POLICY_VERSION, groups_admitted={}, groups_empty={}
+    )
+    .document()
+    .items()
+    if key not in ("groups_admitted", "groups_empty")
+}
+_PAGINATION_KEYS: Final = frozenset({*_PAGINATION_FIXED, "groups_admitted", "groups_empty"})
+_IDENTITY_KEYS: Final = frozenset(
+    {"duplicate_rows", "unmapped_symbols", "ambiguous_symbols", "rows_excluded_for_identity"}
+)
+_CENSUS_KEYS: Final = frozenset(
+    {"session_date", "securities", "attribute_determinable", "attribute_unavailable", "members"}
+)
+_QUALITY_KEYS: Final = frozenset(
+    {
+        "plan_version",
+        "checks_run",
+        "checks_not_run",
+        "findings",
+        "restricted_securities",
+        "build_blocking",
+    }
+)
+_FINDING_KEYS: Final = frozenset({"check", "severity", "scope", "count", "effective_from"})
+_RESTRICTION_KEYS: Final = frozenset(
+    {
+        "security_id",
+        "scope",
+        "check",
+        "severity",
+        "count",
+        "restricted_from",
+        "sessions_affected",
+        "withheld",
+    }
+)
+_UNRESOLVED_KEYS: Final = frozenset({"action-event-identity"})
+_ACTION_EVENT_KEYS: Final = frozenset(
+    {"statement", "action_keys_with_redelivery_gaps", "adjusted_rows_withheld"}
+)
+_OUTPUT_KEYS: Final = frozenset({"artifact", "key", "sha256", "bytes", "rows", "disposition"})
+_ACQUISITION_MODES: Final = frozenset(mode.value for mode in AcquisitionMode)
+_LIMITATION_TOKENS: Final = frozenset(token.value for token in LimitationToken)
 _M: Final = AdapterDefect.MANIFEST_FIELD_MALFORMED
+_U: Final = AdapterDefect.MANIFEST_VALUE_UNSUPPORTED
+
+
+def _block(value: Any, keys: frozenset[str]) -> dict[str, Any]:
+    """A closed manifest block at any depth: an unknown key is ``MANIFEST_KEY_UNKNOWN``, a missing
+    key or a non-object is ``MANIFEST_MALFORMED`` -- the same vocabulary the top level uses."""
+    return _closed(
+        value,
+        keys,
+        unknown=AdapterDefect.MANIFEST_KEY_UNKNOWN,
+        malformed=AdapterDefect.MANIFEST_MALFORMED,
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -270,6 +479,19 @@ class OutputRef:
     bytes: int
     rows: int
     disposition: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RunRef:
+    """One acquisition run the build read: its identity, plan, mode and the digests of every
+    payload and record it delivered. ``entries`` is the page count and equals both lengths."""
+
+    run_id: str
+    plan_digest: str
+    acquisition_mode: str
+    entries: int
+    payload_digests: tuple[str, ...]
+    record_digests: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -295,26 +517,36 @@ class ResolutionCounts:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BuildManifestView:
-    """What the adapter reads from an admitted build's manifest. Closed; bytes-derived."""
+    """What the adapter reads from an admitted build's manifest. Closed; bytes-derived.
+
+    Every field of the manifest was validated to produce this view, including the ones the
+    research path never reads (census, quality, restrictions, ``completed_at``): a manifest that
+    fails anywhere is not an admitted build's.
+    """
 
     manifest_digest: str
     build_id: str
     run_id: str
+    classification: str
     as_of: datetime
+    completed_at: datetime
     resolved_profile: str
     calendar_version: str
     configuration_digest: str
     commit: str
+    source_schema_version: str
     accepted_schemas_version: str
     observed_schema_digests: dict[str, tuple[str, ...]]
+    #: The transformation versions the manifest repeats from the compiled configuration.
+    transformation_versions: dict[str, str]
     identity: dict[str, dict[str, int]]
     pagination: PaginationSummary
     served: dict[str, ServedCounts]
     resolution: dict[str, ResolutionCounts]
     universe_rule: dict[str, Any]
     outputs: dict[str, OutputRef]
-    #: run id → the payload digests that run delivered: what every row's provenance must bind to.
-    runs: dict[str, frozenset[str]]
+    #: run id → the run: what every row's provenance must bind to.
+    runs: dict[str, RunRef]
 
     def document(self) -> dict[str, Any]:
         return {
@@ -330,122 +562,293 @@ class BuildManifestView:
         }
 
 
+def _parse_build_input(value: Any) -> tuple[dict[str, RunRef], str]:
+    block = _block(value, _BUILD_INPUT_KEYS)
+    ledger_digest = _hex64(block["ledger_digest"], _M)
+    _count(block["objects_read"], _M)
+    _count(block["input_bytes"], _M)
+    runs: dict[str, RunRef] = {}
+    for entry in _sequence(block["runs"], _M):
+        run = _block(entry, _RUN_KEYS)
+        run_id = _build_id(run["run_id"], _M)
+        if run_id in runs:
+            raise _refuse(_M)
+        payloads = _hex64s(run["payload_digests"], _M)
+        records = _hex64s(run["record_digests"], _M)
+        entries = _count(run["entries"], _M)
+        if entries != len(payloads) or entries != len(records):
+            raise _refuse(_M)
+        runs[run_id] = RunRef(
+            run_id=run_id,
+            plan_digest=_hex64(run["plan_digest"], _M),
+            acquisition_mode=_member(
+                run["acquisition_mode"], _ACQUISITION_MODES, malformed=_M, unsupported=_U
+            ),
+            entries=entries,
+            payload_digests=payloads,
+            record_digests=records,
+        )
+    return runs, ledger_digest
+
+
+def _parse_source_versions(value: Any) -> tuple[str, str, dict[str, tuple[str, ...]]]:
+    block = _block(value, _SOURCE_KEYS)
+    source_schema = _fixed(
+        block["source_schema_version"], SOURCE_SCHEMA_VERSION, malformed=_M, unsupported=_U
+    )
+    accepted = _nonempty(block["accepted_schemas_version"], _M)
+    digests = _block(block["observed_schema_digests"], frozenset(_DATASETS))
+    observed = {dataset: _hex64s(digests[dataset], _M) for dataset in _DATASETS}
+    return source_schema, accepted, observed
+
+
+def _parse_rule_document(value: Any) -> dict[str, Any]:
+    """The rule as the manifest repeats it -- validated in shape here; bound in
+    :func:`bind_configuration`, where the digest-bound copy is the authority."""
+    block = _block(value, _RULE_KEYS)
+    _nonempty(block["universe_rule_version"], _M)
+    for name in ("decision_margin_seconds", "history_sessions", "addv_window_sessions"):
+        _count(block[name], _M)
+    for name in ("price_floor", "addv_floor"):
+        try:
+            Decimal(_text(block[name], _M))
+        except ArithmeticError:
+            raise _refuse(_M) from None
+    for name in ("eligible_exchanges", "common_stock_categories"):
+        _texts(block[name], _M)
+    return block
+
+
+def _parse_transformation(value: Any) -> tuple[dict[str, str], str, str, str, dict[str, Any]]:
+    block = _block(value, _TRANSFORMATION_KEYS)
+    versions = {
+        name: _fixed(block[name], expected, malformed=_M, unsupported=_U)
+        for name, expected in _FIXED_TRANSFORMATION_VERSIONS.items()
+    }
+    versions["evidence_version"] = _nonempty(block["evidence_version"], _M)
+    calendar_version = _nonempty(block["calendar_version"], _M)
+    commit = _commit(block["commit"], _M)
+    configuration_digest = _hex64(block["configuration_digest"], _M)
+    rule = _parse_rule_document(block["universe_rule"])
+    return versions, calendar_version, commit, configuration_digest, rule
+
+
+def _parse_per_dataset(value: Any, keys: frozenset[str], build: Any) -> dict[str, Any]:
+    """A list with exactly one entry per Silver dataset, in any order."""
+    out: dict[str, Any] = {}
+    for entry in _sequence(value, _M):
+        block = _block(entry, keys)
+        dataset = _text(block["dataset"], _M)
+        if dataset not in SILVER_ARTIFACTS or dataset in out:
+            raise _refuse(_M)
+        out[dataset] = build(dataset, block)
+    if set(out) != set(_DATASETS):
+        raise _refuse(_M)
+    return out
+
+
+def _parse_pagination(value: Any) -> PaginationSummary:
+    block = _block(value, _PAGINATION_KEYS)
+    for key, expected in _PAGINATION_FIXED.items():
+        if block[key] != expected:
+            raise _refuse(_U if key == "policy_version" else _M)
+    groups = {}
+    for name in ("groups_admitted", "groups_empty"):
+        # Genuinely dynamic: one count per (run, dataset, window) group label the build saw.
+        groups[name] = {
+            _nonempty(k, _M): _count(v, _M) for k, v in _mapping(block[name], _M).items()
+        }
+    try:
+        return PaginationSummary(
+            policy_version=PAGINATION_POLICY_VERSION,
+            groups_admitted=groups["groups_admitted"],
+            groups_empty=groups["groups_empty"],
+        )
+    except (TypeError, ValueError):
+        raise _refuse(_M) from None
+
+
+def _parse_identity(value: Any) -> dict[str, dict[str, int]]:
+    blocks = _block(value, frozenset(_DATASETS))
+    identity: dict[str, dict[str, int]] = {}
+    for dataset in _DATASETS:
+        block = _block(blocks[dataset], _IDENTITY_KEYS)
+        identity[dataset] = {name: _count(block[name], _M) for name in sorted(_IDENTITY_KEYS)}
+    return identity
+
+
+def _validate_census(value: Any) -> None:
+    seen: set[date] = set()
+    for entry in _sequence(value, _M):
+        block = _block(entry, _CENSUS_KEYS)
+        day = _day(block["session_date"], _M)
+        if day in seen:
+            raise _refuse(_M)
+        seen.add(day)
+        for name in ("securities", "attribute_determinable", "attribute_unavailable", "members"):
+            _count(block[name], _M)
+
+
+def _validate_quality(value: Any) -> None:
+    block = _block(value, _QUALITY_KEYS)
+    _fixed(block["plan_version"], QUALITY_PLAN_VERSION, malformed=_M, unsupported=_U)
+    # The check and severity names are the producer's closed vocabularies; the adapter holds them
+    # to non-empty text and to the plan's arithmetic (run + not run, no overlap) rather than pin
+    # a runtime module's members.
+    run = _texts(block["checks_run"], _M)
+    not_run = _texts(block["checks_not_run"], _M)
+    if any(not name for name in (*run, *not_run)) or set(run) & set(not_run):
+        raise _refuse(_M)
+    if len(set(run)) != len(run) or len(set(not_run)) != len(not_run):
+        raise _refuse(_M)
+    for entry in _sequence(block["findings"], _M):
+        finding = _block(entry, _FINDING_KEYS)
+        _nonempty(finding["check"], _M)
+        _nonempty(finding["severity"], _M)
+        _nonempty(finding["scope"], _M)
+        _count(finding["count"], _M)
+        if finding["effective_from"] is not None:
+            _instant(finding["effective_from"], _M)
+    for security in _texts(block["restricted_securities"], _M):
+        if not security:
+            raise _refuse(_M)
+    _boolean(block["build_blocking"], _M)
+
+
+def _validate_restrictions(value: Any) -> None:
+    for entry in _sequence(value, _M):
+        block = _block(entry, _RESTRICTION_KEYS)
+        _nonempty(block["security_id"], _M)
+        _fixed(block["scope"], "security", malformed=_M, unsupported=_U)
+        _nonempty(block["check"], _M)
+        _nonempty(block["severity"], _M)
+        _count(block["count"], _M)
+        _instant(block["restricted_from"], _M)
+        _days(block["sessions_affected"], _M)
+        _nonempty(block["withheld"], _M)
+
+
+def _validate_unresolved_contracts(value: Any) -> None:
+    block = _block(value, _UNRESOLVED_KEYS)
+    contract = _block(block["action-event-identity"], _ACTION_EVENT_KEYS)
+    _nonempty(contract["statement"], _M)
+    _count(contract["action_keys_with_redelivery_gaps"], _M)
+    _count(contract["adjusted_rows_withheld"], _M)
+
+
+def _parse_outputs(value: Any) -> dict[str, OutputRef]:
+    outputs: dict[str, OutputRef] = {}
+    keys: set[str] = set()
+    for entry in _sequence(value, _M):
+        block = _block(entry, _OUTPUT_KEYS)
+        name = _nonempty(block["artifact"], _M)
+        key = _nonempty(block["key"], _M)
+        if name in outputs or key in keys:
+            raise _refuse(_M)
+        keys.add(key)
+        outputs[name] = OutputRef(
+            artifact=name,
+            key=key,
+            sha256=_hex64(block["sha256"], _M),
+            bytes=_count(block["bytes"], _M),
+            rows=_count(block["rows"], _M),
+            disposition=_member(
+                block["disposition"], CONFIRMED_DISPOSITIONS, malformed=_M, unsupported=_U
+            ),
+        )
+    return outputs
+
+
 def parse_manifest(document: bytes) -> BuildManifestView:
-    """Total parsing of the accepted build manifest. Every refusal is an :class:`AdapterDefect`."""
+    """Total parsing of the accepted build manifest. Every refusal is an :class:`AdapterDefect`.
+
+    The schema is the one the accepted producer's ``build_manifest_document`` writes: closed keys
+    at every depth; exact types; the fixed contract values (schema version, ``LICENSED``,
+    ``PROVIDER_REALISTIC_PIT``, the source and transformation versions, the acquisition modes, the
+    limitation tokens, the confirmed dispositions) held to the accepted vocabulary as
+    ``MANIFEST_VALUE_UNSUPPORTED``; and every field validated whether or not the research path
+    reads it. Genuinely dynamic maps -- the pagination group labels, the quality
+    check names, the finding scopes -- are validated in type and shape, not in membership.
+    """
     raw = _decode(
         document,
         ceiling=MAX_MANIFEST_BYTES,
         malformed=AdapterDefect.MANIFEST_MALFORMED,
         duplicate=AdapterDefect.MANIFEST_KEY_DUPLICATE,
     )
-    top = _closed(
-        raw,
-        _MANIFEST_KEYS,
-        unknown=AdapterDefect.MANIFEST_KEY_UNKNOWN,
-        malformed=AdapterDefect.MANIFEST_MALFORMED,
-    )
+    top = _block(raw, _MANIFEST_KEYS)
     if top["schema_version"] != MANIFEST_CONTRACT:
         raise _refuse(AdapterDefect.MANIFEST_CONTRACT_MISMATCH)
-    if _text(top["classification"], _M) != "LICENSED":
-        raise _refuse(_M)
-    source = _mapping(top["source_versions"], _M)
-    transformation = _mapping(top["transformation"], _M)
-    observed: dict[str, tuple[str, ...]] = {}
-    for dataset in _DATASETS:
-        digests = _texts(_mapping(source.get("observed_schema_digests"), _M).get(dataset), _M)
-        observed[dataset] = tuple(_hex64(d, _M) for d in digests)
-    identity: dict[str, dict[str, int]] = {}
-    for dataset in _DATASETS:
-        block = _closed(
-            _mapping(top["identity"], _M).get(dataset), _IDENTITY_KEYS, unknown=_M, malformed=_M
-        )
-        identity[dataset] = {name: _count(block[name], _M) for name in sorted(_IDENTITY_KEYS)}
-    pagination_doc = _mapping(top["pagination"], _M)
-    pagination = PaginationSummary(
-        policy_version=_text(pagination_doc.get("policy_version"), _M),
-        groups_admitted={
-            _text(k, _M): _count(v, _M)
-            for k, v in _mapping(pagination_doc.get("groups_admitted"), _M).items()
-        },
-        groups_empty={
-            _text(k, _M): _count(v, _M)
-            for k, v in _mapping(pagination_doc.get("groups_empty"), _M).items()
-        },
+    classification = _fixed(
+        top["classification"], DataClassification.LICENSED.value, malformed=_M, unsupported=_U
     )
-    served: dict[str, ServedCounts] = {}
-    if type(top["served"]) is not list:
-        raise _refuse(_M)
-    for entry in top["served"]:
-        block = _closed(entry, _SERVED_KEYS, unknown=_M, malformed=_M)
-        dataset = _text(block["dataset"], _M)
-        if dataset not in SILVER_ARTIFACTS or dataset in served:
-            raise _refuse(_M)
-        served[dataset] = ServedCounts(
-            dataset=dataset,
-            revisions_admitted=_count(block["revisions_admitted"], _M),
-            revisions_superseded=_count(block["revisions_superseded"], _M),
-            revisions_excluded_by_time=_count(block["revisions_excluded_by_time"], _M),
-        )
-    if set(served) != set(_DATASETS):
-        raise _refuse(_M)
-    resolution: dict[str, ResolutionCounts] = {}
-    if type(top["resolution_map"]) is not list:
-        raise _refuse(_M)
-    for entry in top["resolution_map"]:
-        block = _closed(entry, _RESOLUTION_KEYS, unknown=_M, malformed=_M)
-        dataset = _text(block["dataset"], _M)
-        if dataset not in SILVER_ARTIFACTS or dataset in resolution:
-            raise _refuse(_M)
-        resolution[dataset] = ResolutionCounts(
+    resolved_profile = _fixed(
+        top["resolved_profile"], RESOLVED_PROFILE.value, malformed=_M, unsupported=_U
+    )
+    build_id = _build_id(top["build_id"], _M)
+    run_id = _hex64(top["run_id"], _M)
+    as_of = _instant(top["as_of"], _M)
+    completed_at = _instant(top["completed_at"], _M)
+    runs, _ledger_digest = _parse_build_input(top["build_input"])
+    source_schema, accepted_schemas, observed = _parse_source_versions(top["source_versions"])
+    versions, calendar_version, commit, configuration_digest, rule = _parse_transformation(
+        top["transformation"]
+    )
+    resolution = _parse_per_dataset(
+        top["resolution_map"],
+        _RESOLUTION_KEYS,
+        lambda dataset, block: ResolutionCounts(
             dataset=dataset,
             p2=_count(block["P-2"], _M),
             p3_delivery_window=_count(block["P-3/DELIVERY_WINDOW"], _M),
             gated_evidence_ignored=_count(block["gated_evidence_ignored"], _M),
-        )
-    if set(resolution) != set(_DATASETS):
-        raise _refuse(_M)
-    outputs: dict[str, OutputRef] = {}
-    if type(top["outputs"]) is not list:
-        raise _refuse(_M)
-    for entry in top["outputs"]:
-        block = _closed(entry, _OUTPUT_KEYS, unknown=_M, malformed=_M)
-        name = _text(block["artifact"], _M)
-        if name in outputs:
+        ),
+    )
+    served = _parse_per_dataset(
+        top["served"],
+        _SERVED_KEYS,
+        lambda dataset, block: ServedCounts(
+            dataset=dataset,
+            revisions_admitted=_count(block["revisions_admitted"], _M),
+            revisions_superseded=_count(block["revisions_superseded"], _M),
+            revisions_excluded_by_time=_count(block["revisions_excluded_by_time"], _M),
+        ),
+    )
+    pagination = _parse_pagination(top["pagination"])
+    identity = _parse_identity(top["identity"])
+    _validate_census(top["census"])
+    _days(top["undecidable_sessions"], _M)
+    _validate_quality(top["quality"])
+    for token in _texts(top["limitations"], _M):
+        _member(token, _LIMITATION_TOKENS, malformed=_M, unsupported=_U)
+    for security in _texts(top["spinoff_excluded_securities"], _M):
+        if not security:
             raise _refuse(_M)
-        outputs[name] = OutputRef(
-            artifact=name,
-            key=_text(block["key"], _M),
-            sha256=_hex64(block["sha256"], _M),
-            bytes=_count(block["bytes"], _M),
-            rows=_count(block["rows"], _M),
-            disposition=_text(block["disposition"], _M),
-        )
-    runs: dict[str, frozenset[str]] = {}
-    build_input = _mapping(top["build_input"], _M)
-    if type(build_input.get("runs")) is not list:
-        raise _refuse(_M)
-    for entry in build_input["runs"]:
-        block = _closed(entry, _RUN_KEYS, unknown=_M, malformed=_M)
-        run_id = _text(block["run_id"], _M)
-        if run_id in runs:
-            raise _refuse(_M)
-        runs[run_id] = frozenset(_hex64(d, _M) for d in _texts(block["payload_digests"], _M))
+    _validate_restrictions(top["restrictions"])
+    _validate_unresolved_contracts(top["unresolved_contracts"])
+    if top["empty_reason"] is not None:
+        _nonempty(top["empty_reason"], _M)
+    outputs = _parse_outputs(top["outputs"])
     return BuildManifestView(
         manifest_digest=sha256_hex(document),
-        build_id=_text(top["build_id"], _M),
-        run_id=_text(top["run_id"], _M),
-        as_of=_instant(top["as_of"], _M),
-        resolved_profile=_text(top["resolved_profile"], _M),
-        calendar_version=_text(transformation.get("calendar_version"), _M),
-        configuration_digest=_hex64(transformation.get("configuration_digest"), _M),
-        commit=_text(transformation.get("commit"), _M),
-        accepted_schemas_version=_text(source.get("accepted_schemas_version"), _M),
+        build_id=build_id,
+        run_id=run_id,
+        classification=classification,
+        as_of=as_of,
+        completed_at=completed_at,
+        resolved_profile=resolved_profile,
+        calendar_version=calendar_version,
+        configuration_digest=configuration_digest,
+        commit=commit,
+        source_schema_version=source_schema,
+        accepted_schemas_version=accepted_schemas,
         observed_schema_digests=observed,
+        transformation_versions=versions,
         identity=identity,
         pagination=pagination,
         served=served,
         resolution=resolution,
-        universe_rule=_mapping(transformation.get("universe_rule"), _M),
+        universe_rule=rule,
         outputs=outputs,
         runs=runs,
     )
@@ -611,7 +1014,7 @@ def assemble_layer(manifest: BuildManifestView, artifacts: Mapping[str, bytes]) 
         if content is None:
             raise _refuse(AdapterDefect.DATASET_MISSING)
         ref = manifest.outputs.get(name)
-        if ref is None or ref.disposition not in ("WRITTEN", "ALREADY_PRESENT"):
+        if ref is None or ref.disposition not in CONFIRMED_DISPOSITIONS:
             raise _refuse(AdapterDefect.ARTIFACT_NOT_IN_MANIFEST)
         rows, gaps = parse_silver_artifact(
             name, content, expected_sha256=ref.sha256, expected_bytes=ref.bytes
@@ -622,7 +1025,7 @@ def assemble_layer(manifest: BuildManifestView, artifacts: Mapping[str, bytes]) 
             if row.dataset != dataset:
                 raise _refuse(AdapterDefect.ROW_DATASET_MISMATCH)
             delivered = manifest.runs.get(row.provenance.run_id)
-            if delivered is None or row.provenance.payload_sha256 not in delivered:
+            if delivered is None or row.provenance.payload_sha256 not in delivered.payload_digests:
                 raise _refuse(AdapterDefect.PROVENANCE_UNBOUND)
         gap_instants_unknown += gaps
         identity = manifest.identity[dataset]
@@ -646,89 +1049,107 @@ def assemble_layer(manifest: BuildManifestView, artifacts: Mapping[str, bytes]) 
 
 
 # ---------------------------------------------------------------------------
-# Calendar and rule, bound to the build
+# The configuration, bound to the build -- and carried through to the dataset
 # ---------------------------------------------------------------------------
 
+_CONFIGURATION_KEYS: Final = frozenset(
+    {
+        "accepted_schemas",
+        "calendar",
+        "evidence",
+        "universe_rule",
+        "decision_sessions",
+        "as_of",
+        "commit",
+        "jump_ratio",
+        "reconciliation_tolerance",
+        "adjustment_policy",
+        "adjustment_convention",
+        "adjustment_derivation_version",
+        "action_selection_version",
+        "silver_normalization_version",
+        "source_schema_version",
+    }
+)
+_SCHEMAS_KEYS: Final = frozenset({"version", "digests"})
+_CALENDAR_KEYS: Final = frozenset({"version", "sessions"})
+_SESSION_KEYS: Final = frozenset({"session_date", "open_at"})
+_EVIDENCE_KEYS: Final = frozenset({"version", "items"})
+_EVIDENCE_ITEM_KEYS: Final = frozenset(
+    {"kind", "dataset", "row_key", "content_sha256", "instant", "evidence_digest"}
+)
+#: Configuration fields the manifest repeats under ``transformation``, by their name there.
+_REPEATED_VERSIONS: Final = (
+    "adjustment_policy",
+    "adjustment_convention",
+    "adjustment_derivation_version",
+    "action_selection_version",
+    "silver_normalization_version",
+)
+_C: Final = AdapterDefect.CONFIGURATION_MALFORMED
+_I: Final = AdapterDefect.CONFIGURATION_INCONSISTENT
 
-def calendar_from_configuration(document: bytes, *, manifest: BuildManifestView) -> SessionCalendar:
-    """The calendar the build was compiled with, from the compiled build configuration.
 
-    The configuration's canonical digest must equal the manifest's ``configuration_digest``
-    and its calendar version the manifest's ``calendar_version``: the sessions returned are
-    the ones the build decided under, not a look-alike. The close is **not** in the
-    document -- ``Session`` carries ``open_at`` only -- so the exploratory path's regular-close
-    approximation applies to every session, early-close days included.
+def _configuration_block(value: Any, keys: frozenset[str]) -> dict[str, Any]:
+    return _closed(value, keys, unknown=_C, malformed=_C)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BoundConfiguration:
+    """The compiled build configuration, verified against one manifest, with the calendar and
+    rule derived from it.
+
+    ``document`` is the exact bytes whose canonical digest equals ``configuration_digest``; the
+    calendar and rule were derived from those bytes and from nothing else -- the rule **as the
+    build decided under it**, whatever its history; the 252-session requirement is applied where
+    the research path consumes it, in :func:`build_dataset`. The object is the
+    **only** way a calendar or a rule reaches :func:`build_dataset`, which re-derives both from
+    ``document`` and refuses if the carried objects differ -- so a ``replace()`` with a look-alike
+    calendar or an edited rule is refused, not read.
     """
-    raw = _decode(
-        document,
-        ceiling=MAX_CONFIGURATION_BYTES,
-        malformed=AdapterDefect.CONFIGURATION_MALFORMED,
-        duplicate=AdapterDefect.CONFIGURATION_MALFORMED,
-    )
-    top = _mapping(raw, AdapterDefect.CONFIGURATION_MALFORMED)
-    if sha256_hex(canonical_bytes(top)) != manifest.configuration_digest:
-        raise _refuse(AdapterDefect.CONFIGURATION_UNBOUND)
-    block = _closed(
-        top.get("calendar"),
-        frozenset({"version", "sessions"}),
-        unknown=AdapterDefect.CONFIGURATION_MALFORMED,
-        malformed=AdapterDefect.CONFIGURATION_MALFORMED,
-    )
-    version = _text(block["version"], AdapterDefect.CONFIGURATION_MALFORMED)
-    if version != manifest.calendar_version:
-        raise _refuse(AdapterDefect.CALENDAR_VERSION_MISMATCH)
-    if type(block["sessions"]) is not list or not block["sessions"]:
-        raise _refuse(AdapterDefect.CONFIGURATION_MALFORMED)
+
+    document: bytes
+    configuration_digest: str
+    calendar: SessionCalendar
+    rule: UniverseRule
+    as_of: datetime
+    commit: str
+    decision_sessions: tuple[date, ...]
+    accepted_schemas_version: str
+    accepted_schema_digests: dict[str, frozenset[str]]
+
+
+def _parse_calendar(value: Any) -> SessionCalendar:
+    block = _configuration_block(value, _CALENDAR_KEYS)
+    version = _nonempty(block["version"], _C)
+    entries = _sequence(block["sessions"], _C)
+    if not entries:
+        raise _refuse(_C)
     sessions: list[CalendarSession] = []
-    for entry in block["sessions"]:
-        item = _closed(
-            entry,
-            frozenset({"session_date", "open_at"}),
-            unknown=AdapterDefect.CONFIGURATION_MALFORMED,
-            malformed=AdapterDefect.CONFIGURATION_MALFORMED,
-        )
+    for entry in entries:
+        item = _configuration_block(entry, _SESSION_KEYS)
         try:
             sessions.append(
                 CalendarSession(
-                    session_date=_day(item["session_date"], AdapterDefect.CONFIGURATION_MALFORMED),
-                    open_at=_instant(item["open_at"], AdapterDefect.CONFIGURATION_MALFORMED),
+                    session_date=_day(item["session_date"], _C),
+                    open_at=_instant(item["open_at"], _C),
                 )
             )
         except (TypeError, ValueError):
-            raise _refuse(AdapterDefect.CONFIGURATION_MALFORMED) from None
+            raise _refuse(_C) from None
     try:
         return SessionCalendar(version=version, sessions=tuple(sessions))
     except (TypeError, ValueError):
-        raise _refuse(AdapterDefect.CONFIGURATION_MALFORMED) from None
+        raise _refuse(_C) from None
 
 
-_RULE_KEYS: Final = frozenset(
-    {
-        "universe_rule_version",
-        "decision_margin_seconds",
-        "history_sessions",
-        "addv_window_sessions",
-        "price_floor",
-        "addv_floor",
-        "eligible_exchanges",
-        "common_stock_categories",
-    }
-)
-
-
-def rule_from_manifest(manifest: BuildManifestView) -> UniverseRule:
-    """The accepted rule the build decided under. Only 252 history sessions is accepted here."""
-    from datetime import timedelta
-
-    block = _closed(
-        manifest.universe_rule,
-        _RULE_KEYS,
-        unknown=AdapterDefect.RULE_MALFORMED,
-        malformed=AdapterDefect.RULE_MALFORMED,
-    )
-    d = AdapterDefect.RULE_MALFORMED
+def _rule_from_document(
+    value: Any, *, malformed: AdapterDefect, require_history: bool
+) -> UniverseRule:
+    block = _closed(value, _RULE_KEYS, unknown=malformed, malformed=malformed)
+    d = malformed
     history = _count(block["history_sessions"], d)
-    if history != REQUIRED_HISTORY_SESSIONS:
+    if require_history and history != REQUIRED_HISTORY_SESSIONS:
         raise _refuse(AdapterDefect.RULE_HISTORY_NOT_ACCEPTED)
     try:
         return UniverseRule(
@@ -745,30 +1166,172 @@ def rule_from_manifest(manifest: BuildManifestView) -> UniverseRule:
         raise _refuse(d) from None
 
 
+def _validate_evidence(value: Any) -> str:
+    block = _configuration_block(value, _EVIDENCE_KEYS)
+    version = _nonempty(block["version"], _C)
+    for entry in _sequence(block["items"], _C):
+        item = _configuration_block(entry, _EVIDENCE_ITEM_KEYS)
+        _nonempty(item["kind"], _C)
+        _nonempty(item["dataset"], _C)
+        _texts(item["row_key"], _C)
+        _hex64(item["content_sha256"], _C)
+        if item["instant"] is not None:
+            _instant(item["instant"], _C)
+        _hex64(item["evidence_digest"], _C)
+    return version
+
+
+def _parse_configuration(document: bytes) -> tuple[str, dict[str, Any]]:
+    """Decode the compiled configuration and take its canonical digest over the object as
+    delivered. Nothing is read from it and nothing is bound yet; the closed parse follows the
+    digest check, so an unbound document is refused before a field of it is interpreted."""
+    raw = _decode(document, ceiling=MAX_CONFIGURATION_BYTES, malformed=_C, duplicate=_C)
+    top = _mapping(raw, _C)
+    return sha256_hex(canonical_bytes(top)), top
+
+
+def bind_configuration(document: bytes, *, manifest: BuildManifestView) -> BoundConfiguration:
+    """The compiled build configuration, bound to ``manifest``.
+
+    Order: the digest first -- a document whose canonical digest is not the manifest's
+    ``configuration_digest`` is ``CONFIGURATION_UNBOUND`` before any field is read; then total
+    parsing; then reconciliation of every fact the producer writes twice. **The digest-bound
+    configuration is the authority**: a manifest that repeats the rule, the calendar version,
+    ``as_of``, the commit, the accepted-schemas version or a transformation version differently,
+    or that observed a schema digest the accepted set does not contain, is
+    ``CONFIGURATION_INCONSISTENT`` -- whatever its own digest field says.
+    """
+    if type(manifest) is not BuildManifestView:
+        raise TypeError("manifest must be a BuildManifestView")
+    digest, raw = _parse_configuration(document)
+    if digest != manifest.configuration_digest:
+        raise _refuse(AdapterDefect.CONFIGURATION_UNBOUND)
+    top = _configuration_block(raw, _CONFIGURATION_KEYS)
+    schemas = _configuration_block(top["accepted_schemas"], _SCHEMAS_KEYS)
+    schemas_version = _nonempty(schemas["version"], _C)
+    accepted_digests = {
+        _nonempty(dataset, _C): frozenset(_hex64s(digests, _C))
+        for dataset, digests in _mapping(schemas["digests"], _C).items()
+    }
+    calendar = _parse_calendar(top["calendar"])
+    _validate_evidence(top["evidence"])
+    rule = _rule_from_document(
+        top["universe_rule"], malformed=AdapterDefect.RULE_MALFORMED, require_history=False
+    )
+    decision_sessions = _days(top["decision_sessions"], _C)
+    as_of = _instant(top["as_of"], _C)
+    commit = _commit(top["commit"], _C)
+    for name in ("jump_ratio", "reconciliation_tolerance"):
+        try:
+            Decimal(_text(top[name], _C))
+        except ArithmeticError:
+            raise _refuse(_C) from None
+    versions = {name: _nonempty(top[name], _C) for name in _REPEATED_VERSIONS}
+    source_schema = _nonempty(top["source_schema_version"], _C)
+    # Reconciliation: the manifest's repeated fields against the digest-bound configuration.
+    if calendar.version != manifest.calendar_version:
+        raise _refuse(AdapterDefect.CALENDAR_VERSION_MISMATCH)
+    if top["universe_rule"] != manifest.universe_rule:
+        raise _refuse(_I)
+    if as_of != manifest.as_of or commit != manifest.commit:
+        raise _refuse(_I)
+    if schemas_version != manifest.accepted_schemas_version:
+        raise _refuse(_I)
+    if source_schema != manifest.source_schema_version:
+        raise _refuse(_I)
+    if any(versions[name] != manifest.transformation_versions[name] for name in _REPEATED_VERSIONS):
+        raise _refuse(_I)
+    for dataset in _DATASETS:
+        observed = set(manifest.observed_schema_digests[dataset])
+        if not observed <= accepted_digests.get(dataset, frozenset()):
+            raise _refuse(_I)
+    return BoundConfiguration(
+        document=bytes(document),
+        configuration_digest=digest,
+        calendar=calendar,
+        rule=rule,
+        as_of=as_of,
+        commit=commit,
+        decision_sessions=decision_sessions,
+        accepted_schemas_version=schemas_version,
+        accepted_schema_digests=accepted_digests,
+    )
+
+
+def calendar_from_configuration(document: bytes, *, manifest: BuildManifestView) -> SessionCalendar:
+    """The calendar the build was compiled with -- :func:`bind_configuration`'s, for inspection.
+
+    The close is **not** in the document -- ``Session`` carries ``open_at`` only -- so the
+    exploratory path's regular-close approximation applies to every session, early-close days
+    included. Dataset construction does not take this object; it takes the
+    :class:`BoundConfiguration` it came from.
+    """
+    return bind_configuration(document, manifest=manifest).calendar
+
+
+def rule_from_manifest(manifest: BuildManifestView) -> UniverseRule:
+    """The rule as the manifest repeats it, for inspection only. Only 252 history sessions is
+    accepted here. Dataset construction takes the digest-bound rule, never this one."""
+    if type(manifest) is not BuildManifestView:
+        raise TypeError("manifest must be a BuildManifestView")
+    return _rule_from_document(
+        manifest.universe_rule, malformed=AdapterDefect.RULE_MALFORMED, require_history=True
+    )
+
+
 # ---------------------------------------------------------------------------
 # The dataset and its publication
 # ---------------------------------------------------------------------------
 
 
+def _verify_bound(configuration: BoundConfiguration, *, manifest: BuildManifestView) -> None:
+    """The carried objects are the ones the bytes derive -- re-derived here, not trusted."""
+    if configuration.configuration_digest != manifest.configuration_digest:
+        raise _refuse(_I)
+    rebound = bind_configuration(configuration.document, manifest=manifest)
+    if (
+        rebound.configuration_digest != configuration.configuration_digest
+        or rebound.calendar != configuration.calendar
+        or rebound.rule != configuration.rule
+        or rebound.as_of != configuration.as_of
+        or rebound.commit != configuration.commit
+        or rebound.decision_sessions != configuration.decision_sessions
+        or rebound.accepted_schemas_version != configuration.accepted_schemas_version
+        or rebound.accepted_schema_digests != configuration.accepted_schema_digests
+    ):
+        raise _refuse(_I)
+
+
 def build_dataset(
     assembly: LayerAssembly,
     *,
-    calendar: SessionCalendar,
-    rule: UniverseRule,
+    configuration: BoundConfiguration,
     as_of: datetime | None = None,
 ) -> ExploratoryDataset:
-    """AS_DATED resolution, the accepted membership clauses, benchmark A -- over the
-    assembled layer. ``as_of`` defaults to the build's; a later instant is allowed, an
-    earlier one is not (the artifacts hold what the build served at its own ``as_of``)."""
+    """AS_DATED resolution, the accepted membership clauses, benchmark A -- over the assembled
+    layer, under the **bound** configuration and nothing else.
+
+    ``configuration`` must be bound to this assembly's manifest (same ``configuration_digest``),
+    and its calendar and rule are re-derived from its bytes before use: a carried calendar with
+    the same version but other sessions or opens, or a carried rule with 252 sessions but another
+    parameter, is ``CONFIGURATION_INCONSISTENT``; a faithfully bound rule without 252 history
+    sessions is ``RULE_HISTORY_NOT_ACCEPTED`` -- the research path's requirement, applied to the
+    build's own rule. ``as_of`` is the research override: it defaults
+    to the build's, a later instant is allowed, an earlier or naive one is ``AS_OF_BEFORE_BUILD``
+    -- a research parameter, kept distinct from inconsistent build metadata.
+    """
     if type(assembly) is not LayerAssembly:
         raise TypeError("assembly must be a LayerAssembly")
+    if type(configuration) is not BoundConfiguration:
+        raise TypeError("configuration must be a BoundConfiguration")
+    manifest = assembly.manifest
+    _verify_bound(configuration, manifest=manifest)
+    calendar, rule = configuration.calendar, configuration.rule
     if rule.history_sessions != REQUIRED_HISTORY_SESSIONS:
         raise _refuse(AdapterDefect.RULE_HISTORY_NOT_ACCEPTED)
-    if calendar.version != assembly.manifest.calendar_version:
-        raise _refuse(AdapterDefect.CALENDAR_VERSION_MISMATCH)
-    instant = assembly.manifest.as_of if as_of is None else as_of
-    if type(instant) is not datetime or instant.tzinfo is None or instant < assembly.manifest.as_of:
-        raise _refuse(AdapterDefect.MANIFEST_FIELD_MALFORMED)
+    instant = manifest.as_of if as_of is None else as_of
+    if type(instant) is not datetime or instant.tzinfo is None or instant < manifest.as_of:
+        raise _refuse(AdapterDefect.AS_OF_BEFORE_BUILD)
     resolved = resolve_as_dated(assembly.layer, calendar=calendar)
     membership = decide_membership_all(resolved, rule=rule, calendar=calendar, as_of=instant)
     benchmark = build_benchmark_a(resolved, membership, calendar=calendar)
@@ -778,7 +1341,7 @@ def build_dataset(
         calendar=calendar,
         benchmark=benchmark,
         as_of=instant,
-        source_manifest_digest=assembly.manifest.manifest_digest,
+        source_manifest_digest=manifest.manifest_digest,
     )
 
 
@@ -793,20 +1356,29 @@ def publish_from_build(
 
 
 __all__ = [
+    "ADJUSTMENT_CONVENTION",
+    "ADJUSTMENT_DERIVATION_VERSION",
+    "ADJUSTMENT_POLICY",
+    "CONFIRMED_DISPOSITIONS",
     "MANIFEST_CONTRACT",
     "MAX_ARTIFACT_BYTES",
     "MAX_CONFIGURATION_BYTES",
     "MAX_MANIFEST_BYTES",
+    "QUALITY_PLAN_VERSION",
     "REQUIRED_HISTORY_SESSIONS",
     "SILVER_ARTIFACTS",
+    "SOURCE_SCHEMA_VERSION",
     "AdapterDefect",
     "AdapterError",
+    "BoundConfiguration",
     "BuildManifestView",
     "LayerAssembly",
     "OutputRef",
     "ResolutionCounts",
+    "RunRef",
     "ServedCounts",
     "assemble_layer",
+    "bind_configuration",
     "build_dataset",
     "calendar_from_configuration",
     "parse_manifest",

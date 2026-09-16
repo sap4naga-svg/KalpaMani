@@ -27,6 +27,7 @@ from kalpamani.data.exploratory.adapter import (
     AdapterDefect,
     AdapterError,
     assemble_layer,
+    bind_configuration,
     build_dataset,
     calendar_from_configuration,
     parse_manifest,
@@ -95,10 +96,12 @@ def test_case_1_the_adapted_build_runs_m0_identically_to_the_direct_path(
 ) -> None:
     manifest = parse_manifest(build.manifest)
     assembly = assemble_layer(manifest, build.artifacts)
-    calendar = calendar_from_configuration(build.configuration, manifest=manifest)
-    rule = rule_from_manifest(manifest)
+    bound = bind_configuration(build.configuration, manifest=manifest)
+    rule = bound.rule
+    assert bound.calendar == build.calendar
+    assert rule == rule_from_manifest(manifest)
     assert rule.history_sessions == 252 == m0.HISTORY_SESSIONS
-    adapted = build_dataset(assembly, calendar=calendar, rule=rule)
+    adapted = build_dataset(assembly, configuration=bound)
     # The artifacts hold every served revision in key order; the direct path over the same
     # rows in the same order is the reference (the exploratory layer digest is order-sensitive).
     direct = fx.dataset_from(keyed(build.layer), build.calendar)
@@ -283,13 +286,22 @@ def test_case_4_missing_unlisted_artifacts_and_excluded_revisions_are_refused(
             if o["artifact"] == "silver-tickers":
                 o["disposition"] = "NAME_OCCUPIED"
 
+    # An unconfirmed disposition is not a value the producer writes into a published manifest
+    # (ADR-0040: WRITTEN or ALREADY_PRESENT), so it is refused at parse, before assembly.
     assert (
-        refusal(
-            assemble_layer,
-            parse_manifest(mutate_manifest(build.manifest, not_confirmed)),
-            build.artifacts,
-        )
-        is AdapterDefect.ARTIFACT_NOT_IN_MANIFEST
+        refusal(parse_manifest, mutate_manifest(build.manifest, not_confirmed))
+        is AdapterDefect.MANIFEST_VALUE_UNSUPPORTED
+    )
+    # And a view forged with such a disposition is still refused at assembly.
+    forged = replace(
+        manifest,
+        outputs={
+            **manifest.outputs,
+            "silver-tickers": replace(manifest.outputs["silver-tickers"], disposition="PENDING"),
+        },
+    )
+    assert (
+        refusal(assemble_layer, forged, build.artifacts) is AdapterDefect.ARTIFACT_NOT_IN_MANIFEST
     )
 
     def excluded(d: dict[str, Any]) -> None:
@@ -305,9 +317,12 @@ def test_case_4_missing_unlisted_artifacts_and_excluded_revisions_are_refused(
     )
 
     def unbound_run(d: dict[str, Any]) -> None:
-        d["build_input"]["runs"][0]["payload_digests"] = d["build_input"]["runs"][0][
-            "payload_digests"
-        ][:-1]
+        # A well-formed run that delivered one payload fewer: the manifest stays internally
+        # consistent (entries == both digest lists) and one row's provenance no longer binds.
+        run = d["build_input"]["runs"][0]
+        run["payload_digests"] = run["payload_digests"][:-1]
+        run["record_digests"] = run["record_digests"][:-1]
+        run["entries"] -= 1
 
     assert (
         refusal(
@@ -348,14 +363,16 @@ def test_case_5_the_calendar_is_the_builds_own_and_its_close_is_an_approximation
         is AdapterDefect.CALENDAR_VERSION_MISMATCH
     )
     assembly = assemble_layer(manifest, build.artifacts)
+    bound = bind_configuration(build.configuration, manifest=manifest)
+    # Dataset construction takes the bound configuration only; a carried calendar that differs
+    # from the one its own bytes derive -- renamed or re-sessioned -- is inconsistent, not read.
     assert (
         refusal(
             build_dataset,
             assembly,
-            calendar=replace(calendar, version="renamed"),
-            rule=rule_from_manifest(manifest),
+            configuration=replace(bound, calendar=replace(calendar, version="renamed")),
         )
-        is AdapterDefect.CALENDAR_VERSION_MISMATCH
+        is AdapterDefect.CONFIGURATION_INCONSISTENT
     )
     # The close is not in the document: every session's close is open_at + 6h30 by construction,
     # stated as an approximation and never as the exchange's schedule.
@@ -379,22 +396,37 @@ def test_case_6_a_rule_without_252_history_sessions_is_refused(build: ba.BuildAr
     good = rule_from_manifest(parse_manifest(build.manifest))
     assert good == fx.rule()
     assert good.history_sessions == 252 == breakout_long.build_spec().data.required_history_sessions
-    assembly = assemble_layer(parse_manifest(build.manifest), build.artifacts)
+    full = parse_manifest(build.manifest)
+    assembly = assemble_layer(full, build.artifacts)
+    bound = bind_configuration(build.configuration, manifest=full)
+    # A carried rule that is not the one the bound bytes derive is inconsistent -- whatever its
+    # history count says -- and never reaches the membership clauses.
     assert (
         refusal(
             build_dataset,
             assembly,
-            calendar=build.calendar,
-            rule=replace(good, history_sessions=251),
+            configuration=replace(bound, rule=replace(good, history_sessions=251)),
         )
-        is AdapterDefect.RULE_HISTORY_NOT_ACCEPTED
+        is AdapterDefect.CONFIGURATION_INCONSISTENT
     )
+    # A build genuinely compiled with another history is bound faithfully and refused at
+    # construction with the 252 requirement's own defect (the real scenario in case 10 does this).
+    assert bound.rule.history_sessions == 252
 
     def malformed(d: dict[str, Any]) -> None:
         d["transformation"]["universe_rule"]["price_floor"] = 5
 
+    # The manifest's own copy of the rule is validated at parse ...
     assert (
-        refusal(rule_from_manifest, parse_manifest(mutate_manifest(build.manifest, malformed)))
+        refusal(parse_manifest, mutate_manifest(build.manifest, malformed))
+        is AdapterDefect.MANIFEST_FIELD_MALFORMED
+    )
+    # ... and a forged view is still a closed refusal at the rule.
+    assert (
+        refusal(
+            rule_from_manifest,
+            replace(full, universe_rule={**full.universe_rule, "price_floor": "not-a-number"}),
+        )
         is AdapterDefect.RULE_MALFORMED
     )
 
@@ -479,8 +511,7 @@ def test_case_8_the_adapter_imports_only_accepted_contracts_and_its_output_is_ex
     manifest = parse_manifest(build.manifest)
     dataset = build_dataset(
         assemble_layer(manifest, build.artifacts),
-        calendar=calendar_from_configuration(build.configuration, manifest=manifest),
-        rule=rule_from_manifest(manifest),
+        configuration=bind_configuration(build.configuration, manifest=manifest),
     )
     publication = publish_from_build(
         dataset, publication_id="synthetic-adapter-pub-08", limitations=LIMITATIONS
@@ -562,9 +593,17 @@ def test_case_10_the_adapter_takes_bytes_only_and_the_scenario_build_round_trips
             assert row.provenance.run_id in manifest.runs
     calendar = calendar_from_configuration(configuration, manifest=manifest)
     assert calendar.version == manifest.calendar_version
-    # The scenario's rule has three history sessions: the accepted path refuses it here, as
+    bound = bind_configuration(configuration, manifest=manifest)
+    assert bound.calendar == calendar
+    # The scenario's rule has three history sessions: it binds faithfully (it is what the build
+    # decided under), and the research path refuses it at the manifest and at construction, as
     # the 252-session requirement demands -- the layer assembled all the same.
+    assert bound.rule.history_sessions == 3
     assert refusal(rule_from_manifest, manifest) is AdapterDefect.RULE_HISTORY_NOT_ACCEPTED
+    assert (
+        refusal(build_dataset, assembly, configuration=bound)
+        is AdapterDefect.RULE_HISTORY_NOT_ACCEPTED
+    )
     assert report.status.value == "COMPLETED"
 
 

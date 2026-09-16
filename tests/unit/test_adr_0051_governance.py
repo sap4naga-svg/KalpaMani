@@ -232,3 +232,34 @@ def test_the_adr_records_the_adapter_slice_and_the_module_exists() -> None:
     assert adapter.REQUIRED_HISTORY_SESSIONS == 252
     assert adapter.MANIFEST_CONTRACT == "kalpamani-production-build-manifest/v1"
     assert "NOT_A_SILVER_ARTIFACT" in [d.value for d in adapter.AdapterDefect]
+
+
+def test_the_adr_records_the_adapter_correction_and_the_bound_path_exists() -> None:
+    import inspect
+
+    assert "## 13. Slice 3, review correction 1" in ADR_TEXT
+    for phrase in (
+        "bind_configuration",
+        "BoundConfiguration",
+        "CONFIGURATION_INCONSISTENT",
+        "AS_OF_BEFORE_BUILD",
+        "MANIFEST_VALUE_UNSUPPORTED",
+        "digest-bound configuration as the authority",
+        "re-derives",
+        "does not recompute",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter_correction_1.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert set(inspect.signature(adapter.build_dataset).parameters) == {
+        "assembly",
+        "configuration",
+        "as_of",
+    }
+    members = {d.value for d in adapter.AdapterDefect}
+    assert {
+        "CONFIGURATION_INCONSISTENT",
+        "AS_OF_BEFORE_BUILD",
+        "MANIFEST_VALUE_UNSUPPORTED",
+    } <= members

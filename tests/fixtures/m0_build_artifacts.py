@@ -31,6 +31,7 @@ from kalpamani.data.production.sharadar import build_manifest as bm
 from kalpamani.data.production.sharadar import gold as gd
 from kalpamani.data.production.sharadar import universe as uv
 from kalpamani.data.production.sharadar.locator import PayloadDisposition
+from kalpamani.data.production.sharadar.pagination import PAGINATION_POLICY_VERSION
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import AcceptedSchemas, SilverDataset, SilverLayer
 
@@ -64,12 +65,15 @@ def _rekey(dataset: SilverDataset, columns: tuple[str, ...]) -> SilverDataset:
 
 
 def production_keyed(layer: SilverLayer) -> SilverLayer:
-    """The M0 fixture layer with production row keys: ``(security_id[, date[, action]])``."""
+    """The M0 fixture layer as an admitted build would carry it: production row keys
+    ``(security_id[, date[, action]])`` and the accepted pagination policy version (the M0
+    fixture's own ``"synthetic"`` label is not a value the producer ever writes)."""
     return replace(
         layer,
         tickers=_rekey(layer.tickers, ()),
         stocks=_rekey(layer.stocks, ("date",)),
         actions=_rekey(layer.actions, ("date", "action")),
+        pagination=replace(layer.pagination, policy_version=PAGINATION_POLICY_VERSION),
     )
 
 

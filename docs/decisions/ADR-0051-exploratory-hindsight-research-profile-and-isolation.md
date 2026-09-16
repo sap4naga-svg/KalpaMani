@@ -360,3 +360,70 @@ where such a read would run; it runs nothing on real data (`run_m0` still refuse
 it changes no production module, P-2/P-3 rule, accepted threshold or build output. One correction to the readiness packet's
 trace is recorded here: the excluded-by-time count the adapter must refuse lives in the manifest's **`served`** entries, not in
 `resolution_map` (which carries the P-2 / P-3 / gated-evidence counts).
+
+## 13. Slice 3, review correction 1 — the adapter's two boundaries (2026-09-16, a later and separately authorized correction)
+
+**A correction event; no decision and no execution.** Independent review of the slice 3 head
+(`9fb52b5e47c2ec6e0826ea3b4161772e752c20ce`) found two boundaries the adapter left open, both reproduced by
+tests against that unchanged head before anything was corrected (`tests/unit/test_exploratory_adapter_correction_1.py`).
+
+**Finding 1 — the configuration binding did not survive to dataset construction.** `calendar_from_configuration`
+verified the compiled configuration's canonical digest against the manifest, and then `build_dataset` accepted **any**
+calendar and **any** rule a caller supplied, checking only `calendar.version == manifest.calendar_version` and
+`rule.history_sessions == 252`. A calendar with the right version and other sessions or opens, or a rule with 252
+sessions and another price floor, ADDV floor, window or decision margin, was read as the build's. The correction:
+`bind_configuration(document, manifest=…)` is now the **only** way a calendar or rule enters the module. It checks the
+digest **first** (`CONFIGURATION_UNBOUND` before any field is read), parses the configuration document totally (the
+closed shape `BuildConfiguration.document()` writes), derives the calendar and rule from those bytes, and **reconciles
+every fact the producer writes twice** — the rule document, the calendar version, `as_of`, the commit, the
+accepted-schemas version, the source-schema and transformation versions, and the observed schema digests (which must
+be a subset of the accepted set) — with the **digest-bound configuration as the authority**: a manifest that repeats one
+differently is `CONFIGURATION_INCONSISTENT` (the calendar version keeps its own `CALENDAR_VERSION_MISMATCH`). It
+returns a `BoundConfiguration` carrying the exact bytes, the digest and the derived objects. `build_dataset(assembly,
+configuration=…, as_of=None)` takes **only** that: it requires the configuration's digest to equal the assembly's
+manifest's, **re-derives** the calendar and rule from the carried bytes and refuses if the carried objects differ
+(`CONFIGURATION_INCONSISTENT`) — so a substituted calendar or an edited rule is refused whatever its version or history
+count says — and applies the 252-session requirement to the build's own rule (`RULE_HISTORY_NOT_ACCEPTED`). The research
+`as_of` override is preserved as a research parameter, distinct from build metadata: a later instant is allowed, an
+earlier or naive one is `AS_OF_BEFORE_BUILD`. `calendar_from_configuration` and `rule_from_manifest` remain for
+inspection (the first is `bind_configuration(...).calendar`); neither reaches dataset construction, and no parallel
+unchecked path exists.
+
+**Finding 2 — manifest validation stopped at the top level.** `parse_manifest` closed the top-level key set and the few
+nested blocks it read (`identity`, `served`, `resolution_map`, `outputs`, `build_input.runs`) with a single
+`MANIFEST_FIELD_MALFORMED`, and left the rest unread: `build_input` and `source_versions` were open mappings,
+`transformation` was read by `.get()`, `completed_at`, `census`, `undecidable_sessions`, `quality`, `limitations`,
+`spinoff_excluded_securities`, `restrictions`, `unresolved_contracts` and `empty_reason` were not validated at all,
+`entries` was never compared to the digest lists, and no fixed value — classification, profile, policy, version, mode,
+token, disposition — was held to the contract. The correction derives the exact schema from the accepted producer
+(`build_manifest_document` and the component contracts it composes) and validates **every** field: closed keys at
+every depth with one vocabulary (`MANIFEST_KEY_UNKNOWN` for an extra key, `MANIFEST_MALFORMED` for a missing key or a
+non-object, `MANIFEST_FIELD_MALFORMED` for a wrong type or grammar — hex-64 digests, the 40-hex commit, the build-id
+grammar, aware instants, ISO dates, non-negative counts, booleans, `str | None`); `entries == len(payload_digests) ==
+len(record_digests)`; unique run ids, artifact names, artifact keys and census sessions; `checks_run` and
+`checks_not_run` disjoint and duplicate-free; and every fixed contract value held to the accepted vocabulary as the new
+`MANIFEST_VALUE_UNSUPPORTED` — the schema version, `LICENSED`, `PROVIDER_REALISTIC_PIT`, the source-schema, silver,
+adjustment, action-selection, resolution, pagination and quality-plan versions, `SPLIT_ONLY` /
+`FORWARD_BASE_NORMALIZED`, the acquisition modes, the limitation tokens, the restriction scope and the two confirmed
+dispositions (`WRITTEN`, `ALREADY_PRESENT` — ADR-0040). The pagination record's fixed statements are taken from the
+accepted `PaginationSummary.document()` itself. Genuinely dynamic maps — pagination group labels, quality check names,
+finding scopes and severities, restricted and spinoff-excluded security identifiers, the evidence version — are validated
+in type and shape (non-empty text, non-negative counts), not in membership. Values the adapter cannot import without
+reaching a runtime module (the source-schema version, the quality-plan version, the adjustment policy, convention and
+derivation version, the dispositions) are pinned and held equal to the producer's by a unit test.
+
+**Regressions and validation.** 78 targeted tests: against the unchanged head, 58 failed, 7 errored (no
+`bind_configuration`) and 4 passed (defects the head already refused: a negative served count, a non-integer pagination
+count, a non-integer row count, a duplicated artifact); on the corrected tree all pass, together with the eleven
+acceptance cases (case 4 now expects the unconfirmed disposition refused at parse; cases 5 and 6 exercise the
+substituted calendar and rule through `BoundConfiguration`; case 10 binds the real scenario's 3-session rule faithfully
+and refuses it at construction), the isolation and architecture guards, and the full suite. One fixture change: the M0
+layer as an admitted build would carry it now bears the accepted pagination policy version instead of the fixture's own
+`"synthetic"` label, which the producer never writes.
+
+**Limitations, stated.** The adapter validates manifest **shape and vocabulary**; it does not recompute `run_id`
+(`derive_run_id` needs the build inputs it cannot have), the ledger digest, the census or quality arithmetic, or the
+Gold artifacts' digests (it does not read Gold). A producer that changes a fixed value has changed the contract, and the
+adapter refuses until it is reviewed against the new value. Nothing else moved: no licensed object is read, no owner
+decision is selected, no real-data run occurs, and P-2/P-3, the accepted thresholds and the 252-session requirement are
+unchanged.
