@@ -9,7 +9,11 @@ names (ADR-0048). Every operation is one SDK call, classified into an
 context, and the response body -- a secret's value, an object's bytes -- is **never read**.
 
 The request shapes are the documented ones: a conditional ``PutObject`` with
-``IfNoneMatch="*"``; ``ListObjectsV2`` with ``MaxKeys=1``; ``GetParameter`` with decryption
+``IfNoneMatch="*"`` **and** ``ServerSideEncryption="AES256"`` -- the accepted store's own
+write shape (ADR-0011), because the production ``s3:PutObject`` grants are conditioned on
+``s3:x-amz-server-side-encryption = AES256`` and a request without the header is refused
+by the Allow before any Deny under test is reached (batch-1 row 2, 2026-09-16);
+``ListObjectsV2`` with ``MaxKeys=1``; ``GetParameter`` with decryption
 (a parameter the principal may not decrypt is a refusal, which is the point);
 ``PutParameter`` with ``Overwrite=False``; ``RunTask`` as the accepted launcher sends it
 plus ``startedBy``; ``ListTasks`` by ``startedBy`` alone; ``ExecuteCommand`` with the
@@ -27,6 +31,7 @@ from typing import Any, Final
 
 from kalpamani.data.production.sharadar.permission_cells import MAX_RETURNED_TASKS, Operation
 from kalpamani.data.production.sharadar.r3_verification import Observation
+from kalpamani.data.storage.s3 import SERVER_SIDE_ENCRYPTION
 
 #: The one service each operation is issued to.
 OPERATION_SERVICE: Final[dict[Operation, str]] = {
@@ -127,7 +132,17 @@ class SdkPermissionClient:
         return Observation(status=status)
 
     def put_object(self, bucket: str, key: str, body: bytes, *, if_none_match: bool) -> Observation:
-        kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": body}
+        # The accepted store's write shape (storage/s3.py): SSE-S3 requested explicitly on
+        # every write, never inherited from a bucket default. The production PutObject
+        # Allows carry `StringEquals s3:x-amz-server-side-encryption = AES256`, so a probe
+        # that omits the header cannot match them; with the header, the request shape is
+        # the store's, and the live answer is left to the applicable policies.
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": key,
+            "Body": body,
+            "ServerSideEncryption": SERVER_SIDE_ENCRYPTION,
+        }
         if if_none_match:
             kwargs["IfNoneMatch"] = "*"
         return self._call("s3", "put_object", **kwargs)
