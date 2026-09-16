@@ -1,4 +1,5 @@
-"""Proposed ADR-0051: the exploratory research isolation foundation, on synthetic documents only.
+"""ADR-0051 (accepted on the merge of PR #111): the exploratory research isolation foundation, on
+synthetic documents only.
 
 What these tests establish is contract behaviour on synthetic inputs: an explicitly exploratory
 research specification admits a compatible exploratory input set; the accepted Breakout Long

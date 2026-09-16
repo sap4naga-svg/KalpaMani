@@ -263,6 +263,36 @@ class ExploratoryDataset:
         self.cache[key] = series
         return series
 
+    def raw_bars(self, security_id: str) -> tuple[PriceBarValues, ...]:
+        """Every bar of ``security_id`` on its **own** session's basis -- the unadjusted prices
+        and volume as delivered. This is what execution reads: a fill at ``open(s)`` is the
+        price of session ``s``, and no split effective after ``s`` may reach back into it."""
+        return self._series(security_id, 0)
+
+    def split_factor_between(self, security_id: str, session: date, through: date) -> Decimal:
+        """The product of the split ratios of ``security_id`` with ex-date in
+        ``(session, through]`` -- the factor that carries a level stated on ``session``'s basis
+        onto ``through``'s basis (divide by it)."""
+        if "splits" not in self.cache:
+            self.cache["bars_by_security"] = _bars_by_security(self.layer)
+            self.cache["splits"] = split_factors(self.layer)
+        return split_adjusted_factor(
+            self.cache["splits"].get(security_id, []), session, through=through
+        )
+
+    def splits_between(
+        self, security_id: str, after: date | None, through: date
+    ) -> tuple[tuple[date, Decimal], ...]:
+        """The splits of ``security_id`` with ex-date in ``(after, through]``, ascending."""
+        if "splits" not in self.cache:
+            self.cache["bars_by_security"] = _bars_by_security(self.layer)
+            self.cache["splits"] = split_factors(self.layer)
+        return tuple(
+            (ex_date, ratio)
+            for ex_date, ratio in self.cache["splits"].get(security_id, [])
+            if (after is None or ex_date > after) and ex_date <= through
+        )
+
     def bars_through(
         self, security_id: str, through: date, *, count: int | None = None
     ) -> tuple[PriceBarValues, ...]:

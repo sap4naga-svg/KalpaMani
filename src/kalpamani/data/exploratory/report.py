@@ -29,24 +29,43 @@ _BIAS_STATEMENT = " ".join(
     )
 )
 
+_PERIODS_NOTE = " ".join(
+    (
+        "Two labelled periods per window. EVALUATION: from the close before the window's first",
+        "session to the close of its last session; the strategy return and the benchmark return",
+        "cover exactly those instants, on the benchmark series of the ledger's terminal policy.",
+        "LIQUIDATION-INCLUSIVE: extended through the following purge or tail, where positions may",
+        "only close; its benchmark figure covers the same extended instants. Trade statistics",
+        "count the window's trades wherever they closed. A benchmark return is blank where a level",
+        "is",
+        "missing or zero -- never a zero standing in for it.",
+    )
+)
+
 _METRIC_COLUMNS = (
     "window",
+    "evaluation",
     "trades",
     "winners",
     "losers",
     "expectancy",
     "hit rate",
     "net P&L",
-    "max DD",
+    "max DD (eval)",
     "turnover",
     "avg exposure",
     ">1R losses",
     "worst trade",
     "terminal",
     "open at end",
-    "end equity",
-    "return",
-    "benchmark",
+    "end equity (eval)",
+    "return (eval)",
+    "benchmark (eval)",
+    "liquidation end",
+    "end equity (liq)",
+    "return (liq)",
+    "benchmark (liq)",
+    "max DD (liq)",
 )
 _TRADE_COLUMNS = (
     "security",
@@ -58,16 +77,20 @@ _TRADE_COLUMNS = (
     "planned risk",
     "exit",
     "reason",
+    "exit shares",
     "exit fill",
+    "cash in lieu",
     "P&L",
+    "unrealized",
     "R",
     "held",
     "missing bars",
+    "splits",
 )
 
 
 def _row(cells: tuple[object, ...]) -> str:
-    return "| " + " | ".join(str(cell) for cell in cells) + " |"
+    return "| " + " | ".join("" if cell is None else str(cell) for cell in cells) + " |"
 
 
 def _ledger_section(ledger: Ledger) -> list[str]:
@@ -79,6 +102,7 @@ def _ledger_section(ledger: Ledger) -> list[str]:
             _row(
                 (
                     m.window.value,
+                    f"{m.evaluation_start}..{m.evaluation_end}",
                     m.trades,
                     m.winners,
                     m.losers,
@@ -95,16 +119,23 @@ def _ledger_section(ledger: Ledger) -> list[str]:
                     m.end_equity,
                     m.return_fraction,
                     m.benchmark_return_fraction,
+                    m.liquidation_end,
+                    m.liquidation_end_equity,
+                    m.liquidation_return_fraction,
+                    m.liquidation_benchmark_return_fraction,
+                    m.max_drawdown_through_liquidation,
                 )
             )
         )
     exits = Counter(t.exit_reason.value for t in ledger.trades)
     skips = Counter(s.reason.value for s in ledger.skips)
+    journal = Counter(x.kind.value for x in ledger.transactions)
     lines += [
         "",
         f"Exits: {dict(sorted(exits.items()))}. Skips: {dict(sorted(skips.items()))}. "
         f"Sessions held with a missing bar: {ledger.missing_bar_held_sessions}; exits deferred "
-        f"for a missing execution bar: {ledger.exits_deferred_no_bar}.",
+        f"for a missing execution bar: {ledger.exits_deferred_no_bar}. "
+        f"Journal: {dict(sorted(journal.items()))}.",
         "",
         _row(_TRADE_COLUMNS),
         "|" + "---|" * len(_TRADE_COLUMNS),
@@ -122,11 +153,15 @@ def _ledger_section(ledger: Ledger) -> list[str]:
                     t.planned_risk,
                     t.exit_session,
                     t.exit_reason.value,
+                    t.exit_shares,
                     t.exit_fill,
+                    t.cash_in_lieu,
                     t.realized_pnl,
+                    t.unrealized_pnl,
                     t.r_multiple,
                     t.held_sessions,
                     t.missing_bar_sessions,
+                    "; ".join(f"{e.ratio}:1 on {e.ex_date}" for e in t.split_events) or "",
                 )
             )
         )
@@ -172,6 +207,7 @@ def render_markdown(result: M0Result, *, determinism: tuple[str, str] | None = N
         "",
     ]
     lines += ["## Phases", "", "```json", json.dumps(result.phases, indent=1), "```", ""]
+    lines += ["## Periods", "", _PERIODS_NOTE, ""]
     lines += ["## Breakout Long — both terminal ledgers", ""]
     for ledger in result.ledgers:
         lines += _ledger_section(ledger)
@@ -233,6 +269,23 @@ def summary(result: M0Result) -> dict[str, Any]:
                 "missing_bar_held_sessions": ledger.missing_bar_held_sessions,
             }
             for ledger in (*result.ledgers, *result.baselines, *result.sensitivities)
+        },
+        "windows": {
+            f"{ledger.label}/{m.window.value}": {
+                "evaluation": [m.evaluation_start.isoformat(), m.evaluation_end.isoformat()],
+                "return_fraction": str(m.return_fraction),
+                "benchmark_return_fraction": None
+                if m.benchmark_return_fraction is None
+                else str(m.benchmark_return_fraction),
+                "liquidation_end": m.liquidation_end.isoformat(),
+                "liquidation_end_equity": str(m.liquidation_end_equity),
+                "liquidation_benchmark_return_fraction": None
+                if m.liquidation_benchmark_return_fraction is None
+                else str(m.liquidation_benchmark_return_fraction),
+                "open_at_end": m.open_at_end,
+            }
+            for ledger in result.ledgers
+            for m in ledger.metrics
         },
     }
 

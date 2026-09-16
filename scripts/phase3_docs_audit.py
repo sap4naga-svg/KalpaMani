@@ -845,6 +845,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # rehearsal implemented offline and CLOSED; Decision D-1 decided in neither direction.
     ("ADR-0049", "PR #108 merged"),
     ("ADR-0050", "PR #109 merged"),
+    # ADR-0051 merged as PR #111 on 2026-09-16: the exploratory hindsight research profile
+    # and its isolation contracts; the synthetic M0 path stays in open PR #112.
+    ("ADR-0051", "PR #111 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull

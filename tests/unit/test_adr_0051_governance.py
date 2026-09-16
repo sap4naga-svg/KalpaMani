@@ -29,7 +29,15 @@ def test_the_adr_exists_is_proposed_and_keeps_acceptance_apart_from_execution() 
     assert "Acceptance authorizes no execution and grants no permission" in ADR_PLAIN
     assert "## 5. Acceptance and execution authority are separate" in ADR_TEXT
     assert "Nothing was run to produce this decision" in ADR_PLAIN
-    assert "The condition above has since been satisfied" not in ADR_PLAIN
+    # The acceptance event is recorded under the clause, on the ADR-0050 convention: the
+    # original status line stays, and the paragraph after it names the merge.
+    assert "The condition above has since been satisfied" in ADR_PLAIN
+    assert "bc16801efbfd9d8c5a9b947f888da64d7dadf72a" in ADR_TEXT
+    assert (
+        "ADR-0051 is therefore ACCEPTED / IN FORCE exactly as the clause above states" in ADR_PLAIN
+    )
+    assert "Acceptance selected none of O-1" in ADR_PLAIN
+    assert "acceptance of this ADR is not acceptance of that pull request" in ADR_PLAIN
 
 
 def test_the_adr_defines_the_vocabulary_as_research_only_and_the_code_agrees() -> None:
@@ -119,8 +127,10 @@ def test_the_status_documents_carry_one_proposed_row_each_and_agree() -> None:
         text = (REPO_ROOT / name).read_text(encoding="utf-8")
         matching = [line for line in text.splitlines() if "[ADR-0051](docs/decisions/" in line]
         assert len(matching) == 1, name
-        assert "PROPOSED — NOT IN FORCE" in matching[0], name
-        assert "ACCEPTED / IN FORCE" not in matching[0], name
+        assert "ACCEPTED / IN FORCE" in matching[0], name
+        assert "PR #111 merged" in matching[0], name
+        assert "PROPOSED — NOT IN FORCE" not in matching[0], name
+        assert "PR #112 OPEN / unmerged" in matching[0], name
         rows[name] = matching[0]
     assert rows["CLAUDE.md"] == rows["README.md"]
 
@@ -150,3 +160,26 @@ def test_the_adr_records_slice_2_as_an_implementation_event_and_not_an_acceptanc
         assert (REPO_ROOT / "src/kalpamani/data/exploratory" / f"{module}.py").is_file()
     assert (REPO_ROOT / "tests/unit/test_m0_exploratory_path.py").is_file()
     assert (REPO_ROOT / "tests/fixtures/m0_exploratory.py").is_file()
+
+
+def test_the_adr_records_correction_1_of_the_m0_path_and_the_governance_correction() -> None:
+    assert "## 10. Review correction 1 of the synthetic M0 path" in ADR_TEXT
+    assert "ce1f793b9ca4205c56a1ff04026d38cee14c7f2c" in ADR_TEXT
+    assert "40 failed there and 1 passed" in ADR_PLAIN
+    for phrase in (
+        "SKIPPED_EXITED_THIS_SESSION",
+        "cash_in_lieu",
+        "REFUSED_INVALID_CONFIGURATION",
+        "REFUSED_MALFORMED_DATA_KIND",
+        "liquidation-inclusive",
+        "transaction journal",
+        "accepts the vocabulary and isolation decision only",
+        "does not imply acceptance",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "tests/unit/test_m0_exploratory_correction_1.py").is_file()
+    from kalpamani.data.exploratory import m0
+
+    assert m0.HISTORY_SESSIONS == 252
+    assert m0.Skip.SKIPPED_EXITED_THIS_SESSION.value == "SKIPPED_EXITED_THIS_SESSION"
+    assert m0.RunRefusal.REFUSED_MALFORMED_DATA_KIND.value == "REFUSED_MALFORMED_DATA_KIND"

@@ -1,4 +1,4 @@
-"""The end-to-end synthetic M0 path (proposed ADR-0051; M0 specification s.11-s.14).
+"""The end-to-end synthetic M0 path (ADR-0051 s.9-s.10; M0 specification s.11-s.14).
 
 Synthetic fixtures only. Every assertion is about software behaviour: the three instants,
 prior-session ADDV, final-fill rejection, exit precedence and sequencing, causal terminal
@@ -501,7 +501,11 @@ def test_missing_bar_without_an_action_is_held_and_counted(result: M0Result) -> 
     trade = trades_of(result, "ZZDD")[0]
     assert trade.missing_bar_sessions == 1
     assert trade.exit_reason is ExitReason.TIME and trade.held_sessions == 20
-    assert ledger(result, TerminalPolicy.OPTIMISTIC).missing_bar_held_sessions == 1
+    # ZZDD's one, plus every session ZZMM and ZZNN were held through silence to the end.
+    opt = ledger(result, TerminalPolicy.OPTIMISTIC)
+    open_at_end = [t for t in opt.trades if t.exit_reason is ExitReason.OPEN_AT_END]
+    assert opt.missing_bar_held_sessions == 1 + sum(t.missing_bar_sessions for t in open_at_end)
+    assert opt.missing_bar_held_sessions > 1
 
 
 def test_entry_gap_skip_is_recorded_and_no_trade_opens(result: M0Result) -> None:
@@ -618,27 +622,29 @@ def test_the_two_terminal_ledgers_are_separate_and_reconcile(result: M0Result) -
         and z.realized_pnl is not None
         and o.realized_pnl > z.realized_pnl
     )
-    # Every ledger reconciles: end equity = capital + sum of realized P&L + unrealized open-at-end.
+    # Every ledger reconciles at the end of its block: liquidation-end equity = capital + the
+    # realized P&L of the window's trades + the unrealized P&L of the positions still open,
+    # less those positions' entry commissions (already paid, not yet in any P&L).
     for item in (opt, loss):
         for metrics in item.metrics:
+            window_trades = [t for t in item.trades if t.window is metrics.window]
             realized = sum(
+                (t.realized_pnl for t in window_trades if t.realized_pnl is not None), Decimal(0)
+            )
+            unrealized = sum(
+                (t.unrealized_pnl for t in window_trades if t.unrealized_pnl is not None),
+                Decimal(0),
+            )
+            open_entry_commission = sum(
                 (
-                    t.realized_pnl
-                    for t in item.trades
-                    if t.window is metrics.window and t.realized_pnl is not None
+                    t.entry_commission
+                    for t in window_trades
+                    if t.exit_reason is ExitReason.OPEN_AT_END
                 ),
                 Decimal(0),
             )
-            open_value = sum(
-                (
-                    t.shares * Decimal(0)
-                    for t in item.trades
-                    if t.window is metrics.window and t.exit_reason is ExitReason.OPEN_AT_END
-                ),
-                Decimal(0),
-            )
-            assert metrics.end_equity == (
-                M0_SYNTHETIC_FIXTURE.capital + realized + open_value
+            assert metrics.liquidation_end_equity == (
+                M0_SYNTHETIC_FIXTURE.capital + realized + unrealized - open_entry_commission
             ).quantize(Decimal("0.01"))
     # The same figures are never mixed: the loss ledger's development P&L is lower by the
     # terminal difference.
@@ -660,7 +666,8 @@ def test_development_and_validation_initialize_independently_under_the_frozen_di
     )
     dev_metrics, val_metrics = opt.metrics
     assert dev_metrics.start_equity == val_metrics.start_equity == M0_SYNTHETIC_FIXTURE.capital
-    assert dev_metrics.trades == 16 and val_metrics.trades == 10
+    assert dev_metrics.trades == 19 and val_metrics.trades == 11
+    assert dev_metrics.open_at_end == 1 and val_metrics.open_at_end == 1
     assert not any(
         t.window is Window.DEVELOPMENT
         and t.exit_session is not None
@@ -759,16 +766,16 @@ def test_real_data_refuses_the_synthetic_fixture_and_unselected_owner_choices(
         )
     assert caught.value.refusal is RunRefusal.REFUSED_FIXTURE_ON_REAL_DATA
     with pytest.raises(M0RunError) as caught:
-        M0Configuration(
-            provenance=ConfigurationProvenance.OWNER_SELECTED, owner_selections={"O-1": "yes"}
-        )
+        M0Configuration(provenance=ConfigurationProvenance.OWNER_SELECTED)
     assert caught.value.refusal is RunRefusal.REFUSED_UNSELECTED_CONFIGURATION
-    complete = M0Configuration(
-        provenance=ConfigurationProvenance.OWNER_SELECTED,
-        owner_selections={k: "recorded" for k in m0.OWNER_DECISIONS},
-    )
-    assert complete.provenance is ConfigurationProvenance.OWNER_SELECTED
+    with pytest.raises(M0RunError) as caught:
+        M0Configuration(
+            provenance=ConfigurationProvenance.OWNER_SELECTED,
+            owner_selections={"O-1": "yes"},  # type: ignore[arg-type]
+        )
+    assert caught.value.refusal is RunRefusal.REFUSED_INVALID_CONFIGURATION
     assert M0_SYNTHETIC_FIXTURE.provenance is ConfigurationProvenance.SYNTHETIC_FIXTURE
+    assert M0_SYNTHETIC_FIXTURE.owner_selections is None
 
 
 def test_a_non_admitted_specification_or_a_foreign_dataset_is_refused(

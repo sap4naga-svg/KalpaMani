@@ -13,7 +13,18 @@ rule of M0 §11-§14 is exercised by construction:
 * ``ZZTA…ZZTM`` thirteen tight-base breakouts on one development session → the thirteenth is
   ``SKIPPED_CASH``; the same thirteen with wide bases on one validation session → the
   eleventh is ``SKIPPED_RISK_CAPACITY``;
-* ``ZZCC`` also carries a 2:1 split in the warm-up so the split-only adjustment is exercised.
+* ``ZZCC`` also carries a 2:1 split in the warm-up so the split-only adjustment is exercised;
+* ``ZZPP``  breakouts on the **last** development and validation sessions → their executions
+  would fall in the purge / tail, so no position may open;
+* ``ZZQQ``  breakouts twelve sessions before each window's end → time exits land in the purge /
+  tail and stay attributed to the originating window;
+* ``ZZRR``  breakout → held to session 20, whose close is itself a breakout → the time exit and
+  the new signal collide at one open (no same-session re-entry); a later breakout re-enters;
+* ``ZZMM`` / ``ZZNN``  breakouts three sessions before each window's end → five bars, then
+  silence with no action → held through missing bars and **open at the end** of the block.
+
+``with_split`` builds a variant layer carrying a split for one security on one ex-date (raw
+prices divided, volume multiplied) for the split-consistency regressions.
 
 Every bar is flat at its scripted level except where the script says otherwise; every security
 is NYSE / Domestic Common Stock, listed before the calendar, with ADDV ≈ 2,000,000.
@@ -50,7 +61,8 @@ SPLIT_EX: Final = date(2024, 9, 3)  # ZZCC's 2:1 split, inside the warm-up
 
 SCENARIO: Final = ("ZZAA", "ZZBB", "ZZCC", "ZZDD", "ZZEE")
 TIGHT: Final = tuple(f"ZZT{c}" for c in "ABCDEFGHIJKLM")
-SYMBOLS: Final = SCENARIO + TIGHT
+BOUNDARY: Final = ("ZZPP", "ZZQQ", "ZZRR", "ZZMM", "ZZNN")
+SYMBOLS: Final = SCENARIO + TIGHT + BOUNDARY
 
 
 def calendar() -> SessionCalendar:
@@ -172,6 +184,50 @@ def scripted_bars(
             bars[d] = flat(str(Decimal("22.90") + Decimal("0.02") * (k + 1)))
         for d in sessions[i2 + 41 :]:
             bars[d] = flat("23.70")
+    if symbol == "ZZPP":
+        bars[dev[-1]] = breakout("20.00")
+        for d in sessions[index[dev[-1]] + 1 : index[val[-1]] - 25]:
+            bars[d] = flat("20.80")
+        for d in sessions[index[val[-1]] - 25 : index[val[-1]]]:
+            bars[d] = flat("20.00")
+        bars[val[-1]] = breakout("20.00")
+        for d in sessions[index[val[-1]] + 1 :]:
+            bars[d] = flat("20.80")
+    if symbol == "ZZQQ":
+        for start in (dev[-12], val[-12]):
+            i = index[start]
+            # A 40-session drift up to a 21.00 base keeps relative strength positive while
+            # the tight group is itself rising; a drifting flat bar never breaks out.
+            for k, d in enumerate(sessions[i - 60 : i - 20]):
+                bars[d] = flat(str(Decimal("20.00") + Decimal("0.025") * (k + 1)))
+            for d in sessions[i - 20 : i]:
+                bars[d] = flat("21.00")
+            bars[start] = breakout("21.00")
+            for k, d in enumerate(sessions[i + 1 : i + 41]):
+                bars[d] = flat(str(Decimal("21.84") + Decimal("0.05") * (k + 1)))
+    if symbol == "ZZRR":
+        d0 = dev[5]
+        i0 = index[d0]
+        after = sessions[i0 + 1 :]
+        bars[d0] = breakout("20.00")
+        for d in after[:19]:
+            bars[d] = flat("20.80")
+        bars[after[19]] = breakout("20.80")  # the close of held session 20 is a breakout
+        for d in after[20:80]:
+            bars[d] = flat("21.60")
+        bars[after[80]] = breakout("21.60")  # an ordinary later re-entry
+        for k, d in enumerate(after[81:121]):
+            bars[d] = flat(str(Decimal("22.40") + Decimal("0.02") * (k + 1)))
+        for d in after[121:]:
+            bars[d] = flat("23.20")
+    if symbol in ("ZZMM", "ZZNN"):
+        start = dev[-3] if symbol == "ZZMM" else val[-3]
+        i = index[start]
+        bars[start] = breakout("20.00")
+        for d in sessions[i + 1 : i + 6]:
+            bars[d] = flat("20.80")
+        for d in sessions[i + 6 :]:
+            del bars[d]  # silence, no action: held through missing bars, open at the end
     return bars
 
 
@@ -351,19 +407,53 @@ def silver_layer(cal: SessionCalendar | None = None) -> SilverLayer:
     )
 
 
-def source_digest() -> str:
-    """The digest a synthetic dataset names as its source: the fixture's identity, no manifest."""
-    return hashlib.sha256(b"synthetic-m0-silver-fixture-v1").hexdigest()
+def with_split(layer: SilverLayer, symbol: str, ex_date: date, ratio: Decimal) -> SilverLayer:
+    """A variant Silver layer: ``symbol`` splits ``ratio``:1 on ``ex_date``. Every bar dated on
+    or after the ex-date has its raw prices divided by ``ratio`` (quantized to 4 places) and its
+    volume multiplied; earlier bars are untouched; one ``split`` action is added."""
+    from dataclasses import replace
+
+    sid = security_id(symbol)
+    rows: list[RowVersion] = []
+    for row in layer.stocks.rows:
+        if row.security_id != sid or date.fromisoformat(str(row.fields["date"])) < ex_date:
+            rows.append(row)
+            continue
+        fields = dict(row.fields)
+        for name in ("open", "high", "low", "close", "closeadj", "closeunadj"):
+            value = Decimal(str(fields[name])) / ratio
+            fields[name] = str(value.quantize(Decimal("0.0001")))
+        fields["volume"] = str(int(Decimal(str(fields["volume"])) * ratio))
+        rows.append(replace(row, fields=fields))
+    action = _row(
+        SharadarDataset.ACTIONS.value,
+        (ex_date.isoformat(), "split"),
+        symbol,
+        {
+            "date": ex_date.isoformat(),
+            "action": "split",
+            "ticker": symbol,
+            "name": f"Synthetic {symbol} Corp",
+            "value": str(ratio),
+            "contraticker": "",
+            "contraname": "",
+        },
+        10_000 + len(layer.actions.rows),
+    )
+    return replace(
+        layer,
+        stocks=replace(layer.stocks, rows=tuple(rows)),
+        actions=replace(layer.actions, rows=(*layer.actions.rows, action)),
+    )
 
 
-def dataset(cal: SessionCalendar | None = None) -> ExploratoryDataset:
-    """Silver → AS_DATED → membership → benchmark A → dataset."""
-    cal = cal or calendar()
-    layer = resolve_as_dated(silver_layer(cal), calendar=cal)
-    membership = decide_membership_all(layer, rule=rule(), calendar=cal, as_of=AS_OF)
-    benchmark = build_benchmark_a(layer, membership, calendar=cal)
+def dataset_from(layer: SilverLayer, cal: SessionCalendar) -> ExploratoryDataset:
+    """Silver → AS_DATED → membership → benchmark A → dataset, for a variant layer."""
+    resolved = resolve_as_dated(layer, calendar=cal)
+    membership = decide_membership_all(resolved, rule=rule(), calendar=cal, as_of=AS_OF)
+    benchmark = build_benchmark_a(resolved, membership, calendar=cal)
     return ExploratoryDataset(
-        layer=layer,
+        layer=resolved,
         membership=membership,
         calendar=cal,
         benchmark=benchmark,
@@ -372,8 +462,20 @@ def dataset(cal: SessionCalendar | None = None) -> ExploratoryDataset:
     )
 
 
+def source_digest() -> str:
+    """The digest a synthetic dataset names as its source: the fixture's identity, no manifest."""
+    return hashlib.sha256(b"synthetic-m0-silver-fixture-v1").hexdigest()
+
+
+def dataset(cal: SessionCalendar | None = None) -> ExploratoryDataset:
+    """Silver → AS_DATED → membership → benchmark A → dataset."""
+    cal = cal or calendar()
+    return dataset_from(silver_layer(cal), cal)
+
+
 __all__ = [
     "AS_OF",
+    "BOUNDARY",
     "CALENDAR_VERSION",
     "SCENARIO",
     "SPLIT_EX",
@@ -381,10 +483,12 @@ __all__ = [
     "TIGHT",
     "calendar",
     "dataset",
+    "dataset_from",
     "permaticker",
     "phases_of",
     "rule",
     "security_id",
     "silver_layer",
     "source_digest",
+    "with_split",
 ]

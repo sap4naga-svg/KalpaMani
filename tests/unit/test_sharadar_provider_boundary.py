@@ -60,8 +60,8 @@ QUALIFY_PACKAGE = DATA_ROOT / "qualify" / "sharadar"
 #: datasets and contracts name the vendor -- and nothing else may.
 PRODUCTION_PACKAGE = DATA_ROOT / "production" / "sharadar"
 
-#: The research-only exploratory package (proposed ADR-0051, its slice 2). A
-#: **fourth** vendor-scoped package, admitted under the PROPOSED ADR only: it reads
+#: The research-only exploratory package (ADR-0051, accepted on the merge of PR #111; its
+#: slice 2). A **fourth** vendor-scoped package, admitted under that ADR: it reads
 #: the accepted Sharadar-shaped Silver, session and universe contracts **unchanged**
 #: and keeps the accepted ``sharadar:<permaticker>`` identity, and it may reach no
 #: runtime, store, binding or network (held by ``test_exploratory_isolation``). No
