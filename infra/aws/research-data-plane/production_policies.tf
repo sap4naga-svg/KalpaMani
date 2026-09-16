@@ -737,11 +737,25 @@ data "aws_iam_policy_document" "production_acquisition_human_bootstrap" {
     )
   }
 
-  statement {
-    sid       = "HumanNeverDecryptsOrEncryptsDirectly"
-    effect    = "Deny"
-    actions   = ["kms:Decrypt", "kms:Encrypt"]
-    resources = ["*"]
+  # Batch-1 probe R4-SECRET-GET-HUMAN (2026-09-16), diagnosed: a Deny on `*` also
+  # matched the kms:Decrypt Secrets Manager performs ON THE HUMAN'S BEHALF (the
+  # AWS-managed aws/secretsmanager key, kms:ViaService) for the one GetSecretValue
+  # the data-plane policy allows, so the accepted "one GetSecretValue" (ADR-0036
+  # s.2.5) was unreachable by the human set. The deny's purpose -- the human never
+  # decrypts a binding, input or release parameter directly -- is the task-bindings
+  # key's, so it names that key: the only key the human could otherwise reach
+  # through Parameter Store. No Allow is added; every other key stays implicitly
+  # denied to the human, and the task role (no such Deny) is unchanged. Gated like
+  # the GenerateDataKey grant above, because the key exists only from stage a.
+  dynamic "statement" {
+    for_each = local.production_stage_a ? [1] : []
+
+    content {
+      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:Encrypt"]
+      resources = [aws_kms_key.production_task_bindings[0].arn]
+    }
   }
 }
 
@@ -837,11 +851,25 @@ data "aws_iam_policy_document" "production_build_human_bootstrap" {
     )
   }
 
-  statement {
-    sid       = "HumanNeverDecryptsOrEncryptsDirectly"
-    effect    = "Deny"
-    actions   = ["kms:Decrypt", "kms:Encrypt"]
-    resources = ["*"]
+  # Batch-1 probe R4-SECRET-GET-HUMAN (2026-09-16), diagnosed: a Deny on `*` also
+  # matched the kms:Decrypt Secrets Manager performs ON THE HUMAN'S BEHALF (the
+  # AWS-managed aws/secretsmanager key, kms:ViaService) for the one GetSecretValue
+  # the data-plane policy allows, so the accepted "one GetSecretValue" (ADR-0036
+  # s.2.5) was unreachable by the human set. The deny's purpose -- the human never
+  # decrypts a binding, input or release parameter directly -- is the task-bindings
+  # key's, so it names that key: the only key the human could otherwise reach
+  # through Parameter Store. No Allow is added; every other key stays implicitly
+  # denied to the human, and the task role (no such Deny) is unchanged. Gated like
+  # the GenerateDataKey grant above, because the key exists only from stage a.
+  dynamic "statement" {
+    for_each = local.production_stage_a ? [1] : []
+
+    content {
+      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:Encrypt"]
+      resources = [aws_kms_key.production_task_bindings[0].arn]
+    }
   }
 }
 
