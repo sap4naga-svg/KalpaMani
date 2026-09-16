@@ -323,3 +323,40 @@ first** (`tests/unit/test_m0_exploratory_correction_2.py`, 8 tests) and run agai
 
 **No owner decision is selected by this correction**; none of O-1…O-11 is taken, no real-data run is authorized, and
 PR #112 stays OPEN and unmerged.
+
+## 12. Slice 3 — the exploratory adapter (2026-09-16, a later and separately authorized slice)
+
+**An implementation event; no decision and no execution.** Under an authorization limited to repository
+implementation and synthetic tests, `kalpamani.data.exploratory.adapter` was written to turn an **admitted production
+build's published bytes** into the objects the M0 runner reads, so that a future real-data run has one bounded, refusable
+input path instead of a hand-built one. It reads bytes only — it has no store client, no read path and no principal — and
+it emits an `ExploratoryPublication` through the existing `publish`, **never** an A1 `VerifiedPublication`.
+
+| function | what it binds, and what it refuses |
+|---|---|
+| `parse_manifest(bytes)` | the accepted `kalpamani-production-build-manifest/v1`, parsed totally (closed key set at every level, exact types, duplicate keys refused, one contract version); yields the build's `as_of`, calendar version, configuration digest, commit, accepted-schemas version, observed schema digests, identity counts, pagination summary, the `served` counts (admitted / superseded / **excluded by time**), the `resolution_map` rule counts, the universe rule, the outputs (name → key, digest, bytes, rows, disposition) and the build input's runs with their payload digests |
+| `parse_silver_artifact(name, bytes, expected_sha256, expected_bytes)` | one of `silver-tickers` / `silver-stocks` / `silver-actions` only (`NOT_A_SILVER_ARTIFACT` otherwise — **Gold is refused by name**); byte count and SHA-256 verified **before** parsing; every row document closed; each row back into the accepted `RowVersion` with its provenance; a redelivery gap's run ids are counted, their instants **never invented** (the artifact does not carry them) |
+| `assemble_layer(manifest, artifacts)` | every dataset present and listed under `outputs` with a confirmed disposition; row count as listed; every row's provenance bound to a run and a payload digest the manifest's build input names (`PROVENANCE_UNBOUND`); **`REVISIONS_EXCLUDED_BY_TIME`** if any `served` count says the build could not serve a revision at its `as_of` — rows the research layer would silently lack are a refusal, not an omission |
+| `calendar_from_configuration(bytes, manifest)` | the compiled build configuration whose **canonical digest equals the manifest's `configuration_digest`** (`CONFIGURATION_UNBOUND` otherwise) and whose calendar version equals the manifest's; the sessions carry `open_at` only — **the exploratory close is `open_at + 6h30`, an approximation stated in the module, not an exchange schedule, and early closes are not represented** |
+| `rule_from_manifest(manifest)` | the accepted `UniverseRule` the build decided under; **`history_sessions` must be 252** (`RULE_HISTORY_NOT_ACCEPTED`) — the accepted module's own requirement, end to end |
+| `build_dataset(assembly, calendar, rule, as_of=None)` | `resolve_as_dated` → the accepted membership clauses → benchmark A; `as_of` defaults to the build's and may not precede it; the dataset's `source_manifest_digest` is the manifest's SHA-256 |
+| `publish_from_build(dataset, publication_id, limitations)` | the existing `publish`: an `ExploratoryPublication`, `LICENSED_DERIVED`, provenance naming the manifest |
+
+**Proven on synthetic artifacts produced by the accepted producer** (`tests/fixtures/m0_build_artifacts.py`: the M0 synthetic
+layer, re-keyed the production way, pushed through `availability.resolve`, `universe.build_universe`, `gold.build_gold` and
+`build_manifest.build_manifest_document`; and the existing end-to-end build scenario's own published objects) by the ten
+acceptance cases of the readiness packet (`tests/unit/test_exploratory_adapter.py`): (1) the adapted build and the direct
+path yield identical layer, membership and benchmark digests and identical M0 trades under one trial digest; (2) a flipped byte
+or a wrong byte count is refused before parsing; (3) the manifest is parsed totally; (4) a missing or unlisted artifact, an
+unconfirmed disposition, an excluded revision or an unbound provenance is refused; (5) the calendar is the build's own or is
+refused, and its close is the stated approximation; (6) a rule without 252 history sessions is refused; (7) provenance round-trips
+exactly and gap instants are never invented; (8) the adapter imports only accepted contract modules, its output is exploratory
+and every production consumer still refuses it; (9) Gold is not consumed and is refused by name; (10) the adapter takes bytes only
+(no store, file or SDK call, checked structurally) and the real build scenario's objects round-trip, its 3-session rule refused.
+
+**What the slice does not do.** It reads no licensed object — no principal, profile or path for that exists, and O-6 decides
+where such a read would run; it runs nothing on real data (`run_m0` still refuses a `REAL` kind without a typed, complete
+`OWNER_SELECTED` configuration); it selects none of O-1…O-11 or F-4…F-8 and does not select the fractional-settlement policy;
+it changes no production module, P-2/P-3 rule, accepted threshold or build output. One correction to the readiness packet's
+trace is recorded here: the excluded-by-time count the adapter must refuse lives in the manifest's **`served`** entries, not in
+`resolution_map` (which carries the P-2 / P-3 / gated-evidence counts).

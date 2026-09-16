@@ -210,3 +210,25 @@ def test_the_adr_records_correction_2_and_the_code_carries_the_corrected_o7_o10_
         "NEXT_OBSERVED_CLOSE",
         "UNRESOLVED",
     ]
+
+
+def test_the_adr_records_the_adapter_slice_and_the_module_exists() -> None:
+    assert "## 12. Slice 3" in ADR_TEXT
+    for phrase in (
+        "never an A1 VerifiedPublication",
+        "REVISIONS_EXCLUDED_BY_TIME",
+        "CONFIGURATION_UNBOUND",
+        "history_sessions must be 252",
+        "Gold is refused by name",
+        "an approximation stated in the module",
+        "reads no licensed object",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert (REPO_ROOT / "src/kalpamani/data/exploratory/adapter.py").is_file()
+    assert (REPO_ROOT / "tests/unit/test_exploratory_adapter.py").is_file()
+    assert (REPO_ROOT / "tests/fixtures/m0_build_artifacts.py").is_file()
+    from kalpamani.data.exploratory import adapter
+
+    assert adapter.REQUIRED_HISTORY_SESSIONS == 252
+    assert adapter.MANIFEST_CONTRACT == "kalpamani-production-build-manifest/v1"
+    assert "NOT_A_SILVER_ARTIFACT" in [d.value for d in adapter.AdapterDefect]
