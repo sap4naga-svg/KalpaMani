@@ -660,6 +660,31 @@ def _rule_bootstrap(model: Model) -> list[str]:
         for action in ("kms:Decrypt", "kms:Encrypt"):
             if action not in _denied(human):
                 found.append(f"{actor} human bootstrap must deny {action}")
+        # The 2026-09-16 probe defect, pinned: a Deny on `*` also matched the decrypt
+        # Secrets Manager performs on the human's behalf (the AWS-managed
+        # aws/secretsmanager key), so the one GetSecretValue the data plane allows
+        # was unreachable. The deny names the task-bindings key -- the only key the
+        # human could otherwise reach through Parameter Store -- and is gated on
+        # stage a like every other reference to that key.
+        kms_denies = [
+            s for s in _denies(human) if "kms:Decrypt" in s.actions or "kms:Encrypt" in s.actions
+        ]
+        if len(kms_denies) != 1:
+            found.append(f"{actor} human bootstrap must carry exactly one KMS deny")
+        else:
+            deny = kms_denies[0]
+            if tuple(deny.actions) != ("kms:Decrypt", "kms:Encrypt"):
+                found.append(f"{actor} human bootstrap KMS deny must name Decrypt and Encrypt")
+            if deny.raw_resources.strip() != "[aws_kms_key.production_task_bindings[0].arn]":
+                found.append(
+                    f"{actor} human bootstrap KMS deny must name exactly the task-bindings key"
+                )
+            if "*" in deny.resources or deny.raw_not_resources:
+                found.append(f"{actor} human bootstrap KMS deny is a blanket deny")
+            if "local.production_stage_a" not in deny.dynamic_gate:
+                found.append(f"{actor} human bootstrap KMS deny must be gated on stage a")
+            if deny.conditions:
+                found.append(f"{actor} human bootstrap KMS deny carries an unexpected condition")
         if "ssm:GetParameter" in _granted(human):
             found.append(f"{actor} human bootstrap grants a parameter read")
 
@@ -1750,6 +1775,42 @@ def _mutate(sources: dict[str, str], file: str, old: str, new: str) -> dict[str,
 MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "production_policies.tf",
+        """      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:Encrypt"]
+      resources = [aws_kms_key.production_task_bindings[0].arn]""",
+        """      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:Encrypt"]
+      resources = ["*"]""",
+        "KMS deny is a blanket deny",
+    ),
+    (
+        "production_policies.tf",
+        """      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:Encrypt"]
+      resources = [aws_kms_key.production_task_bindings[0].arn]""",
+        """      sid       = "HumanNeverDecryptsOrEncryptsDirectly"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt"]
+      resources = [aws_kms_key.production_task_bindings[0].arn]""",
+        "must deny kms:Encrypt",
+    ),
+    (
+        "production_policies.tf",
+        """      sid       = "RetrieveTheOneProductionCredential"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [var.production_acquisition_secret_arn]""",
+        """      sid       = "RetrieveTheOneProductionCredential"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = ["*"]""",
+        "acquisition secret grant must name exactly the production secret variable",
+    ),
+    (
+        "production_policies.tf",
         """    sid     = "ReadThisActorsOwnReceiptStreams"
     effect  = "Allow"
     actions = ["logs:GetLogEvents"]
@@ -2132,3 +2193,90 @@ class TestLauncherReceiptStreams:
                     r'"awslogs-stream-prefix"\s*=\s*"production-' + re.escape(container) + '"', text
                 ), container
                 assert re.search(r'\bname\s*=\s*"' + re.escape(container) + r'"', text), container
+
+
+class TestHumanBootstrapKmsDenyScope:
+    """The 2026-09-16 probe defect (R4-SECRET-GET-HUMAN INVERTED), pinned.
+
+    A human-bootstrap Deny of ``kms:Decrypt`` on ``*`` matched the decrypt Secrets
+    Manager performs on the human's behalf under the AWS-managed key, so the one
+    ``GetSecretValue`` the data-plane policy allows was explicitly denied. The deny now
+    names the task-bindings key, gated on stage a; every other protection is unchanged.
+    """
+
+    def test_each_human_kms_deny_names_the_task_bindings_key_under_the_stage_gate(
+        self, model: Model
+    ) -> None:
+        assert not [v for v in _rule_bootstrap(model) if "KMS deny" in v]
+        for actor in ACTORS:
+            human = model.documents[f"production_{actor}_human_bootstrap"]
+            deny = next(s for s in _denies(human) if "kms:Decrypt" in s.actions)
+            assert deny.sid == "HumanNeverDecryptsOrEncryptsDirectly"
+            assert tuple(deny.actions) == ("kms:Decrypt", "kms:Encrypt")
+            assert deny.raw_resources.strip() == "[aws_kms_key.production_task_bindings[0].arn]"
+            assert "local.production_stage_a" in deny.dynamic_gate
+            assert not deny.conditions and not deny.raw_not_resources
+
+    def test_a_blanket_kms_deny_is_detected(self, sources: dict[str, str]) -> None:
+        mutated = _mutate(
+            sources,
+            "production_policies.tf",
+            "      resources = [aws_kms_key.production_task_bindings[0].arn]\n    }\n  }\n}",
+            '      resources = ["*"]\n    }\n  }\n}',
+        )
+        found = violations(mutated)
+        assert any("KMS deny is a blanket deny" in v for v in found), found
+        assert any("must name exactly the task-bindings key" in v for v in found), found
+
+    def test_an_ungated_kms_deny_is_detected(self, sources: dict[str, str]) -> None:
+        text = sources["production_policies.tf"]
+        gated = (
+            '  dynamic "statement" {\n'
+            "    for_each = local.production_stage_a ? [1] : []\n\n"
+            "    content {\n"
+            '      sid       = "HumanNeverDecryptsOrEncryptsDirectly"\n'
+        )
+        assert text.count(gated) == 2, "both human documents gate the deny on stage a"
+        ungated = gated.replace(
+            "    for_each = local.production_stage_a ? [1] : []", "    for_each = [1]"
+        )
+        found = violations(_mutate(sources, "production_policies.tf", gated, ungated))
+        assert any("must be gated on stage a" in v for v in found), found
+
+    def test_the_human_gains_no_kms_or_secret_allow(self, model: Model) -> None:
+        for actor in ACTORS:
+            human = model.documents[f"production_{actor}_human_bootstrap"]
+            granted = _granted(human)
+            assert "kms:Decrypt" not in granted and "kms:Encrypt" not in granted
+            assert not any(a.startswith("secretsmanager:") for a in granted)
+            # the one KMS allow a human holds is GenerateDataKey through Parameter Store
+            assert {a for a in granted if a.startswith("kms:")} == {"kms:GenerateDataKey"}
+
+    def test_the_exact_secret_restriction_and_the_build_denial_are_intact(
+        self, model: Model
+    ) -> None:
+        acquisition = model.documents["production_acquisition"]
+        allow = next(
+            s for s in _allows(acquisition) if "secretsmanager:GetSecretValue" in s.actions
+        )
+        assert allow.sid == "RetrieveTheOneProductionCredential"
+        assert allow.raw_resources.strip() == "[var.production_acquisition_secret_arn]"
+        close = next(
+            s for s in _denies(acquisition) if s.sid == "AcquisitionRetrievesNoOtherSecret"
+        )
+        assert close.raw_not_resources.strip() == "[var.production_acquisition_secret_arn]"
+        assert "secretsmanager:BatchGetSecretValue" in close.actions
+        build = model.documents["production_build"]
+        assert "secretsmanager:*" in _denied(build)
+        assert not any(a.startswith("secretsmanager:") for a in _granted(build))
+
+    def test_the_task_bootstrap_decrypts_are_unchanged(self, model: Model) -> None:
+        for prefix in ("production_acquire", "production_build"):
+            task = model.documents[f"{prefix}_task_bootstrap"]
+            decrypts = [s for s in _allows(task) if "kms:Decrypt" in s.actions]
+            assert len(decrypts) == 1
+            assert decrypts[0].raw_resources.strip() == (
+                "[aws_kms_key.production_task_bindings[0].arn]"
+            )
+            assert _has_condition(decrypts[0], "StringEquals", "kms:ViaService")
+            assert "kms:Decrypt" not in _denied(task)
