@@ -359,11 +359,11 @@ def _selections(**overrides: Any) -> Any:
         BenchmarkChoice,
         ComputeLocationChoice,
         CostModelChoice,
+        EventHandlingChoice,
         ExitRuleChoice,
         ExploratoryModeChoice,
-        FinalFillPolicyChoice,
         OwnerSelections,
-        SizingPolicyChoice,
+        SizingSequencingChoice,
         TerminalAccountingChoice,
     )
 
@@ -374,11 +374,11 @@ def _selections(**overrides: Any) -> Any:
         "o4_cost_model": CostModelChoice.M0_SECTION_14,
         "o5_acquisition_route": AcquisitionRouteChoice.BOUNDED_RUNS,
         "o6_compute_location": ComputeLocationChoice.PRIVATE_AWS,
-        "o7_sizing_policy": SizingPolicyChoice.CLAUDE_S6_RESEARCH_PARAMETERS,
+        "o7_event_handling": EventHandlingChoice.EVENT_BLIND,
         "o8_data_window_start": date(2024, 6, 3),
         "o8_data_window_end": date(2026, 9, 14),
         "o9_terminal_accounting": TerminalAccountingChoice.TWO_LEDGERS,
-        "o10_final_fill_policy": FinalFillPolicyChoice.REJECTION,
+        "o10_sizing_and_sequencing": SizingSequencingChoice.CLAUDE_S6_FINAL_FILL_REJECTION,
         "o11_no_untouched_window": Acknowledgment.ACKNOWLEDGED,
     }
     values.update(overrides)
@@ -421,7 +421,7 @@ def test_f4_unsupported_and_contradictory_selections_are_refused() -> None:
         Acknowledgment,
         BenchmarkChoice,
         ExploratoryModeChoice,
-        FinalFillPolicyChoice,
+        SizingSequencingChoice,
     )
 
     with pytest.raises(M0RunError) as caught:
@@ -431,7 +431,9 @@ def test_f4_unsupported_and_contradictory_selections_are_refused() -> None:
         _selections(o2_benchmark=BenchmarkChoice.B_FUND_SERIES)
     assert caught.value.refusal is RunRefusal.REFUSED_UNSUPPORTED_SELECTION
     with pytest.raises(M0RunError) as caught:
-        _selections(o10_final_fill_policy=FinalFillPolicyChoice.RESIZE)
+        _selections(
+            o10_sizing_and_sequencing=SizingSequencingChoice.CLAUDE_S6_ONE_RESIZING_ITERATION
+        )
     assert caught.value.refusal is RunRefusal.REFUSED_UNSUPPORTED_SELECTION
     with pytest.raises(M0RunError) as caught:
         _selections(o11_no_untouched_window=Acknowledgment.NOT_ACKNOWLEDGED)

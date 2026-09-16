@@ -23,9 +23,15 @@ specification's differences from the accepted module (D1-D11) are enumerated on 
 signal session*; execution reads every bar on that bar's **own** session's basis (the raw
 delivered price); a level stated on the signal session's basis is carried to the executing
 session by the split ratios between them; a split effective while a position is held rescales
-the held shares and the stop at that open, settles any fractional share in cash at that
-session's close (``SplitEvent.cash_in_lieu``, no commission), and leaves the entry facts and
-the planned risk as they were. No split effective after a session can reach back into it.
+the held shares and the stop at that open and records the fractional entitlement **without
+reading any price**; the entitlement is settled in cash **at the close** of the first session
+on or after the ex-session that has an observed close (``SettlementPolicy.EX_SESSION_CLOSE`` or
+``NEXT_OBSERVED_CLOSE``), no commission, attributed to the originating trade and its window even
+if the whole-share position exited at that open; an entitlement that never meets an observed
+close by the block's end stays ``UNRESOLVED``, listed on the ledger and carried at zero -- a prior
+price is never read as a current close. The entry facts and the planned risk are unchanged. No
+split effective after a session can reach back into it. **The fractional-share settlement is an
+M0 engineering assumption pending an owner selection, not an accepted rule.**
 
 **Configuration provenance is explicit and validated.** :data:`M0_SYNTHETIC_FIXTURE` is an
 engineering test input carrying the §14 proposed settings and benchmark A; it is *not* an
@@ -43,7 +49,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
@@ -234,10 +240,12 @@ class ComputeLocationChoice(StrEnum):
     WORKSTATION = "WORKSTATION"
 
 
-class SizingPolicyChoice(StrEnum):
-    """O-7: the sizing policy."""
+class EventHandlingChoice(StrEnum):
+    """O-7: events -- event-blind (D2, stated on every page) or wait for an event entity
+    (Phase 3B, G4). Only event-blind is executable: no event entity exists."""
 
-    CLAUDE_S6_RESEARCH_PARAMETERS = "CLAUDE_S6_RESEARCH_PARAMETERS"
+    EVENT_BLIND = "EVENT_BLIND"
+    WAIT_FOR_EVENT_ENTITY = "WAIT_FOR_EVENT_ENTITY"
 
 
 class TerminalAccountingChoice(StrEnum):
@@ -246,11 +254,13 @@ class TerminalAccountingChoice(StrEnum):
     TWO_LEDGERS = "TWO_LEDGERS"
 
 
-class FinalFillPolicyChoice(StrEnum):
-    """O-10: what happens when the final fill breaches a sizing limit."""
+class SizingSequencingChoice(StrEnum):
+    """O-10: sizing and sequencing -- the CLAUDE.md s.6 research parameters with one-pass
+    sizing and final-fill rejection preserving both limits (s.14.1), ranking relative
+    strength -> ADDV20 -> security id; or one re-sizing pass. Only rejection is executable."""
 
-    REJECTION = "REJECTION"
-    RESIZE = "RESIZE"
+    CLAUDE_S6_FINAL_FILL_REJECTION = "CLAUDE_S6_FINAL_FILL_REJECTION"
+    CLAUDE_S6_ONE_RESIZING_ITERATION = "CLAUDE_S6_ONE_RESIZING_ITERATION"
 
 
 class Acknowledgment(StrEnum):
@@ -263,7 +273,8 @@ class Acknowledgment(StrEnum):
 #: What this slice can execute. A selection outside this set is refused as unsupported.
 _SUPPORTED: Final[dict[str, frozenset[Any]]] = {
     "o2_benchmark": frozenset({BenchmarkChoice.A_EW_UNIVERSE}),
-    "o10_final_fill_policy": frozenset({FinalFillPolicyChoice.REJECTION}),
+    "o7_event_handling": frozenset({EventHandlingChoice.EVENT_BLIND}),
+    "o10_sizing_and_sequencing": frozenset({SizingSequencingChoice.CLAUDE_S6_FINAL_FILL_REJECTION}),
 }
 
 
@@ -273,7 +284,10 @@ class OwnerSelections:
 
     Every field is an exact member of its closed vocabulary (a name, a string or a lookalike
     is not a choice), every choice must be one this slice can execute, and the set must not
-    contradict running at all. Synthetic fixture values are never selections.
+    contradict running at all. Synthetic fixture values are never selections. The field
+    numbering follows the owner decision form: O-7 is **events**, O-10 is **sizing and
+    sequencing**; a former substitution of a sizing choice at O-7 is rejected by the
+    dataclass signature, never reinterpreted.
     """
 
     o1_exploratory_mode: ExploratoryModeChoice
@@ -282,11 +296,11 @@ class OwnerSelections:
     o4_cost_model: CostModelChoice
     o5_acquisition_route: AcquisitionRouteChoice
     o6_compute_location: ComputeLocationChoice
-    o7_sizing_policy: SizingPolicyChoice
+    o7_event_handling: EventHandlingChoice
     o8_data_window_start: date
     o8_data_window_end: date
     o9_terminal_accounting: TerminalAccountingChoice
-    o10_final_fill_policy: FinalFillPolicyChoice
+    o10_sizing_and_sequencing: SizingSequencingChoice
     o11_no_untouched_window: Acknowledgment
 
     def __post_init__(self) -> None:
@@ -297,11 +311,11 @@ class OwnerSelections:
             ("o4_cost_model", CostModelChoice),
             ("o5_acquisition_route", AcquisitionRouteChoice),
             ("o6_compute_location", ComputeLocationChoice),
-            ("o7_sizing_policy", SizingPolicyChoice),
+            ("o7_event_handling", EventHandlingChoice),
             ("o8_data_window_start", date),
             ("o8_data_window_end", date),
             ("o9_terminal_accounting", TerminalAccountingChoice),
-            ("o10_final_fill_policy", FinalFillPolicyChoice),
+            ("o10_sizing_and_sequencing", SizingSequencingChoice),
             ("o11_no_untouched_window", Acknowledgment),
         ):
             if type(getattr(self, name)) is not kind:
@@ -328,13 +342,13 @@ class OwnerSelections:
             "O-4": self.o4_cost_model.value,
             "O-5": self.o5_acquisition_route.value,
             "O-6": self.o6_compute_location.value,
-            "O-7": self.o7_sizing_policy.value,
+            "O-7": self.o7_event_handling.value,
             "O-8": {
                 "start": self.o8_data_window_start.isoformat(),
                 "end": self.o8_data_window_end.isoformat(),
             },
             "O-9": self.o9_terminal_accounting.value,
-            "O-10": self.o10_final_fill_policy.value,
+            "O-10": self.o10_sizing_and_sequencing.value,
             "O-11": self.o11_no_untouched_window.value,
         }
 
@@ -564,17 +578,39 @@ def phases_for(sessions: tuple[date, ...], config: M0Configuration) -> Phases:
 # ---------------------------------------------------------------------------
 
 
+class SettlementPolicy(StrEnum):
+    """How a fractional entitlement from a split was, or was not, settled. Closed.
+
+    An M0 engineering assumption pending an owner selection: the fraction is settled in cash,
+    without commission, at the close of the ex-session when that close is observed; at the
+    next observed close otherwise; and never from a prior price -- an entitlement that meets no
+    observed close by the block's end stays unresolved and is carried at zero.
+    """
+
+    PENDING = "PENDING"
+    #: The rescaling left no fractional share: nothing to settle.
+    NONE_DUE = "NONE_DUE"
+    EX_SESSION_CLOSE = "EX_SESSION_CLOSE"
+    NEXT_OBSERVED_CLOSE = "NEXT_OBSERVED_CLOSE"
+    UNRESOLVED = "UNRESOLVED"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SplitEvent:
-    """A split effective while the position was held, and how it was applied."""
+    """A split effective while the position was held, how the whole shares were rescaled at
+    that open, and how the fractional entitlement was settled at a close."""
 
     ex_date: date
     ratio: Decimal
     shares_before: int
     shares_after: int
-    #: The fractional share settled in cash at ``price`` (the ex-session close), no commission.
+    #: The fractional share the whole-share rescaling left over (in post-split shares).
+    fraction: Decimal
+    #: What the fraction settled for, at ``price`` on ``settlement_session``; zero until then.
     cash_in_lieu: Decimal
-    price: Decimal
+    price: Decimal | None
+    settlement_session: date | None
+    settlement_policy: SettlementPolicy
 
     def document(self) -> dict[str, Any]:
         return {
@@ -582,8 +618,31 @@ class SplitEvent:
             "ratio": str(self.ratio),
             "shares_before": self.shares_before,
             "shares_after": self.shares_after,
+            "fraction": str(self.fraction),
             "cash_in_lieu": str(self.cash_in_lieu),
-            "price": str(self.price),
+            "price": None if self.price is None else str(self.price),
+            "settlement_session": (
+                None if self.settlement_session is None else self.settlement_session.isoformat()
+            ),
+            "settlement_policy": self.settlement_policy.value,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UnresolvedEntitlement:
+    """A fractional entitlement that met no observed close by the end of its block."""
+
+    security_id: str
+    window: Window
+    ex_date: date
+    shares: Decimal
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "security_id": self.security_id,
+            "window": self.window.value,
+            "ex_date": self.ex_date.isoformat(),
+            "shares": str(self.shares),
         }
 
 
@@ -596,11 +655,19 @@ class TransactionKind(StrEnum):
     INTEREST = "INTEREST"
 
 
+class Timing(StrEnum):
+    """When in the session a cash movement happened. Closed."""
+
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Transaction:
     """One recorded cash movement: what the reconciliation is rebuilt from."""
 
     kind: TransactionKind
+    timing: Timing
     session: date
     security_id: str | None
     shares: int
@@ -612,6 +679,7 @@ class Transaction:
     def document(self) -> dict[str, Any]:
         return {
             "kind": self.kind.value,
+            "timing": self.timing.value,
             "session": self.session.isoformat(),
             "security_id": self.security_id,
             "shares": self.shares,
@@ -657,6 +725,8 @@ class Trade:
     bars_after_delisting: int
     split_events: tuple[SplitEvent, ...]
     cash_in_lieu: Decimal
+    #: Fractional shares from splits that met no observed close by the block's end (zero-valued).
+    unresolved_entitlement_shares: Decimal
     mark_session: date | None
     mark_price: Decimal | None
     unrealized_pnl: Decimal | None
@@ -691,6 +761,7 @@ class Trade:
             "bars_after_delisting": self.bars_after_delisting,
             "split_events": [e.document() for e in self.split_events],
             "cash_in_lieu": str(self.cash_in_lieu),
+            "unresolved_entitlement_shares": str(self.unresolved_entitlement_shares),
             "mark_session": None if self.mark_session is None else self.mark_session.isoformat(),
             "mark_price": money(self.mark_price),
             "unrealized_pnl": money(self.unrealized_pnl),
@@ -720,11 +791,24 @@ class _Position:
     stop_triggered: bool = False
     time_due: bool = False
     cash_in_lieu: Decimal = _ZERO
+    unresolved_entitlement_shares: Decimal = _ZERO
     split_events: list[SplitEvent] = field(default_factory=list)
+    #: The index of this position's trade record once it has closed; ``None`` while open.
+    trade_index: int | None = None
 
     @property
     def cost_basis(self) -> Decimal:
         return _money(self.entry_fill * self.entry_shares)
+
+
+@dataclass(slots=True)
+class _Entitlement:
+    """A fractional entitlement awaiting an observed close."""
+
+    position: _Position
+    event_index: int
+    ex_session: date
+    fraction: Decimal
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -830,6 +914,7 @@ class Ledger:
     skips: tuple[SkipRecord, ...]
     equity: tuple[EquityPoint, ...]
     transactions: tuple[Transaction, ...]
+    unresolved_entitlements: tuple[UnresolvedEntitlement, ...]
     metrics: tuple[WindowMetrics, ...]
     missing_bar_held_sessions: int
     exits_deferred_no_bar: int
@@ -842,6 +927,7 @@ class Ledger:
             "skips": [s.document() for s in self.skips],
             "equity": [e.document() for e in self.equity],
             "transactions": [x.document() for x in self.transactions],
+            "unresolved_entitlements": [u.document() for u in self.unresolved_entitlements],
             "metrics": [m.document() for m in self.metrics],
             "missing_bar_held_sessions": self.missing_bar_held_sessions,
             "exits_deferred_no_bar": self.exits_deferred_no_bar,
@@ -995,6 +1081,8 @@ class _Simulation:
         self.skips: list[SkipRecord] = []
         self.equity: list[EquityPoint] = []
         self.transactions: list[Transaction] = []
+        self.pending: list[_Entitlement] = []
+        self.unresolved: list[UnresolvedEntitlement] = []
         self.missing_bar_held = 0
         self.exits_deferred = 0
         self.exited_this_session: set[str] = set()
@@ -1080,6 +1168,7 @@ class _Simulation:
     def _record(
         self,
         kind: TransactionKind,
+        timing: Timing,
         session: date,
         security_id: str | None,
         shares: int,
@@ -1091,6 +1180,7 @@ class _Simulation:
         self.transactions.append(
             Transaction(
                 kind=kind,
+                timing=timing,
                 session=session,
                 security_id=security_id,
                 shares=shares,
@@ -1105,43 +1195,149 @@ class _Simulation:
 
     def _apply_splits(self, session: date, previous: date | None) -> None:
         """A split with ex-date in ``(previous, session]`` rescales every held position at
-        this open: shares x ratio (whole shares kept), the stop and the last close divided,
-        the fractional share settled in cash at this session's close, no commission. The
+        this open: shares x ratio (whole shares kept), the stop and the last close divided.
+        The fractional entitlement is **recorded, not priced**: no close is read at the open
+        and no cash moves; :meth:`_settle_entitlements` prices it at an observed close. The
         entry facts and the planned risk are unchanged."""
         for security_id in sorted(self.positions):
             position = self.positions[security_id]
             for ex_date, ratio in self.dataset.splits_between(security_id, previous, session):
                 scaled = Decimal(position.shares) * ratio
                 whole = int(scaled.to_integral_value(rounding=ROUND_DOWN))
-                bar = self._bar(security_id, session)
-                price = _level(bar.close if bar is not None else position.last_close / ratio)
-                cash_in_lieu = _money((scaled - whole) * price)
+                fraction = scaled - whole
                 position.split_events.append(
                     SplitEvent(
                         ex_date=ex_date,
                         ratio=ratio,
                         shares_before=position.shares,
                         shares_after=whole,
-                        cash_in_lieu=cash_in_lieu,
-                        price=price,
+                        fraction=fraction,
+                        cash_in_lieu=_ZERO,
+                        price=None,
+                        settlement_session=None,
+                        settlement_policy=(
+                            SettlementPolicy.PENDING if fraction != 0 else SettlementPolicy.NONE_DUE
+                        ),
                     )
                 )
                 position.shares = whole
                 position.stop_level = _level(position.stop_level / ratio)
                 position.last_close = _level(position.last_close / ratio)
-                position.cash_in_lieu = _money(position.cash_in_lieu + cash_in_lieu)
-                if cash_in_lieu != 0:
-                    self.cash = _money(self.cash + cash_in_lieu)
-                    self._record(
-                        TransactionKind.CASH_IN_LIEU,
-                        session,
-                        security_id,
-                        0,
-                        price,
-                        _ZERO,
-                        cash_in_lieu,
-                        f"split {ratio}:1",
+                if fraction != 0:
+                    self.pending.append(
+                        _Entitlement(
+                            position=position,
+                            event_index=len(position.split_events) - 1,
+                            ex_session=session,
+                            fraction=fraction,
+                        )
                     )
+
+    def _settle_entitlements(self, session: date) -> None:
+        """At the close: every pending entitlement whose security has an observed close this
+        session settles at it, without commission, once. The proceeds reach cash now -- after
+        every exit and entry of the session -- and are attributed to the originating trade
+        (open or already closed) and its window."""
+        for entitlement in list(self.pending):
+            position = entitlement.position
+            bar = self._bar(position.security_id, session)
+            if bar is None:
+                continue
+            policy = (
+                SettlementPolicy.EX_SESSION_CLOSE
+                if session == entitlement.ex_session
+                else SettlementPolicy.NEXT_OBSERVED_CLOSE
+            )
+            price = _level(bar.close)
+            cash_in_lieu = _money(entitlement.fraction * price)
+            event = position.split_events[entitlement.event_index]
+            position.split_events[entitlement.event_index] = SplitEvent(
+                ex_date=event.ex_date,
+                ratio=event.ratio,
+                shares_before=event.shares_before,
+                shares_after=event.shares_after,
+                fraction=event.fraction,
+                cash_in_lieu=cash_in_lieu,
+                price=price,
+                settlement_session=session,
+                settlement_policy=policy,
+            )
+            position.cash_in_lieu = _money(position.cash_in_lieu + cash_in_lieu)
+            self.cash = _money(self.cash + cash_in_lieu)
+            self._record(
+                TransactionKind.CASH_IN_LIEU,
+                Timing.CLOSE,
+                session,
+                position.security_id,
+                0,
+                price,
+                _ZERO,
+                cash_in_lieu,
+                f"split {event.ratio}:1 on {event.ex_date.isoformat()} ({policy.value})",
+            )
+            if position.trade_index is not None:
+                self._restate_closed_trade(position)
+            self.pending.remove(entitlement)
+
+    def _restate_closed_trade(self, position: _Position) -> None:
+        """The originating trade already closed at an earlier open: its record gains the
+        settlement, its realized P&L and R multiple include it, its opening facts are as they
+        were."""
+        assert position.trade_index is not None
+        trade = self.trades[position.trade_index]
+        pnl = None
+        r = None
+        if trade.realized_pnl is not None:
+            proceeds = (
+                _ZERO if trade.exit_fill is None else _money(trade.exit_fill * trade.exit_shares)
+            )
+            pnl = _money(
+                proceeds
+                + position.cash_in_lieu
+                - position.cost_basis
+                - trade.entry_commission
+                - trade.exit_commission
+            )
+            r = None if trade.planned_risk <= 0 else (pnl / trade.planned_risk).quantize(_FRACTION)
+        self.trades[position.trade_index] = replace(
+            trade,
+            cash_in_lieu=position.cash_in_lieu,
+            unresolved_entitlement_shares=position.unresolved_entitlement_shares,
+            split_events=tuple(position.split_events),
+            realized_pnl=pnl,
+            r_multiple=r,
+        )
+
+    def _leave_unresolved(self, block_end: date) -> None:
+        """The block ended with entitlements that met no observed close: recorded as
+        unresolved, carried at zero, never priced from a prior close."""
+        for entitlement in self.pending:
+            position = entitlement.position
+            event = position.split_events[entitlement.event_index]
+            position.split_events[entitlement.event_index] = SplitEvent(
+                ex_date=event.ex_date,
+                ratio=event.ratio,
+                shares_before=event.shares_before,
+                shares_after=event.shares_after,
+                fraction=event.fraction,
+                cash_in_lieu=_ZERO,
+                price=None,
+                settlement_session=None,
+                settlement_policy=SettlementPolicy.UNRESOLVED,
+            )
+            position.unresolved_entitlement_shares += entitlement.fraction
+            self.unresolved.append(
+                UnresolvedEntitlement(
+                    security_id=position.security_id,
+                    window=position.window,
+                    ex_date=event.ex_date,
+                    shares=entitlement.fraction,
+                )
+            )
+            if position.trade_index is not None:
+                self._restate_closed_trade(position)
+        self.pending = []
+        del block_end
 
     # -- exits --
 
@@ -1165,6 +1361,7 @@ class _Simulation:
         self.cash = _money(self.cash + proceeds - commission)
         self._record(
             TransactionKind.EXIT,
+            Timing.OPEN,
             session,
             position.security_id,
             position.shares,
@@ -1207,11 +1404,13 @@ class _Simulation:
                 bars_after_delisting=position.bars_after_delisting,
                 split_events=tuple(position.split_events),
                 cash_in_lieu=position.cash_in_lieu,
+                unresolved_entitlement_shares=position.unresolved_entitlement_shares,
                 mark_session=None,
                 mark_price=None,
                 unrealized_pnl=None,
             )
         )
+        position.trade_index = len(self.trades) - 1
         self.exited_this_session.add(position.security_id)
         del self.positions[position.security_id]
 
@@ -1323,6 +1522,7 @@ class _Simulation:
             self.cash = _money(self.cash - notional - commission)
             self._record(
                 TransactionKind.ENTRY,
+                Timing.OPEN,
                 session,
                 sid,
                 shares,
@@ -1352,6 +1552,7 @@ class _Simulation:
 
     def _mark(self, session: date, window: Window) -> None:
         c = self.config
+        self._settle_entitlements(session)
         value = _ZERO
         for position in self.positions.values():
             bar = self._bar(position.security_id, session)
@@ -1374,7 +1575,9 @@ class _Simulation:
             interest = _money(accrued - self.cash)
             self.cash = accrued
             if interest != 0:
-                self._record(TransactionKind.INTEREST, session, None, 0, None, _ZERO, interest)
+                self._record(
+                    TransactionKind.INTEREST, Timing.CLOSE, session, None, 0, None, _ZERO, interest
+                )
         self.equity.append(
             EquityPoint(
                 session=session,
@@ -1388,7 +1591,9 @@ class _Simulation:
 
     def _mark_open_at_end(self, session: date) -> None:
         """Positions still open at the end of the block: marked at their last close, never
-        charged an exit, their unrealized result recorded beside the realized ones."""
+        charged an exit, their unrealized result recorded beside the realized ones. Pending
+        entitlements are left unresolved first, so every record carries them."""
+        self._leave_unresolved(session)
         for security_id in sorted(self.positions):
             position = self.positions[security_id]
             marked = _money(position.last_close * position.shares)
@@ -1420,6 +1625,7 @@ class _Simulation:
                     bars_after_delisting=position.bars_after_delisting,
                     split_events=tuple(position.split_events),
                     cash_in_lieu=position.cash_in_lieu,
+                    unresolved_entitlement_shares=position.unresolved_entitlement_shares,
                     mark_session=position.last_close_session,
                     mark_price=position.last_close,
                     unrealized_pnl=_money(marked - remaining_basis),
@@ -1438,6 +1644,7 @@ class _Simulation:
             # §14.3: each evaluation window initializes independently.
             self.cash = self.config.capital
             self.positions = {}
+            self.pending = []
             for session in block:
                 window = p.window_of(session) or reset
                 previous = sessions[index[session] - 1] if index[session] > 0 else None
@@ -1578,6 +1785,7 @@ class _Simulation:
             skips=tuple(self.skips),
             equity=tuple(self.equity),
             transactions=tuple(self.transactions),
+            unresolved_entitlements=tuple(self.unresolved),
             metrics=self.metrics(),
             missing_bar_held_sessions=self.missing_bar_held,
             exits_deferred_no_bar=self.exits_deferred,
@@ -1825,10 +2033,10 @@ __all__ = [
     "CostModelChoice",
     "DataKind",
     "EquityPoint",
+    "EventHandlingChoice",
     "ExitReason",
     "ExitRuleChoice",
     "ExploratoryModeChoice",
-    "FinalFillPolicyChoice",
     "Ledger",
     "M0Configuration",
     "M0Result",
@@ -1836,15 +2044,18 @@ __all__ = [
     "OwnerSelections",
     "Phases",
     "RunRefusal",
-    "SizingPolicyChoice",
+    "SettlementPolicy",
+    "SizingSequencingChoice",
     "Skip",
     "SkipRecord",
     "SplitEvent",
     "TerminalAccountingChoice",
     "TerminalPolicy",
+    "Timing",
     "Trade",
     "Transaction",
     "TransactionKind",
+    "UnresolvedEntitlement",
     "Window",
     "WindowMetrics",
     "baseline_b0_signals",

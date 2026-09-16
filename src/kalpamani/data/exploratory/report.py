@@ -42,6 +42,18 @@ _PERIODS_NOTE = " ".join(
     )
 )
 
+_SETTLEMENT_NOTE = " ".join(
+    (
+        "Fractional shares from a split (an M0 ENGINEERING ASSUMPTION pending an owner selection):",
+        "the whole-share position and its stop are rescaled at the ex-session open; the fraction",
+        "is",
+        "settled in cash, without commission, at the first observed close on or after that session",
+        "(EX_SESSION_CLOSE / NEXT_OBSERVED_CLOSE), attributed to the originating trade; an",
+        "entitlement that meets no observed close by the block's end is UNRESOLVED and carried at",
+        "zero. No close is read at an open.",
+    )
+)
+
 _METRIC_COLUMNS = (
     "window",
     "evaluation",
@@ -135,7 +147,9 @@ def _ledger_section(ledger: Ledger) -> list[str]:
         f"Exits: {dict(sorted(exits.items()))}. Skips: {dict(sorted(skips.items()))}. "
         f"Sessions held with a missing bar: {ledger.missing_bar_held_sessions}; exits deferred "
         f"for a missing execution bar: {ledger.exits_deferred_no_bar}. "
-        f"Journal: {dict(sorted(journal.items()))}.",
+        f"Journal: {dict(sorted(journal.items()))}. "
+        f"Unresolved fractional entitlements (carried at zero): "
+        f"{[u.document() for u in ledger.unresolved_entitlements]}.",
         "",
         _row(_TRADE_COLUMNS),
         "|" + "---|" * len(_TRADE_COLUMNS),
@@ -161,7 +175,13 @@ def _ledger_section(ledger: Ledger) -> list[str]:
                     t.r_multiple,
                     t.held_sessions,
                     t.missing_bar_sessions,
-                    "; ".join(f"{e.ratio}:1 on {e.ex_date}" for e in t.split_events) or "",
+                    "; ".join(
+                        f"{e.ratio}:1 on {e.ex_date} ({e.settlement_policy.value}"
+                        + (f" {e.settlement_session}" if e.settlement_session else "")
+                        + ")"
+                        for e in t.split_events
+                    )
+                    or "",
                 )
             )
         )
@@ -208,6 +228,7 @@ def render_markdown(result: M0Result, *, determinism: tuple[str, str] | None = N
     ]
     lines += ["## Phases", "", "```json", json.dumps(result.phases, indent=1), "```", ""]
     lines += ["## Periods", "", _PERIODS_NOTE, ""]
+    lines += ["## Fractional settlement", "", _SETTLEMENT_NOTE, ""]
     lines += ["## Breakout Long — both terminal ledgers", ""]
     for ledger in result.ledgers:
         lines += _ledger_section(ledger)

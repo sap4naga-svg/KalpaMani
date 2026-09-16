@@ -183,3 +183,30 @@ def test_the_adr_records_correction_1_of_the_m0_path_and_the_governance_correcti
     assert m0.HISTORY_SESSIONS == 252
     assert m0.Skip.SKIPPED_EXITED_THIS_SESSION.value == "SKIPPED_EXITED_THIS_SESSION"
     assert m0.RunRefusal.REFUSED_MALFORMED_DATA_KIND.value == "REFUSED_MALFORMED_DATA_KIND"
+
+
+def test_the_adr_records_correction_2_and_the_code_carries_the_corrected_o7_o10_mapping() -> None:
+    assert "## 11. Review correction 2 of the synthetic M0 path" in ADR_TEXT
+    assert "95be27e6b3b0947294bee95d532b4f3b4f5d592a" in ADR_TEXT
+    for phrase in (
+        "recorded, not priced",
+        "NEXT_OBSERVED_CLOSE",
+        "UNRESOLVED",
+        "engineering assumption pending an owner selection",
+        "O-7 = events",
+        "O-10 = sizing and sequencing",
+        "No owner decision is selected by this correction",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    from kalpamani.data.exploratory import m0
+
+    assert [c.value for c in m0.EventHandlingChoice] == ["EVENT_BLIND", "WAIT_FOR_EVENT_ENTITY"]
+    assert not hasattr(m0, "SizingPolicyChoice") and not hasattr(m0, "FinalFillPolicyChoice")
+    assert {"o7_event_handling", "o10_sizing_and_sequencing"} <= set(m0.OwnerSelections.__slots__)
+    assert [p.value for p in m0.SettlementPolicy] == [
+        "PENDING",
+        "NONE_DUE",
+        "EX_SESSION_CLOSE",
+        "NEXT_OBSERVED_CLOSE",
+        "UNRESOLVED",
+    ]
