@@ -846,7 +846,8 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0049", "PR #108 merged"),
     ("ADR-0050", "PR #109 merged"),
     # ADR-0051 merged as PR #111 on 2026-09-16: the exploratory hindsight research profile
-    # and its isolation contracts; the synthetic M0 path stays in open PR #112.
+    # and its isolation contracts; the synthetic M0 path merged as PR #112 on 2026-09-16
+    # (88053d37...), and slice 3 with its corrections is carried by PR #113.
     ("ADR-0051", "PR #111 merged"),
 )
 

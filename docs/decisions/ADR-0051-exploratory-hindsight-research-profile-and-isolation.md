@@ -24,7 +24,7 @@ open it was proposed and carried no authority — true then, and not rewritten. 
 authorized no real-data run, no acquisition, no image build or publication, no Terraform plan or apply, no AWS or
 provider request, no compute and no spend**, and it implies nothing about any later pull request: the synthetic M0
 path of §9 and its correction of §10 are carried by **PR #112, which is OPEN and unmerged**, and acceptance of this
-ADR is not acceptance of that pull request. The decisions §6 lists stay **pending**. This paragraph was written by
+ADR is not acceptance of that pull request. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.] The decisions §6 lists stay **pending**. This paragraph was written by
 the correction cycle §10 records, under an authorization that directed the acceptance event to be recorded; the
 slice §9 records had been directed not to record it, which is why §9 says so and is not rewritten.
 
@@ -308,7 +308,7 @@ is recorded in the paragraph following the status line, the status rows in `CLAU
 synchronized, the audit registry names the merge, and the present-tense claims that the ADR was still proposed
 are corrected where they were claims rather than history. **This status correction accepts the vocabulary and
 isolation decision only**: it selects none of O-1…O-11, authorizes no real-data run, and does not imply acceptance
-of PR #112, which stays OPEN and unmerged.
+of PR #112, which stays OPEN and unmerged. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.]
 
 ## 11. Review correction 2 of the synthetic M0 path (2026-09-16, within open PR #112)
 
@@ -322,7 +322,7 @@ first** (`tests/unit/test_m0_exploratory_correction_2.py`, 8 tests) and run agai
 | **2 — O-7 misassigned.** `OwnerSelections` carried a sizing choice at O-7 and a final-fill choice at O-10; the owner decision form defines **O-7 = events** (event-blind or wait for an event entity) and **O-10 = sizing and sequencing** (the CLAUDE.md §6 research parameters with one-pass sizing, final-fill rejection preserving both limits, and the ranking) | `o7_event_handling: EventHandlingChoice {EVENT_BLIND, WAIT_FOR_EVENT_ENTITY}` — only `EVENT_BLIND` is executable (it is D2; no event entity exists), `WAIT_FOR_EVENT_ENTITY` is `REFUSED_UNSUPPORTED_SELECTION`; `o10_sizing_and_sequencing: SizingSequencingChoice {CLAUDE_S6_FINAL_FILL_REJECTION, CLAUDE_S6_ONE_RESIZING_ITERATION}` — only rejection is executable. The former names (`SizingPolicyChoice`, `FinalFillPolicyChoice`, `o7_sizing_policy`, `o10_final_fill_policy`) are removed, so the substitution is **rejected** by the signature and never reinterpreted. The serialized record keys `O-7` / `O-10` carry the corrected values and are bound into the trial record and digest through the configuration document; the synthetic fixture still carries no selections at all |
 
 **No owner decision is selected by this correction**; none of O-1…O-11 is taken, no real-data run is authorized, and
-PR #112 stays OPEN and unmerged.
+PR #112 stays OPEN and unmerged. [True when written. PR #112 has since merged — 2026-09-16T10:18:46Z, merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents `bc16801e…` then `bf8bd187…`, merge tree identical to the reviewed head tree `bf8bd187…`; recorded by the slice 3 integration correction (§13.2), the sentence left as written.]
 
 ## 12. Slice 3 — the exploratory adapter (2026-09-16, a later and separately authorized slice)
 
@@ -481,3 +481,19 @@ demonstrate that an API was absent and not that a document was accepted — the 
 absent function), the signature test (`calendar=` / `rule=` still present), and
 `test_r2_valid_producer_manifests_remain_accepted` (`BuildManifestView.completed_at` absent). The original log is
 preserved unaltered; the correction 2 evidence carries this classification beside it.
+
+### 13.2 Slice 3 integration correction — the recorded PR #112 merge (2026-09-16, within open PR #113)
+
+**A status correction; no decision and no execution.** Three present-tense sentences in this document (the acceptance
+paragraph after the status line, the end of §10 and the end of §11) and the ADR-0051 rows of `CLAUDE.md` and `README.md`
+said that PR #112 was open and unmerged. That was true when each was written and had been stale since **PR #112 merged at
+2026-09-16T10:18:46Z** — merge commit `88053d378bb8391d6cee8be22b2b94e9c0632083`, ordered parents
+`bc16801efbfd9d8c5a9b947f888da64d7dadf72a` (the PR #111 merge, this ADR's acceptance event) then
+`bf8bd18718bb3bad89602e7a108ddb0677342eb6` (the reviewed PR #112 head after its two corrections), merge tree
+`bc07918003c0d25ca250aa4c2097a465748ccac7` identical to the reviewed head tree, `origin/main` read back equal to the merge
+commit (the recorded merge evidence, verified before the merge by the isolated identity and gate). Slice 3 (§12) was written
+on that merge commit as its baseline and its correction 1 (§13) left the rows' wording unchanged; correction 2 (§13.1)
+observed the staleness and did not change it. The three sentences are **left as written** with a bracketed note each; the two
+status rows now record the merge in the same words; the audit registry comment and the governance test that pinned the old
+wording are updated. **Nothing about PR #112's contents is re-decided by this**: the synthetic M0 path is on `main` as merged,
+every figure it produces is synthetic, and the merge of PR #112 selected no owner decision and authorized no real-data run.

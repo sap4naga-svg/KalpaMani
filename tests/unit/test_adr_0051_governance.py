@@ -130,7 +130,9 @@ def test_the_status_documents_carry_one_proposed_row_each_and_agree() -> None:
         assert "ACCEPTED / IN FORCE" in matching[0], name
         assert "PR #111 merged" in matching[0], name
         assert "PROPOSED — NOT IN FORCE" not in matching[0], name
-        assert "PR #112 OPEN / unmerged" in matching[0], name
+        assert "PR #112 OPEN / unmerged" not in matching[0], name
+        assert "PR #112 MERGED 2026-09-16T10:18:46Z" in matching[0], name
+        assert "88053d378bb8391d6cee8be22b2b94e9c0632083" in matching[0], name
         rows[name] = matching[0]
     assert rows["CLAUDE.md"] == rows["README.md"]
 
@@ -286,3 +288,11 @@ def test_the_adr_records_adapter_correction_2_and_the_evidence_version_is_carrie
     from kalpamani.data.exploratory import adapter
 
     assert "evidence_version" in {f.name for f in fields(adapter.BoundConfiguration)}
+
+
+def test_the_adr_records_the_pr_112_merge_beside_its_stale_sentences() -> None:
+    assert "### 13.2 Slice 3 integration correction" in ADR_TEXT
+    assert ADR_TEXT.count("[True when written. PR #112 has since merged") == 3
+    assert "88053d378bb8391d6cee8be22b2b94e9c0632083" in ADR_TEXT
+    assert "bc07918003c0d25ca250aa4c2097a465748ccac7" in ADR_TEXT
+    assert "left as written" in ADR_PLAIN
