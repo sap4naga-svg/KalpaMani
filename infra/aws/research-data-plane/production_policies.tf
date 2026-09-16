@@ -744,9 +744,10 @@ data "aws_iam_policy_document" "production_acquisition_human_bootstrap" {
   # s.2.5) was unreachable by the human set. The deny's purpose -- the human never
   # decrypts a binding, input or release parameter directly -- is the task-bindings
   # key's, so it names that key: the only key the human could otherwise reach
-  # through Parameter Store. No Allow is added; every other key stays implicitly
-  # denied to the human, and the task role (no such Deny) is unchanged. Gated like
-  # the GenerateDataKey grant above, because the key exists only from stage a.
+  # through Parameter Store. This policy adds no Allow for other keys; effective
+  # access depends on the applicable policies. The task role (no such Deny) is
+  # unchanged. Gated like the GenerateDataKey grant above, because the key exists
+  # only from stage a.
   dynamic "statement" {
     for_each = local.production_stage_a ? [1] : []
 
@@ -858,9 +859,10 @@ data "aws_iam_policy_document" "production_build_human_bootstrap" {
   # s.2.5) was unreachable by the human set. The deny's purpose -- the human never
   # decrypts a binding, input or release parameter directly -- is the task-bindings
   # key's, so it names that key: the only key the human could otherwise reach
-  # through Parameter Store. No Allow is added; every other key stays implicitly
-  # denied to the human, and the task role (no such Deny) is unchanged. Gated like
-  # the GenerateDataKey grant above, because the key exists only from stage a.
+  # through Parameter Store. This policy adds no Allow for other keys; effective
+  # access depends on the applicable policies. The task role (no such Deny) is
+  # unchanged. Gated like the GenerateDataKey grant above, because the key exists
+  # only from stage a.
   dynamic "statement" {
     for_each = local.production_stage_a ? [1] : []
 
