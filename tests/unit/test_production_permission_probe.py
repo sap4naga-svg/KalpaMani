@@ -491,6 +491,98 @@ class TestSdkClient:
         assert OPERATION_SERVICE[pc.Operation.ECS_EXECUTE_COMMAND] == "ecs"
         assert all(op in OPERATION_SERVICE for op in pc.Operation)
 
+    def test_a_conditional_put_sends_the_accepted_store_s_write_shape(self) -> None:
+        """Batch-1 row 2 (2026-09-16), pinned: the probe's PutObject carried no SSE header.
+
+        The production ``s3:PutObject`` Allows require ``s3:x-amz-server-side-encryption =
+        AES256`` (``production_policies.tf``, ``PublishProductionBronzeConditionally`` and
+        the build's Silver/Gold/manifest grant) beside ``s3:if-none-match`` present, an
+        object-creating operation and no copy source. The probe sends what the accepted
+        store sends -- ``ServerSideEncryption="AES256"`` and ``IfNoneMatch="*"``. This is
+        SDK request-shape coverage: the arguments handed to the SDK, recorded by a fake that
+        never reaches AWS; it establishes nothing about why a live request is answered as
+        it is.
+        """
+        from kalpamani.data.storage.s3 import SERVER_SIDE_ENCRYPTION
+
+        calls: list[dict[str, Any]] = []
+
+        class S3:
+            def put_object(self, **kwargs: Any) -> dict[str, Any]:
+                calls.append(dict(kwargs))
+                return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+        client = SdkPermissionClient(lambda _s: S3())
+        observation = client.put_object("b", "k", pc.SYNTHETIC_MARKER, if_none_match=True)
+        assert pc.classify(observation) is r3.ObservedClass.OK_200
+        assert calls == [
+            {
+                "Bucket": "b",
+                "Key": "k",
+                "Body": pc.SYNTHETIC_MARKER,
+                "ServerSideEncryption": SERVER_SIDE_ENCRYPTION,
+                "IfNoneMatch": "*",
+            }
+        ]
+        assert SERVER_SIDE_ENCRYPTION == "AES256"
+        # An unconditional put (a row that tests the conditional-write refusal itself)
+        # still carries the encryption header and drops only the precondition.
+        calls.clear()
+        client.put_object("b", "k", pc.SYNTHETIC_MARKER, if_none_match=False)
+        assert calls == [
+            {
+                "Bucket": "b",
+                "Key": "k",
+                "Body": pc.SYNTHETIC_MARKER,
+                "ServerSideEncryption": SERVER_SIDE_ENCRYPTION,
+            }
+        ]
+
+    def test_every_conditional_put_row_reaches_the_sdk_with_the_header_and_its_own_target(
+        self,
+    ) -> None:
+        """SDK request-shape coverage over every conditional-put subcell of the catalogue:
+        40 cells = 25 workstation cells (the R-4 and R-5 human cells and the 10
+        qualification-actor cells; 7 ALLOWED, 18 DENIED) plus 15 task-role cells. For each,
+        the client is handed that cell's bucket and key and the SDK receives the accepted
+        write shape -- ``ServerSideEncryption="AES256"`` and ``IfNoneMatch="*"`` -- so a
+        missing header is not among the reasons a live answer could carry. This test covers
+        the request shape only: it does not resolve a cell's real target, and it does not
+        establish why any live request is allowed or denied."""
+        from kalpamani.data.storage.s3 import SERVER_SIDE_ENCRYPTION
+
+        rows = [c for c in pc.SUBCELLS if c.operation is pc.Operation.S3_PUT_CONDITIONAL]
+        runtime = [c for c in rows if c.layer is pc.Layer.L3_RUNTIME]
+        assert len(rows) == 40 and len(runtime) == 25
+        assert sum(1 for c in runtime if c.expectation is pc.Expectation.ALLOWED) == 7
+        assert sum(1 for c in rows if c.layer is pc.Layer.L3_TASK) == 15
+
+        def _constant_factory(client: Any) -> Callable[[str], Any]:
+            return lambda _service: client
+
+        class RecordingS3:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def put_object(self, **kwargs: Any) -> dict[str, Any]:
+                self.calls.append(dict(kwargs))
+                raise FakeClientError("AccessDenied")
+
+        for cell in rows:
+            s3 = RecordingS3()
+            client = SdkPermissionClient(_constant_factory(s3))
+            bucket, key = f"bucket-{cell.subcell_id.lower()}", f"key/{cell.subcell_id}"
+            client.put_object(bucket, key, pc.SYNTHETIC_MARKER, if_none_match=True)
+            assert s3.calls == [
+                {
+                    "Bucket": bucket,
+                    "Key": key,
+                    "Body": pc.SYNTHETIC_MARKER,
+                    "ServerSideEncryption": SERVER_SIDE_ENCRYPTION,
+                    "IfNoneMatch": "*",
+                }
+            ], cell.subcell_id
+
     def test_execute_command_sends_the_documented_interactive_request(self) -> None:
         calls: list[dict[str, Any]] = []
 
