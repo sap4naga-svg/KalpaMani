@@ -60,9 +60,22 @@ QUALIFY_PACKAGE = DATA_ROOT / "qualify" / "sharadar"
 #: datasets and contracts name the vendor -- and nothing else may.
 PRODUCTION_PACKAGE = DATA_ROOT / "production" / "sharadar"
 
+#: The research-only exploratory package (ADR-0051, accepted on the merge of PR #111; its
+#: slice 2). A **fourth** vendor-scoped package, admitted under that ADR: it reads
+#: the accepted Sharadar-shaped Silver, session and universe contracts **unchanged**
+#: and keeps the accepted ``sharadar:<permaticker>`` identity, and it may reach no
+#: runtime, store, binding or network (held by ``test_exploratory_isolation``). No
+#: accepted module imports it back.
+EXPLORATORY_PACKAGE = DATA_ROOT / "exploratory"
+
 #: Every package permitted to name the vendor or import the provider package.
-#: Named, so a **fourth** appearing anywhere else still fails.
-VENDOR_SCOPED_PACKAGES = (PROVIDER_PACKAGE, QUALIFY_PACKAGE, PRODUCTION_PACKAGE)
+#: Named, so a **fifth** appearing anywhere else still fails.
+VENDOR_SCOPED_PACKAGES = (
+    PROVIDER_PACKAGE,
+    QUALIFY_PACKAGE,
+    PRODUCTION_PACKAGE,
+    EXPLORATORY_PACKAGE,
+)
 SCRIPTS = PROJECT_ROOT / "scripts"
 TESTS = PROJECT_ROOT / "tests"
 

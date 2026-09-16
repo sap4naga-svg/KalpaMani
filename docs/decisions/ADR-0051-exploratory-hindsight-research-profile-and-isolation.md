@@ -13,6 +13,21 @@ no execution and grants no permission** (§5): no acquisition, no image build or
 plan or apply, no AWS or provider request, no research run, no backtest, no bridge from production Gold,
 no benchmark, no compute and no spend. The decisions §6 lists stay **pending** on merge and after it.
 
+**The condition above has since been satisfied.** **PR #111 merged** — merged **2026-09-16T02:10:11Z**,
+merge commit **`bc16801efbfd9d8c5a9b947f888da64d7dadf72a`**, ordered parents **`21fa654e2d5e76b29f219a0f107dc5532b017ee9`** then
+**`56871f69f1e4443b638bf9da7c64f21f9ddafbbd`** (the reviewed head, after the review correction recorded in §8), with a
+**merge tree identical to the reviewed pull-request head tree** (`ef15b5dabfdf4065aeed3aabc6f6f37918a9df18`). ADR-0051 is
+therefore **ACCEPTED / IN FORCE** exactly as the clause above states — the research-only vocabulary of §2, the
+distinction of §2.2, the declared limitations of §2.3, the non-satisfaction rule of §2.4 and the isolation contracts
+of §3, effective together with the offline contracts merged beside it, and nothing else. While the pull request was
+open it was proposed and carried no authority — true then, and not rewritten. **Acceptance selected none of O-1…O-11,
+authorized no real-data run, no acquisition, no image build or publication, no Terraform plan or apply, no AWS or
+provider request, no compute and no spend**, and it implies nothing about any later pull request: the synthetic M0
+path of §9 and its correction of §10 are carried by **PR #112, which is OPEN and unmerged**, and acceptance of this
+ADR is not acceptance of that pull request. The decisions §6 lists stay **pending**. This paragraph was written by
+the correction cycle §10 records, under an authorization that directed the acceptance event to be recorded; the
+slice §9 records had been directed not to record it, which is why §9 says so and is not rewritten.
+
 ## 1. Context
 
 The production data plane resolves availability under `PROVIDER_REALISTIC_PIT` with exactly two
@@ -153,6 +168,13 @@ benchmark; a backtest runner; a portfolio ledger; a report; any research-mode ga
 slice under its own authorization, reviewed against the M0 research specification the owner holds
 outside this repository, and none is implied by accepting this ADR.
 
+> **HISTORICAL — the state as of the pull request that introduced this ADR, superseded in part by
+> §9 (2026-09-15).** A later, separately authorized slice implemented the exploratory resolution, a
+> Silver-to-exploratory bridge, benchmark A, the M0 runner, two terminal ledgers and a report,
+> **offline and on synthetic fixtures only**. The text above records what this ADR itself decided and
+> implemented, and it is not rewritten; what §9 records is a later event, and it changes neither the
+> status of this ADR nor the decisions §6 keeps pending.
+
 ## 5. Acceptance and execution authority are separate
 
 **Acceptance** (the merge of this ADR's pull request) establishes the vocabulary and the contracts and
@@ -205,3 +227,99 @@ No refusal code was added or removed; the exact-type opt-in, the production isol
 decision (§6) are unchanged; the accepted vocabularies, gate, availability policy and Breakout Long
 thresholds are untouched. The status of this ADR is unchanged: proposed, no authority while the pull
 request is open.
+
+## 9. Slice 2 — the synthetic end-to-end M0 path (2026-09-15, a later and separately authorized slice)
+
+**This section records an implementation event; it records no acceptance event and takes no decision.**
+The status line of this ADR is unchanged by it. Recording whether the acceptance clause above has been
+satisfied by a merge was a status synchronization the owner directed separately; this slice did not
+perform it and did not anticipate it. *(The owner has since directed it, and the correction cycle of §10
+recorded the acceptance event in the paragraph following the status line.)*
+
+Under a written authorization limited to **repository implementation and synthetic testing**, the
+components §4 named as not implemented were written **offline, on synthetic fixtures only**, in the
+same research-only package:
+
+| component | module | what it does and does not do |
+|---|---|---|
+| exploratory availability and membership resolution | `kalpamani.data.exploratory.resolution` | `resolve_as_dated` assigns every Silver row an `ExploratoryAvailability` (`EXPLORATORY_HINDSIGHT` / `AS_DATED` / `ASSUMED_HISTORICAL`) whose governing time is the close of the bar's own session, the open before a listing, or the open on or after an action date. It is **not** an `Availability` of the accepted vocabulary, it derives no P-2 or P-3 bound, and the accepted `build_universe` refuses its layer by exact type. `decide_membership` re-uses the accepted universe indexing and decision clauses unchanged, with 252 history sessions and the M0 §14 floors, and a conformance test holds it equal to the accepted build under equal bounds |
+| the Silver-to-exploratory bridge | `kalpamani.data.exploratory.dataset` | `ExploratoryDataset` and `publish` produce an `ExploratoryPublication` carrying the mandatory limitations, the qualification claim `NONE` and a content digest; they **never** produce a `VerifiedPublication`. The bridge consumes a `SilverLayer` object; **no bridge reads production Gold objects or an ADR-0040 manifest from any store**, and none is implemented |
+| benchmark A | `kalpamani.data.exploratory.dataset.build_benchmark_a` | `M0-EW-UNIVERSE`: the equal-weighted return of the members decided at the previous session's decision instant, so no session's return selects its own membership; a missing bar is a zero return (optimistic) or a total loss (loss ledger). `BENCHMARK_SELF_REFERENCE` is declared. This is the **synthetic fixture's** benchmark, not an O-2 selection |
+| the M0 runner | `kalpamani.data.exploratory.m0` | `run_m0` admits only `breakout-long-m0-exploratory-v1` (derived from `breakout-long/r1-research`, D1–D11 recorded), evaluates the unchanged Breakout Long module at the signal instant, executes at the following open with the M0 §14 execution layer (final-fill rejection preserving both sizing limits, prior-session ADDV only, deterministic exit and ranking precedence, causal terminal recognition), and produces two reconciled terminal ledgers (`optimistic`, `total_loss`), the B0 baselines, the cost and idle sensitivities, independent development and validation initialization and a frozen trial digest. `M0_SYNTHETIC_FIXTURE` carries the §14 settings **as a synthetic fixture, not as owner selections**; a `REAL` data kind is refused unless the configuration is `OWNER_SELECTED` with every O-1…O-11 selection recorded — there is no fallback |
+| the report | `kalpamani.data.exploratory.report` | a Markdown and JSON rendering labelled `SYNTHETIC / EXPLORATORY_HINDSIGHT`, opening with the bias statement and the D1–D11 differences |
+
+**What the slice establishes, and what it does not.** The synthetic fixture (`tests/fixtures/m0_exploratory.py`)
+exercises entries, stop and time exits, constraint skips, a missing bar, a split and a delisting; the
+integration tests (`tests/unit/test_m0_exploratory_path.py`) demonstrate the distinct membership, signal
+and execution instants, the prior-session ADDV invariance, the final-fill rejection without resizing, the
+deterministic precedence and ranking, the causal terminal recognition, the two reconciled ledgers, the
+independent initialization with a frozen trial digest, the benchmark's independence from same-session
+returns, the continued refusal of every production consumer, and identical repeated runs. **Every figure is
+synthetic; a passing synthetic run establishes software behaviour only** — no strategy performance, no
+point-in-time qualification, no P1–P9 result, no G2 criterion and no promotion criterion. **Nothing was run
+on licensed data, no acquisition occurred, no image was built or published, no AWS, Terraform or provider
+request was made, and no broker activity occurred.** The accepted Brain gate, the accepted Breakout Long
+thresholds, production P-2 and P-3, D-1 and the closed rehearsal path are unchanged, and tests assert each.
+
+**One guard admission, carrying this ADR's authority and no more.** The vendor-name boundary guards
+(`test_sharadar_provider_boundary.py`, `test_sharadar_qualification_boundary.py`) admit
+`kalpamani.data.exploratory` as a **fourth** vendor-scoped package, because the research path reads the
+accepted Sharadar-shaped Silver, session and universe contracts unchanged and keeps the accepted
+`sharadar:<permaticker>` identity rather than re-implementing either. The admission is recorded in the
+guards with its reason, a fifth package still fails, the package may still reach no runtime, store,
+binding, SDK or network, and no accepted module imports it. Like the A1-surface admission slice 1 made,
+it was a guard change made under a then-PROPOSED ADR and stands or falls with it *(the ADR has since been
+accepted; see the paragraph following the status line)*.
+
+**What stays pending after this slice.** Every decision §6 lists (O-1…O-11, D-1); the bridge from real
+production Gold objects; the acquisition of any data window; any real-data execution, which requires an
+explicit, validated `OWNER_SELECTED` configuration and its own written authorization; and the status
+synchronization that would record this ADR's acceptance event, which is the owner's.
+
+## 10. Review correction 1 of the synthetic M0 path (2026-09-16, within open PR #112), and the acceptance record
+
+Independent source review of the PR #112 head `ce1f793b9ca4205c56a1ff04026d38cee14c7f2c` raised six findings
+against the synthetic M0 path of §9. **Targeted regressions were written first**
+(`tests/unit/test_m0_exploratory_correction_1.py`, 41 tests, with the fixture extended by five scenarios) and run
+against that head before any correction: **40 failed there and 1 passed** — the passing one
+(`test_f1_split_adjusted_volume_preserves_addv`) proves an invariance that held on both bases by construction, and
+it is kept as a control. Every other regression passes only after the correction.
+
+| finding on ce1f793b | reproduced by | correction |
+|---|---|---|
+| **1 — inconsistent split bases.** Execution read bars adjusted through the dataset's *final* session while signal levels were stated on the signal session's basis, so a split effective after a trade reached back into it (a later 2:1 split turned a completed trade into `SKIPPED_ZERO_QUANTITY`), a split between signal and execution manufactured a gap and an incompatible stop, and a split during a holding was silently ignored | `test_f1_*` (4 tests, 5 cases) | execution reads every bar on its **own** session's basis (`ExploratoryDataset.raw_bars`); a level stated on the signal session is carried to the executing session by `split_factor_between`; a split effective while held rescales shares and stop at that open, settles the fractional share in cash at that session's close (`SplitEvent.cash_in_lieu`, no commission — the explicit fractional-share policy), leaves entry facts and planned risk unchanged, and is recorded on the trade and in the journal; ADDV stays basis-invariant *(the settlement's timing and missing-close behaviour were corrected again in §11: the close is read at the close, never at the open)* |
+| **2 — entries in the purge / tail.** The loop admitted an entry whenever the *previous* session was in the evaluation window, so a signal on the last development or validation session opened a position at the first purge or tail open | `test_f2_*` | an entry executes only when the signal session **and** the executing session are in the evaluation window; positions still exit there, attributed to the originating window |
+| **3 — same-session re-entry.** A security exited at an open (stop, time or terminal) could be re-entered at that same open | `test_f3_*` | securities exited during the session are tracked; a candidate among them is `SKIPPED_EXITED_THIS_SESSION`; ordinary re-entry on a later eligible session is unchanged (ZZRR) |
+| **4 — untyped configuration and incomplete trial binding.** Owner selections were a free-text mapping checked for truthiness; no setting was type-, finiteness- or range-checked; a malformed data kind bypassed the REAL check; `history_sessions` was an override parameter; the trial digest bound the calendar by name only and not the strategy identity | `test_f4_*` (10 tests, 29 cases) | `OwnerSelections`: typed closed choices per decision, exact enum types, supported-set and contradiction checks, frozen; `M0Configuration` validates exact types, finite Decimals, ranges and cross-field constraints (`REFUSED_INVALID_CONFIGURATION`); a fixture may carry no selections; the data kind must be an exact `DataKind` (`REFUSED_MALFORMED_DATA_KIND`); a selected data window must cover the calendar (`REFUSED_SELECTION_INCONSISTENT`); `HISTORY_SESSIONS` is the accepted module's own 252 and no parameter; the trial record binds the strategy identity (version, parameters hash, required history), the calendar **content**, every setting, the phases, the membership rule and the benchmark and resolution versions |
+| **5 — incomparable periods and one benchmark series.** Strategy figures ran through the purge / tail while the benchmark stopped at the window's last session, the benchmark's first-session return was excluded, both ledgers read the optimistic benchmark series, and a zero level produced a zero return | `test_f5_*` | two labelled periods per window — **evaluation** (from the close before the first session to the last session's close, identical instants for strategy and benchmark) and **liquidation-inclusive** (through the purge / tail, the benchmark covering the same extension); each terminal policy reads its own benchmark series; `ratio_return` yields `None` for a missing or zero level, never a fallback zero |
+| **6 — reconciliation by placeholder.** The reconciliation test contributed `shares × 0` for open-at-end positions, and the fixture had none | `test_f6_*` | a transaction journal on every ledger (`ENTRY`, `EXIT`, `CASH_IN_LIEU`, `INTEREST`); open-at-end trades carry their mark session, mark price and unrealized P&L and are charged no exit; the regression rebuilds cash, realized P&L, remaining basis, marked value, unrealized P&L, commissions and interest independently from the journal and the raw bars for every ledger, baseline and sensitivity, with two open-at-end positions held through missing bars (ZZMM, ZZNN) and a cash-in-lieu case |
+
+**Fixture extension** (`tests/fixtures/m0_exploratory.py`): `ZZPP` (signals on the last evaluation sessions),
+`ZZQQ` (exits in the purge / tail attributed to the originating window), `ZZRR` (a time exit and a new signal at
+one open, then an ordinary later re-entry), `ZZMM` / `ZZNN` (open at the end through missing bars), and
+`with_split` (a variant layer carrying one split). **Every figure is synthetic**; the counts in the regenerated
+report changed accordingly, and none is a strategy result.
+
+**The governance correction.** The slice §9 records was directed to keep this ADR's status unchanged although the
+authorization that produced it also directed the merge of PR #111 — the event this ADR's own clause names as its
+acceptance. That contradiction is resolved here as directed: the merge evidence was verified (commit
+`bc16801e…`, its parents and its tree, and that it is an ancestor of the corrected head) and the acceptance event
+is recorded in the paragraph following the status line, the status rows in `CLAUDE.md` and `README.md` are
+synchronized, the audit registry names the merge, and the present-tense claims that the ADR was still proposed
+are corrected where they were claims rather than history. **This status correction accepts the vocabulary and
+isolation decision only**: it selects none of O-1…O-11, authorizes no real-data run, and does not imply acceptance
+of PR #112, which stays OPEN and unmerged.
+
+## 11. Review correction 2 of the synthetic M0 path (2026-09-16, within open PR #112)
+
+Source inspection of `95be27e6b3b0947294bee95d532b4f3b4f5d592a` raised two findings. **Targeted regressions were written
+first** (`tests/unit/test_m0_exploratory_correction_2.py`, 8 tests) and run against that head before any correction:
+**8 failed there**; all 8 pass after it.
+
+| finding on 95be27e6 | correction |
+|---|---|
+| **1 — the split-effective open read that session's close.** `_apply_splits()` priced the fractional entitlement with the ex-session's close and credited the cash at the open, before the day's exits and entries — so an opening decision could depend on a price not yet observed, and a cash-constrained candidate could spend proceeds not yet settled | at the open only the whole-share quantity, the stop and the last close are rescaled; the fraction is **recorded, not priced** (`SplitEvent.fraction`, `SettlementPolicy.PENDING`; a whole-number rescaling is `NONE_DUE`). At the **close**, before marks, every pending entitlement whose security has an observed close settles at it, without commission, once (`Timing.CLOSE` in the journal): `EX_SESSION_CLOSE` on the ex-session, `NEXT_OBSERVED_CLOSE` when the ex-session had no bar. A position that exited at that open still receives the entitlement: its already-appended trade is restated with the settlement, its realized P&L and R multiple include it, its opening facts are unchanged, and the settlement stays attributed to that trade and its window. An entitlement that meets no observed close by the block's end is `UNRESOLVED`: listed on the ledger (`unresolved_entitlements`), carried on the trade as `unresolved_entitlement_shares`, valued at **zero** — a prior price is never read as a current close. **The whole fractional-share treatment is an M0 engineering assumption pending an owner selection**, and the report says so. Regressions: changing only the ex-session's close changes no opening fill, quantity or skip and only the settlement; a cash-constrained candidate is still `SKIPPED_CASH` at the open although the settlement at the close would have covered the shortfall; a position exiting at the split open receives its entitlement at that close, once, in its own record; the missing-close and never-observed cases are explicit and deterministic; cash, fractional assets, cost basis, realized and unrealized P&L and equity reconcile independently for every ledger, baseline and sensitivity, including open-at-end and unresolved cases |
+| **2 — O-7 misassigned.** `OwnerSelections` carried a sizing choice at O-7 and a final-fill choice at O-10; the owner decision form defines **O-7 = events** (event-blind or wait for an event entity) and **O-10 = sizing and sequencing** (the CLAUDE.md §6 research parameters with one-pass sizing, final-fill rejection preserving both limits, and the ranking) | `o7_event_handling: EventHandlingChoice {EVENT_BLIND, WAIT_FOR_EVENT_ENTITY}` — only `EVENT_BLIND` is executable (it is D2; no event entity exists), `WAIT_FOR_EVENT_ENTITY` is `REFUSED_UNSUPPORTED_SELECTION`; `o10_sizing_and_sequencing: SizingSequencingChoice {CLAUDE_S6_FINAL_FILL_REJECTION, CLAUDE_S6_ONE_RESIZING_ITERATION}` — only rejection is executable. The former names (`SizingPolicyChoice`, `FinalFillPolicyChoice`, `o7_sizing_policy`, `o10_final_fill_policy`) are removed, so the substitution is **rejected** by the signature and never reinterpreted. The serialized record keys `O-7` / `O-10` carry the corrected values and are bound into the trial record and digest through the configuration document; the synthetic fixture still carries no selections at all |
+
+**No owner decision is selected by this correction**; none of O-1…O-11 is taken, no real-data run is authorized, and
+PR #112 stays OPEN and unmerged.
