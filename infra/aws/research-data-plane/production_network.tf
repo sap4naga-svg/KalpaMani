@@ -297,7 +297,7 @@ resource "aws_vpc_security_group_egress_rule" "production_build_s3" {
   count = local.production_count_a
 
   security_group_id = aws_security_group.production_build[0].id
-  description       = "HTTPS to S3 through the gateway endpoint's prefix list."
+  description       = "HTTPS to S3 through the gateway endpoint prefix list."
   prefix_list_id    = aws_vpc_endpoint.production_s3[0].prefix_list_id
   ip_protocol       = "tcp"
   from_port         = 443
@@ -361,7 +361,7 @@ resource "aws_vpc_security_group_egress_rule" "production_acquisition_s3" {
   count = local.production_count_a
 
   security_group_id = aws_security_group.production_acquisition[0].id
-  description       = "HTTPS to S3 through the gateway endpoint's prefix list."
+  description       = "HTTPS to S3 through the gateway endpoint prefix list."
   prefix_list_id    = aws_vpc_endpoint.production_s3[0].prefix_list_id
   ip_protocol       = "tcp"
   from_port         = 443
