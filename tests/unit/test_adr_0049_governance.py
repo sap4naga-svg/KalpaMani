@@ -82,16 +82,27 @@ def test_the_collector_bounds_and_contract_match_the_text() -> None:
     assert "A successful log read is not a successful verification" in ADR_PLAIN
 
 
-def test_the_permission_is_recorded_and_not_granted() -> None:
+def test_the_permission_is_declared_for_the_launchers_only_and_not_granted() -> None:
     assert "logs:GetLogEvents" in ADR_TEXT
     assert "This ADR grants nothing" in ADR_PLAIN
     policies = (INFRA / "production_policies.tf").read_text(encoding="utf-8")
-    assert "logs:GetLogEvents" not in policies
+    # The infrastructure cycle ADR-0049 s.2.6 deferred to has declared the delta:
+    # exactly one `logs:GetLogEvents` statement per actor launcher (the structural
+    # suite holds each to its own three receipt-stream prefixes), nowhere else in
+    # the production policies, and still granted only by a separately authorized
+    # apply -- a declaration is not a grant.
+    assert policies.count('actions = ["logs:GetLogEvents"]') == 2
+    assert policies.count('sid     = "ReadThisActorsOwnReceiptStreams"') == 2
+    for document in ("production_acquire_launcher", "production_build_launcher"):
+        body = policies.split(f'data "aws_iam_policy_document" "{document}"')[1]
+        assert "ReadThisActorsOwnReceiptStreams" in body.split('data "aws_iam_policy_document"')[0]
+    assert "logs:FilterLogEvents" not in policies
+    assert "logs:DescribeLogStreams" not in policies
     assert "KalpaManiDeletionRehearse" not in policies
     compute = (INFRA / "production_compute.tf").read_text(encoding="utf-8")
     assert dr.REHEARSAL_FAMILY not in compute
-    # ADR-0050 declares them in their own file, inert behind a variable that is
-    # false by default; the actor launchers' logs delta stays undeclared.
+    # ADR-0050 declares the rehearsal resources in their own file, inert behind a
+    # variable that is false by default.
     rehearsal = (INFRA / "production_deletion_rehearsal.tf").read_text(encoding="utf-8")
     assert "KalpaManiDeletionRehearse" in rehearsal and "logs:GetLogEvents" in rehearsal
     variables = (INFRA / "production_variables.tf").read_text(encoding="utf-8")

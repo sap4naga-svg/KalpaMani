@@ -950,6 +950,24 @@ data "aws_iam_policy_document" "production_acquire_launcher" {
     resources = ["*"]
   }
 
+  # ADR-0049 s.2.6: the receipt collector reads the actor's OWN families' log
+  # streams -- production, verification and permission-probe -- and nothing
+  # wider: no FilterLogEvents, no DescribeLogStreams, no other group, no other
+  # container's streams. The stream name is <awslogs-stream-prefix>/<container>/<task id>
+  # as the applied task definitions declare it. RECORDED BY ADR-0049 AS REQUIRED
+  # AND NOT GRANTED; declared here for the infrastructure cycle's separate
+  # review and apply.
+  statement {
+    sid     = "ReadThisActorsOwnReceiptStreams"
+    effect  = "Allow"
+    actions = ["logs:GetLogEvents"]
+    resources = [
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire/acquire/*",
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire-verify/acquire-verify/*",
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire-probe/acquire-probe/*",
+    ]
+  }
+
   statement {
     sid       = "WriteThisActorsPlacementReleaseOnce"
     effect    = "Allow"
@@ -1127,6 +1145,24 @@ data "aws_iam_policy_document" "production_build_launcher" {
     effect    = "Allow"
     actions   = ["ec2:DescribeNetworkInterfaces"]
     resources = ["*"]
+  }
+
+  # ADR-0049 s.2.6: the receipt collector reads the actor's OWN families' log
+  # streams -- production, verification and permission-probe -- and nothing
+  # wider: no FilterLogEvents, no DescribeLogStreams, no other group, no other
+  # container's streams. The stream name is <awslogs-stream-prefix>/<container>/<task id>
+  # as the applied task definitions declare it. RECORDED BY ADR-0049 AS REQUIRED
+  # AND NOT GRANTED; declared here for the infrastructure cycle's separate
+  # review and apply.
+  statement {
+    sid     = "ReadThisActorsOwnReceiptStreams"
+    effect  = "Allow"
+    actions = ["logs:GetLogEvents"]
+    resources = [
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-build/build/*",
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-build-verify/build-verify/*",
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-build-probe/build-probe/*",
+    ]
   }
 
   statement {

@@ -1132,6 +1132,72 @@ def _rule_security_group_descriptions(sources: dict[str, str]) -> list[str]:
     return found
 
 
+#: The containers whose receipt streams each launcher may read (ADR-0049 s.2.6): its
+#: own actor's production, verification and permission-probe containers, and no other.
+_RECEIPT_CONTAINERS: dict[str, tuple[str, ...]] = {
+    "acquisition": ("acquire", "acquire-verify", "acquire-probe"),
+    "build": ("build", "build-verify", "build-probe"),
+}
+
+
+def _receipt_stream(container: str) -> str:
+    """The exact stream-prefix ARN for one container, as the declaration must spell it."""
+    return (
+        "${aws_cloudwatch_log_group.research.arn}:log-stream:production-"
+        f"{container}/{container}/*"
+    )
+
+
+def _rule_launcher_receipt_streams(model: Model) -> list[str]:
+    """ADR-0049 s.2.6: each launcher reads exactly its own families' receipt streams.
+
+    One Allow statement per launcher, ``logs:GetLogEvents`` alone, on exactly the three
+    stream-prefix ARNs of its own containers -- never the other actor's, never a
+    wildcard stream, never the group itself -- and no other ``logs:`` action anywhere
+    in the launcher. No human, task or data-plane policy carries a ``logs:`` grant.
+    """
+    found: list[str] = []
+    for actor, td in (("acquisition", "production_acquire"), ("build", "production_build")):
+        launcher = model.documents.get(f"{td}_launcher", ())
+        reads = [s for s in launcher if any(a.startswith("logs:") for a in s.actions)]
+        allows = [s for s in _allows(launcher) if "logs:GetLogEvents" in s.actions]
+        if len(reads) != 1 or len(allows) != 1 or reads[0] is not allows[0]:
+            found.append(
+                f"{actor} launcher must carry exactly one logs statement, an Allow of GetLogEvents"
+            )
+            continue
+        statement = allows[0]
+        if tuple(statement.actions) != ("logs:GetLogEvents",):
+            found.append(f"{actor} launcher receipt read must grant logs:GetLogEvents alone")
+        expected = tuple(_receipt_stream(c) for c in _RECEIPT_CONTAINERS[actor])
+        if tuple(statement.resources) != expected:
+            found.append(
+                f"{actor} launcher receipt read must name exactly its own three stream prefixes"
+            )
+        other = "build" if actor == "acquisition" else "acquisition"
+        if any(
+            f"production-{c}/" in r for r in statement.resources for c in _RECEIPT_CONTAINERS[other]
+        ):
+            found.append(f"{actor} launcher receipt read reaches the other actor's streams")
+        if statement.conditions:
+            found.append(f"{actor} launcher receipt read carries an unexpected condition")
+    # The execution role WRITES logs (CreateLogStream, PutLogEvents); nothing but a
+    # launcher READS them, and the launchers read only through GetLogEvents.
+    for name, statements in model.documents.items():
+        if name.endswith("_launcher"):
+            continue
+        if any(_is_log_read(a) for s in statements for a in s.actions):
+            found.append(f"{name} carries a logs read; only the launchers read receipts")
+    return found
+
+
+def _is_log_read(action: str) -> bool:
+    """A CloudWatch Logs action that returns log content or enumerates streams."""
+    return action == "logs:*" or action.startswith(
+        ("logs:Get", "logs:Filter", "logs:Describe", "logs:StartQuery", "logs:StartLiveTail")
+    )
+
+
 def violations(sources: dict[str, str]) -> list[str]:
     model = build_model(sources)
     return (
@@ -1142,6 +1208,7 @@ def violations(sources: dict[str, str]) -> list[str]:
         + _rule_trust_and_execution_role(model)
         + _rule_bootstrap(model)
         + _rule_launch(model)
+        + _rule_launcher_receipt_streams(model)
         + _rule_task_definitions_text(sources)
         + _rule_network(model, sources)
         + _rule_security_group_descriptions(sources)
@@ -1682,6 +1749,32 @@ def _mutate(sources: dict[str, str], file: str, old: str, new: str) -> dict[str,
 #: triple-quoted so no source line is long; each is an exact substring of the real file.
 MUTATIONS: list[tuple[str, str, str, str]] = [
     (
+        "production_policies.tf",
+        """    sid     = "ReadThisActorsOwnReceiptStreams"
+    effect  = "Allow"
+    actions = ["logs:GetLogEvents"]
+    resources = [
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire/acquire/*",""",
+        """    sid     = "ReadThisActorsOwnReceiptStreams"
+    effect  = "Allow"
+    actions = ["logs:GetLogEvents", "logs:FilterLogEvents"]
+    resources = [
+      "${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire/acquire/*",""",
+        "must grant logs:GetLogEvents alone",
+    ),
+    (
+        "production_policies.tf",
+        '"${aws_cloudwatch_log_group.research.arn}:log-stream:production-acquire-probe/acquire-probe/*",',
+        '"${aws_cloudwatch_log_group.research.arn}:log-stream:production-build-probe/build-probe/*",',
+        "reaches the other actor's streams",
+    ),
+    (
+        "production_policies.tf",
+        '"${aws_cloudwatch_log_group.research.arn}:log-stream:production-build-verify/build-verify/*",',
+        '"${aws_cloudwatch_log_group.research.arn}:log-stream:production-build-verify/*",',
+        "must name exactly its own three stream prefixes",
+    ),
+    (
         "production_network.tf",
         'description       = "HTTPS to S3 through the gateway endpoint prefix list."',
         'description       = "HTTPS to S3 through the gateway endpoint\'s prefix list."',
@@ -2004,3 +2097,38 @@ class TestSecurityGroupDescriptions:
         )
         assert set(accepted) == expanded, documented
         assert "'" not in expanded and '"' not in expanded and "\\" not in expanded
+
+
+class TestLauncherReceiptStreams:
+    """ADR-0049 s.2.6: the receipt collector's one permission, scoped to the actor's own streams."""
+
+    def test_each_launcher_reads_exactly_its_own_three_stream_prefixes(self, model: Model) -> None:
+        assert _rule_launcher_receipt_streams(model) == []
+        for actor, td in (("acquisition", "production_acquire"), ("build", "production_build")):
+            launcher = model.documents[f"{td}_launcher"]
+            statement = next(s for s in launcher if "logs:GetLogEvents" in s.actions)
+            assert statement.effect == "Allow"
+            assert tuple(statement.resources) == tuple(
+                _receipt_stream(c) for c in _RECEIPT_CONTAINERS[actor]
+            )
+
+    def test_no_other_logs_read_exists_in_the_production_declarations(self, model: Model) -> None:
+        actions = {
+            a for statements in model.documents.values() for s in statements for a in s.actions
+        }
+        assert {a for a in actions if _is_log_read(a)} == {"logs:GetLogEvents"}
+
+    def test_the_stream_prefixes_match_the_registered_log_configuration(
+        self, sources: dict[str, str]
+    ) -> None:
+        # The applied task definitions log with awslogs-stream-prefix
+        # `production-<container>` and container name `<container>`, so the stream
+        # is `production-<container>/<container>/<task id>`: the rule's prefixes are
+        # those, and nothing in the declaration spells a different prefix.
+        text = sources["production_compute.tf"]
+        for containers in _RECEIPT_CONTAINERS.values():
+            for container in containers:
+                assert re.search(
+                    r'"awslogs-stream-prefix"\s*=\s*"production-' + re.escape(container) + '"', text
+                ), container
+                assert re.search(r'\bname\s*=\s*"' + re.escape(container) + r'"', text), container
