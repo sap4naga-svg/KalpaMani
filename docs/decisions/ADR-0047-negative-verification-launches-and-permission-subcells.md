@@ -550,17 +550,23 @@ unevidenced with the evidence that would meet it named. The four R-6 negatives t
 Accepting this amendment authorizes no decoy, no Terraform change, no registration change and no probe.
 
 **On acceptance (a later change, not this text):** the catalogue moves the six subcells to `Layer.BLOCKED`
-with these dependencies, the governance pins of the layer counts (36 → 42 blocked; 56 → 50 runtime) and the
-ADR-0047 text are updated together, and the derivation reports each as `BLOCKED` with its dependency. Row 34's
-record then reads as a historical observation of the class §11 names; it is not rewritten.
+with these dependencies, and the executable catalogue's layer counts move from **56 runtime · 6 by-R1 · 32 task ·
+2 held-task · 2 blocked** to **50 runtime · 6 by-R1 · 32 task · 2 held-task · 8 blocked — total 98 unchanged**; the
+governance pins of those counts and the ADR-0047 text are updated together, and the derivation reports each of the
+six as `BLOCKED` with its dependency. Row 34's record then reads as a historical observation of the class §11
+names; it is not rewritten.
 
 **What may proceed while these cells are blocked, and what may not — stated so that no permission is inferred:**
 - **May proceed on the controlling text** (readiness §4.3): **S9** (R-1/R-2 runtime verification — prerequisites
   S6, S7, the verification-only path, per-launch authorization; S8 is not among them; R-6's positives are
   `AWAITING_R1` and are evidenced *by* S9), the remaining task-side permission subcells under ADR-0048
   (`L3_TASK`, `L3_HELD_TASK`) once authorized, and the deletion rehearsal decision (D-1) on its own gate.
-- **Requires this amendment's dependencies resolved, or a separate explicit acceptance recorded by the owner:**
-  reading R-6 as `PASSED`; reading the S8 matrix as complete; any statement that "every must-be-refused cell is
-  refused". **S10a (the first acquisition) is gated on "S9 verified; I-8…I-12; one written authorization for one
-  run" — permission for S9 is not permission for S10a**, and this amendment grants neither.
+- **Requires the dependencies resolved and the evidence recorded — and nothing else can supply it:** reading R-6
+  as `PASSED`; reading the S8 matrix as complete; any statement that "every must-be-refused cell is refused". An
+  accepted deferral **remains `BLOCKED`**: owner acceptance of this amendment, or of any later deferral, does not
+  make an unverified requirement `PASSED` or S8 complete. If the owner separately chooses to proceed past a later
+  gate while R-6 is `BLOCKED`, that choice is recorded as an **explicitly accepted risk, labelled as such
+  (`RISK ACCEPTED — R-6 UNVERIFIED`)**, never as verification. **S10a (the first acquisition) is gated on "S9
+  verified; I-8…I-12; one written authorization for one run" — permission for S9 is not permission for S10a**, and
+  this amendment grants neither.
 - **Unchanged:** R-8 BLOCKED on D-1; G2 OPEN; CONTROL DEFERRED; Phase 3 NOT COMPLETE; live trading HARD-DISABLED.

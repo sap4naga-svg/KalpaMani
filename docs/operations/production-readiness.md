@@ -1084,9 +1084,11 @@ twins 17/17, R-5 human twins 15/15, R-7 12/12, R-9 2/2, R-6 existing-target nega
 role overrides), one UNDECIDED (`R6-ACQ-RUN-OTHER-REVISION`: ECS `TaskDefinition not found.` on a revision that
 does not exist — a target validation failure, now its own class, ADR-0047 §11) and five unexecuted (the other
 invalid-target subcells). `TARGET_NOT_FOUND` is on `main` (PR #118). **ADR-0047 §12 proposes the six invalid-target
-subcells as `BLOCKED` with explicit dependencies (owner input D-17); while that proposal is open nothing here changes:
-R-6 reads `CLEANUP_UNRESOLVED` / `UNDECIDED` / `UNEXECUTED` for those six, the R-6 cell is not passed, and S8 stays
-incomplete.** On the controlling prerequisites of §4.3, S9 does not depend on S8 and stays gated on its own inputs
+subcells as `BLOCKED` with explicit dependencies (owner input D-17; on acceptance the catalogue reads 50 runtime · 6 by-R1 ·
+32 task · 2 held-task · 8 blocked, total 98); while that proposal is open nothing here changes: R-6 reads `CLEANUP_UNRESOLVED` /
+`UNDECIDED` / `UNEXECUTED` for those six, the R-6 cell is not passed, and S8 stays incomplete. An accepted deferral remains
+`BLOCKED` — no acceptance makes an unverified R-6 requirement `PASSED` or S8 complete; proceeding past a later gate while R-6 is
+`BLOCKED` would be an explicitly accepted risk, labelled as such, never verification.** On the controlling prerequisites of §4.3, S9 does not depend on S8 and stays gated on its own inputs
 (D-15 per launch, D-16 for R-2's corroboration); S10a stays gated on S9 verified, I-8…I-12 and its own authorization —
 **permission for S9 is not permission for S10a**. §4.3's S9 row and §7's G-1 row still read "BLOCKED — no
 verification-only path exists"; that is the day they were written, since satisfied by ADR-0045 (§9) — the
