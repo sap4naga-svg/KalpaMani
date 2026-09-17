@@ -1872,3 +1872,217 @@ def test_the_while_running_hook_is_the_build_bootstrap_cell_s_alone() -> None:
     for cell_id, cell in CELL_BY_ID.items():
         if cell_id != "R1-BLD-BOOTSTRAP":
             assert runner.while_running_for(cell, hook) is None, cell_id
+
+
+def _verified_bootstrap_receipt_lines(record: lr.LaunchRecord, verification_file: bytes) -> str:
+    """The receipt a released build verification task prints over the empty run set,
+    bound to ``record``: VERIFIED_BOOTSTRAP, exit 18, one probe attempt to the smallest
+    compiled address (a synthetic non-connection), zero data-plane operations."""
+    from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
+    from kalpamani.data.production.sharadar.runner import BootstrapEvidence
+
+    origin = parse_compiled_configuration(verification_file)[0].origin_addresses
+    address = sorted(origin)[0]
+    receipt = TaskReceipt(
+        entry=record.entry,
+        outcome=TaskOutcome.VERIFIED_BOOTSTRAP,
+        runner=RunnerOutcome.RELEASED,
+        counts=OperationCounts(parameter_reads=4, identity_calls=1),
+        counts_observed=True,
+        cleanup_failures=(),
+        code_commit=record.code_commit,
+        configuration_digest=record.configuration_digest,
+        evidence=BootstrapEvidence(
+            task_id=record.task_id,
+            task_definition_arn=record.task_definition_arn,
+            image_digest=record.image_digest,
+            identity=record.identity,
+            input_digest=record.input_digest,
+        ),
+        probe=pp.ProbeObservation(
+            resolution=pp.ProbeResolution.RESOLVED_IN_SET,
+            result=pp.ProbeResult.TIMED_OUT,
+            attempts=1,
+            destination_digest=pp.destination_binding_digest(
+                record.input_digest, address, pp.PROBE_PORT
+            ),
+        ),
+    )
+    return receipt_line(receipt) + "\n"
+
+
+def test_the_build_bootstrap_lifecycle_over_the_empty_run_set_end_to_end_on_fakes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR-0045 s.11, the whole offline lifecycle the readiness S9 build bootstrap will
+    take, on isolated fixtures and fakes with clearly synthetic receipts.
+
+    A ledger with NO acquisition row: prepare ``R1-BLD-BOOTSTRAP`` with no run identity
+    (the specification's workload is the empty run set and the accepted parser reads it
+    back), execute it through the runner on fakes (the launch tool writes the
+    reservation over that specification and the store reads it back bound), complete
+    the row with a synthetic ``VERIFIED_BOOTSTRAP`` receipt (exit 18) and read the cell
+    PASSED from the matrix; then prepare and execute both build negatives over the same
+    empty run set (exit 15 / exit 16), complete them with their refusal receipts and read
+    each PASSED. Nothing here touches the workstation's private root.
+    """
+    import copy
+
+    cells = _Cells(tmp_path, actor=BLD, ledger_rows=[])
+    scenario = cells.scenario
+    assert scenario.ledger_rows() == []
+    fresh_descriptions = copy.deepcopy(scenario.ecs.descriptions)  # one launch consumes them
+    argv = [
+        "--production-configuration",
+        str(scenario.production_configuration),
+        "--verification-configuration",
+        str(scenario.verification_configuration),
+        "--acquisition-configuration",
+        str(scenario.acquisition_configuration),
+    ]  # no --run-identity: the verification-only launch
+    identity = "verify-synthetic-production-build-0010"
+
+    # Prepare: the specification carries runs == [] and the accepted parser admits it.
+    assert (
+        cells.main(
+            *cells.base(), "--prepare-cell", "R1-BLD-BOOTSTRAP", "--identity", identity, *argv
+        )
+        == runner.EXIT_PREPARED
+    )
+    out = capsys.readouterr().out
+    digest = out.split("specification_digest=")[1].split()[0]
+    written = json.loads(scenario.files("launch-specification")[-1].read_bytes())
+    assert written["workload"] == {"runs": []} and written["release_mode"] == "NORMAL"
+    parsed = lr.parse_specification(encode(written))
+    assert parsed.digest == digest and parsed.workload == {"runs": []}
+    assert cells.cells()["R1-BLD-BOOTSTRAP"]["identity"] == identity
+
+    # Execute on fakes: one task, exit 18; the reservation is written and reads back.
+    scenario.authorize(identity=identity, specification_digest=digest)
+    scenario.ecs.descriptions[-1]["containers"][0]["exitCode"] = 18
+    execute = [
+        *cells.base(),
+        "--execute-cell",
+        "R1-BLD-BOOTSTRAP",
+        *argv,
+        "--authorization",
+        str(scenario.authorization),
+        runner.AUTHORIZATION_FLAG,
+    ]
+    assert cells.main(*execute) == launch.EXIT_LAUNCH_TERMINAL
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=LAUNCHED" in out
+    assert len(scenario.ecs.names("run_task")) == 1
+    reservation = scenario.store().reservation(identity)
+    assert reservation is not None and reservation.specification_digest == digest
+    for path in (scenario.ledger.parent / ("ledger.json" + ".reservations")).glob("*.json"):
+        assert ls.parse_reservation(path.read_bytes()).specification.workload == {"runs": []}
+    record_path = scenario.files("launch-record")[-1]
+    record = lr.parse_launch_record(record_path.read_bytes())
+    assert record.observed_exit_code == 18 and record.entry is TaskEntry.BUILD_VERIFY
+    assert record.plan_digest is None and record.slice is None
+    assert cells.main(*execute) == runner.EXIT_REFUSED_CELL_STATE  # never twice
+
+    # Complete through the collector's consumer (the hand-read path of the same reader)
+    # with a synthetic VERIFIED_BOOTSTRAP receipt: the row reads VERIFIED /
+    # RECEIPT_VERIFIED and the matrix derives PASSED. Nothing is hand-marked.
+    lines = scenario.root / "bootstrap-receipt.txt"
+    lines.write_text(
+        _verified_bootstrap_receipt_lines(record, scenario.verification_configuration.read_bytes()),
+        "utf-8",
+    )
+    complete = [
+        *cells.base(),
+        "--complete-cell",
+        "R1-BLD-BOOTSTRAP",
+        "--launch-record",
+        str(record_path),
+        "--receipt-lines",
+        str(lines),
+    ]
+    assert cells.main(*complete) == launch.EXIT_ROW_COMPLETED
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
+    row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row["outcome"] == "VERIFIED" and row["evidence"] == "RECEIPT_VERIFIED"
+    # A refusal receipt handed for the positive cell completes the row REFUSED and the
+    # matrix reads the cell FAILED -- a wrong receipt never passes it.
+    # (Checked on the negatives below; the positive row is already completed.)
+
+    # Both negatives over the same empty run set: prepared, executed, completed, PASSED.
+    for cell_id, suffix, exit_code, outcome, mode in (
+        ("R1-BLD-NO-RELEASE", "0011", 15, TaskOutcome.REFUSED_NO_RELEASE, "WITHHELD"),
+        ("R1-BLD-RELEASE-MISMATCH", "0012", 16, TaskOutcome.REFUSED_RELEASE_MISMATCH, "MISMATCHED"),
+    ):
+        negative = "verify-synthetic-production-build-" + suffix
+        assert (
+            cells.main(*cells.base(), "--prepare-cell", cell_id, "--identity", negative, *argv)
+            == runner.EXIT_PREPARED
+        )
+        out = capsys.readouterr().out
+        negative_digest = out.split("specification_digest=")[1].split()[0]
+        written = json.loads(scenario.files("launch-specification")[-1].read_bytes())
+        assert written["workload"] == {"runs": []} and written["release_mode"] == mode
+        assert lr.parse_specification(encode(written)).digest == negative_digest
+        scenario.authorize(identity=negative, specification_digest=negative_digest)
+        scenario.ecs.descriptions = copy.deepcopy(fresh_descriptions)
+        scenario.ecs.descriptions[-1]["containers"][0]["exitCode"] = exit_code
+        assert (
+            cells.main(
+                *cells.base(),
+                "--execute-cell",
+                cell_id,
+                *argv,
+                "--authorization",
+                str(scenario.authorization),
+                runner.AUTHORIZATION_FLAG,
+            )
+            == launch.EXIT_LAUNCH_TERMINAL
+        )
+        capsys.readouterr()
+        negative_record_path = next(
+            path
+            for path in scenario.files("launch-record")
+            if lr.parse_launch_record(path.read_bytes()).identity == negative
+        )
+        negative_record = lr.parse_launch_record(negative_record_path.read_bytes())
+        assert negative_record.observed_exit_code == exit_code
+        assert ls.parse_reservation(
+            (scenario.ledger.parent / "ledger.json.reservations" / f"{negative}.json").read_bytes()
+        ).specification.workload == {"runs": []}
+        negative_lines = scenario.root / f"receipt-{suffix}.txt"
+        negative_lines.write_text(_refused_receipt_lines(negative_record, outcome), "utf-8")
+        assert (
+            cells.main(
+                *cells.base(),
+                "--complete-cell",
+                cell_id,
+                "--launch-record",
+                str(negative_record_path),
+                "--receipt-lines",
+                str(negative_lines),
+            )
+            == launch.EXIT_ROW_COMPLETED
+        )
+        out = capsys.readouterr().out
+        states = vc.derive_states(
+            runner.recorded_evidence(
+                runner._parser().parse_args([*cells.base()]),
+                scenario.store(),
+                r3_binding_source=lambda: BINDING,
+                permission_context_source=None,
+            ),
+            runner.read_prepared(scenario.store()),
+        )
+        assert f"cell={cell_id} ref=R-1 kind=NEGATIVE_LAUNCH status=PASSED" in out, states[
+            cell_id
+        ].reason
+        assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert len(scenario.ecs.names("run_task")) == 3
+    # The whole store still reads: every reservation binds its specification.
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    out = capsys.readouterr().out
+    assert "unbound=" not in out and "interrupted=" not in out
+    for canary in (*CANARIES, identity):
+        assert canary not in out
