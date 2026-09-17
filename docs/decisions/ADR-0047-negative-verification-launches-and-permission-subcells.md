@@ -514,3 +514,53 @@ target that does not exist is not a permission test. Those six subcells (three p
 cannot be decided at L3 by their current targets. Whether they are re-targeted at existing, unpermitted
 resources or blocked with a stated dependency is a separate governance decision, **not made by this
 correction**; until it is made they are not executed, and R-6 is not read as passed.
+
+## 12. Proposed amendment (2026-09-17) — the six invalid-target R-6 subcells BLOCKED with explicit dependencies
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; nothing in it is
+implemented, and it removes no requirement.** It proposes one disposition and records what that disposition
+does and does not permit.
+
+**The finding it answers.** §3.3 derives three launch targets that name resources which do not exist by
+construction — "the next revision number" of the actor's verification family, a `-verification-other`
+family and a `-verification-other` cluster — and §3.1 holds that a request against a target that does not
+exist is not a permission test. Batch 1, run 4, row 34 (`R6-ACQ-RUN-OTHER-REVISION`, 2026-09-16) showed the
+consequence at runtime: ECS answered `ClientException: TaskDefinition not found.` before any authorization
+answer (§11), and the six subcells cannot be decided at L3 with those targets. **Row 34's original observation
+is preserved exactly as recorded — `AMBIGUOUS` / `UNDECIDED`, with its cleanup record and its read-only
+diagnosis beside it — and is neither re-classified nor cleared.**
+
+**The proposal.** The six subcells — `R6-ACQ-RUN-OTHER-REVISION`, `R6-BLD-RUN-OTHER-REVISION`,
+`R6-ACQ-RUN-OTHER-FAMILY`, `R6-BLD-RUN-OTHER-FAMILY`, `R6-ACQ-RUN-OTHER-CLUSTER`, `R6-BLD-RUN-OTHER-CLUSTER` —
+move to the `BLOCKED` layer of §5, each with an explicit dependency, on the precedent of the `ExecuteCommand`
+subcells:
+
+| subcell(s) | dependency (what would make the target exist and stay unpermitted) |
+|---|---|
+| `*-RUN-OTHER-REVISION` | an **existing, ACTIVE revision of the launcher's own verification family that the launcher policy does not name** — a governed second revision registered by the declaration and deliberately absent from the launcher's `RunTask` resource (a Terraform change under its own plan/apply), carried in the launch-inputs registration; an INACTIVE revision is **not** assumed to produce an authorization answer |
+| `*-RUN-OTHER-FAMILY` | an **existing family the launcher policy does not name**: either the other actor's registered permission-probe family (already ACTIVE; a derivation change, no new resource) or a governed decoy family — the choice is the owner's on acceptance |
+| `*-RUN-OTHER-CLUSTER` | an **existing second ECS cluster** the launcher policies' `ecs:cluster` condition does not name (a Terraform change; an empty cluster) |
+
+**What the disposition means and does not mean.** R-6 stays **incomplete**: a `BLOCKED` subcell is neither
+passed nor failed, the R-6 cell reads `BLOCKED` (never `PASSED`) while any of the six is blocked, and the S8
+matrix stays incomplete for R-6. ADR-0036 §3's R-6 requirement — each launcher refused `RunTask` "of another
+revision or family; on another cluster" — is **not removed, weakened or deemed met**; it is recorded as
+unevidenced with the evidence that would meet it named. The four R-6 negatives that target existing resources
+(`*-RUN-OTHER-ACTOR`, `*-OVERRIDE-OTHER-ROLE`) and R-9's two are unaffected and stand on their own records.
+Accepting this amendment authorizes no decoy, no Terraform change, no registration change and no probe.
+
+**On acceptance (a later change, not this text):** the catalogue moves the six subcells to `Layer.BLOCKED`
+with these dependencies, the governance pins of the layer counts (36 → 42 blocked; 56 → 50 runtime) and the
+ADR-0047 text are updated together, and the derivation reports each as `BLOCKED` with its dependency. Row 34's
+record then reads as a historical observation of the class §11 names; it is not rewritten.
+
+**What may proceed while these cells are blocked, and what may not — stated so that no permission is inferred:**
+- **May proceed on the controlling text** (readiness §4.3): **S9** (R-1/R-2 runtime verification — prerequisites
+  S6, S7, the verification-only path, per-launch authorization; S8 is not among them; R-6's positives are
+  `AWAITING_R1` and are evidenced *by* S9), the remaining task-side permission subcells under ADR-0048
+  (`L3_TASK`, `L3_HELD_TASK`) once authorized, and the deletion rehearsal decision (D-1) on its own gate.
+- **Requires this amendment's dependencies resolved, or a separate explicit acceptance recorded by the owner:**
+  reading R-6 as `PASSED`; reading the S8 matrix as complete; any statement that "every must-be-refused cell is
+  refused". **S10a (the first acquisition) is gated on "S9 verified; I-8…I-12; one written authorization for one
+  run" — permission for S9 is not permission for S10a**, and this amendment grants neither.
+- **Unchanged:** R-8 BLOCKED on D-1; G2 OPEN; CONTROL DEFERRED; Phase 3 NOT COMPLETE; live trading HARD-DISABLED.

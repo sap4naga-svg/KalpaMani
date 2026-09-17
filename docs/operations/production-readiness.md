@@ -1076,3 +1076,18 @@ launch; no receipt collected; no log read; no image; no plan or apply; no variab
 granted; every owner value MISSING; the bucket-policy transition (G-14), the control principal's ECS
 actions and the deferred `logs:GetLogEvents` delta for the actor launchers unchanged. **G2 OPEN · CONTROL
 DEFERRED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED.**
+
+## 15. Batch-1 outcome and the R-6 invalid-target proposal (2026-09-17) — ADR-0047 §12 PROPOSED
+
+The S8 workstation matrix has run against the re-issued registration: 50 of 56 runtime subcells MATCHED (R-4 human
+twins 17/17, R-5 human twins 15/15, R-7 12/12, R-9 2/2, R-6 existing-target negatives 4/4 — other actor and
+role overrides), one UNDECIDED (`R6-ACQ-RUN-OTHER-REVISION`: ECS `TaskDefinition not found.` on a revision that
+does not exist — a target validation failure, now its own class, ADR-0047 §11) and five unexecuted (the other
+invalid-target subcells). `TARGET_NOT_FOUND` is on `main` (PR #118). **ADR-0047 §12 proposes the six invalid-target
+subcells as `BLOCKED` with explicit dependencies (owner input D-17); while that proposal is open nothing here changes:
+R-6 reads `CLEANUP_UNRESOLVED` / `UNDECIDED` / `UNEXECUTED` for those six, the R-6 cell is not passed, and S8 stays
+incomplete.** On the controlling prerequisites of §4.3, S9 does not depend on S8 and stays gated on its own inputs
+(D-15 per launch, D-16 for R-2's corroboration); S10a stays gated on S9 verified, I-8…I-12 and its own authorization —
+**permission for S9 is not permission for S10a**. §4.3's S9 row and §7's G-1 row still read "BLOCKED — no
+verification-only path exists"; that is the day they were written, since satisfied by ADR-0045 (§9) — the
+verification entries are on `main`, the verification images are published and their revisions registered.
