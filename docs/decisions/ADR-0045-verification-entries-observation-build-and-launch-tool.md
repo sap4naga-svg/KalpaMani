@@ -582,3 +582,40 @@ S2, S3, a stage-b-preserving apply that **replaces** the `kalpamani-research-bui
 every earlier permission record reads HISTORICAL under the new registration digest. The acquisition images, the
 production build image and the probe images need no rebuild for this amendment (their parsers are stricter, not
 wrong). None of that is authorized by this amendment.
+
+## 12. Amendment (2026-09-17) — the launcher's held-task hook is the R-2 corroboration attachment point
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; nothing here is
+deployed, and it changes no task image and no compiled configuration.**
+
+**Why.** §3 admits one Reachability Analyzer analysis as R-2's corroboration, bound by the verdict to the
+launched task's own interface (`SOURCE_MISMATCH` otherwise) and to `[launched_at, recorded_at]`
+(`ANALYSIS_OUTSIDE_TASK_WINDOW` otherwise). Selecting that interface from a family listing (`ListTasks`) is
+weaker than necessary: the launch tool already holds the exact task it started, and ADR-0048 §3 already
+gives the launcher a `while_running` hook that fires **after the release is written and before observation
+begins**, only once a fresh `DescribeTasks` reports the started task `RUNNING` on the registered revision
+with the registered image — the one moment a corroborating analysis should be started. That hook was
+admitted for a released permission-probe launch alone.
+
+**The amendment.** The hook is admitted for a released (`NORMAL`) **build verification** launch as well —
+a compiled build verification target with a `verify-` identity — and for nothing else: never a production
+launch, never an acquisition verification (its task holds the provider credential path and asks no
+reachability question), never a negative release mode. The launch tool hands an injected hook through
+unchanged and refuses an inadmissible one (`refused_arguments`) before its first bootstrap; the cell runner
+passes a hook to exactly one cell, `R1-BLD-BOOTSTRAP`. The hook receives the exact started task's
+description (`HeldTask`, the ARN held and never rendered) and its own failure never escapes; the sequence —
+proofs, placement, release, observation, cleanup — is unchanged. **What the hook does under R-2** (create
+the path from that task's interface to the compiled destination, start the analysis, log privately) is the
+owner's separately authorized watcher, not part of this amendment; the verdict's binding checks are
+unchanged and remain the proof.
+
+**Held by regressions:** the hook rides a build verification launch and sees the started task after the
+release and before observation (`test_production_runtime_launcher`); it is refused before anything is done
+for an acquisition verification, a production launch of either actor and every negative release mode (same);
+the tool refuses it with `refused_arguments` and constructs no client (`test_production_launch_script`); the
+runner hands it to `R1-BLD-BOOTSTRAP` alone (`test_production_verification_cells`).
+
+**Deployment impact: none.** The launcher runs on the workstation only; no task entry imports it; the
+compiled configuration carries no field the hook reads. The build-verify image built from release
+`d5349d95` (configuration `da807859…`) stays the image this hook will corroborate.
+

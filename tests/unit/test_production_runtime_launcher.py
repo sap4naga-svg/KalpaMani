@@ -47,6 +47,7 @@ from kalpamani.data.production.sharadar.inputs import input_digest
 from kalpamani.data.production.sharadar.outcomes import (
     CleanupFailure,
     CleanupStage,
+    HeldCheckOutcome,
     LaunchOutcome,
     PlacementIncident,
     launch_sentence,
@@ -1121,3 +1122,129 @@ class TestNegativeReleaseModes:
         report = _run(timed_out, ReleaseMode.WITHHELD)
         assert report.outcome is LaunchOutcome.OBSERVATION_TIMEOUT
         assert report.observed_exit_code is None
+
+
+class TestTheBuildVerificationHook:
+    """ADR-0045 s.12: the launcher's held-task hook rides a released build verification
+    launch -- the R-2 corroboration attachment point -- and no other verification launch."""
+
+    def test_the_hook_receives_the_exact_started_task_after_the_release_and_before_observation(
+        self,
+    ) -> None:
+        scenario = _verification_scenario(BLD, exit_code=18)
+        seen: list[tuple[str, str, int, int]] = []
+
+        def hook(held: pl.HeldTask) -> None:
+            # At this instant the release parameter exists (written), and observation
+            # has not begun: the launcher has described the task exactly once since.
+            seen.append(
+                (
+                    held.task_arn,
+                    held.task_definition_arn,
+                    len(scenario.launcher_ssm.names("put_parameter")),
+                    len(scenario.launcher_ssm.names("delete_parameter")),
+                )
+            )
+            raise RuntimeError("the hook's own failure never escapes")
+
+        report = pl.launch_authorized_run(
+            compiled=scenario.compiled,
+            adapters=scenario.adapters(),
+            authorization=scenario.authorization,
+            identity_proof=scenario.proof,
+            now=scenario.clock.now,
+            monotonic=scenario.clock.monotonic,
+            sleep=scenario.clock.sleep,
+            while_running=hook,
+        )
+        assert report.outcome is LaunchOutcome.TASK_TERMINAL and report.observed_exit_code == 18
+        assert seen == [(TASK_ARN, verification_revision_arn(BLD), 1, 0)]
+        assert report.held_check is HeldCheckOutcome.INVOKED
+        assert report.held_task is not None and report.held_task.last_status == "RUNNING"
+        assert "arn:aws" not in repr(report.held_task)
+        # The sequence is unchanged by the hook: released, observed, cleaned up.
+        assert len(scenario.launcher_ssm.names("delete_parameter")) == 1
+        scenario.assert_counts_match_call_logs(report)
+        assert pl.admits_while_running(
+            scenario.compiled, scenario.authorization, ReleaseMode.NORMAL
+        )
+
+    def test_the_hook_is_refused_for_every_other_launch_before_anything_is_done(self) -> None:
+        def attempt(scenario: _Scenario, mode: ReleaseMode = ReleaseMode.NORMAL) -> None:
+            with pytest.raises(ValueError):
+                pl.launch_authorized_run(
+                    compiled=scenario.compiled,
+                    adapters=scenario.adapters(),
+                    authorization=scenario.authorization,
+                    identity_proof=scenario.proof,
+                    now=scenario.clock.now,
+                    monotonic=scenario.clock.monotonic,
+                    sleep=scenario.clock.sleep,
+                    release_mode=mode,
+                    while_running=lambda _held: None,
+                )
+            assert scenario.ecs.calls == [] and scenario.proofs == []
+
+        # An acquisition verification launch holds no reachability question for the hook.
+        acquisition = _verification_scenario(ACQ, exit_code=18)
+        attempt(acquisition)
+        assert not pl.admits_while_running(
+            acquisition.compiled, acquisition.authorization, ReleaseMode.NORMAL
+        )
+        # A production launch of either actor.
+        attempt(_Scenario(BLD))
+        attempt(_Scenario(ACQ))
+        # A negative release mode, even on the build verification target.
+        build = _verification_scenario(BLD, exit_code=15)
+        attempt(build, ReleaseMode.WITHHELD)
+        attempt(_verification_scenario(BLD, exit_code=15), ReleaseMode.MISMATCHED)
+        assert not pl.admits_while_running(
+            build.compiled, build.authorization, ReleaseMode.WITHHELD
+        )
+
+    def test_a_failing_hook_changes_nothing_about_the_sequence_or_its_cleanup(self) -> None:
+        """Error handling: the hook's exception is swallowed and the report equals the
+        no-hook run's in outcome, counts, cleanup, release and observation."""
+
+        def run(with_hook: bool) -> tuple[pl.LaunchReport, _Scenario]:
+            scenario = _verification_scenario(BLD, exit_code=18)
+
+            def hook(_held: pl.HeldTask) -> None:
+                raise RuntimeError("synthetic hook failure")
+
+            report = pl.launch_authorized_run(
+                compiled=scenario.compiled,
+                adapters=scenario.adapters(),
+                authorization=scenario.authorization,
+                identity_proof=scenario.proof,
+                now=scenario.clock.now,
+                monotonic=scenario.clock.monotonic,
+                sleep=scenario.clock.sleep,
+                while_running=hook if with_hook else None,
+            )
+            return report, scenario
+
+        hooked, hooked_scenario = run(True)
+        plain, plain_scenario = run(False)
+        assert hooked.outcome is plain.outcome is LaunchOutcome.TASK_TERMINAL
+        assert hooked.observed_exit_code == plain.observed_exit_code == 18
+        assert hooked.cleanup_failures == plain.cleanup_failures == ()
+        assert hooked.release_mode is plain.release_mode is ReleaseMode.NORMAL
+        assert hooked.network_interface_id == plain.network_interface_id
+        # The hook adds exactly its held-task DescribeTasks reads and nothing else: the
+        # same parameters were created and deleted, the same proofs were made.
+        assert hooked_scenario.launcher_ssm.names(
+            "put_parameter"
+        ) == plain_scenario.launcher_ssm.names("put_parameter")
+        assert hooked_scenario.launcher_ssm.names(
+            "delete_parameter"
+        ) == plain_scenario.launcher_ssm.names("delete_parameter")
+        assert hooked_scenario.human_ssm.names(
+            "delete_parameter"
+        ) == plain_scenario.human_ssm.names("delete_parameter")
+        assert hooked_scenario.proofs == plain_scenario.proofs
+        assert (
+            hooked.held_check is HeldCheckOutcome.INVOKED
+            and plain.held_check is HeldCheckOutcome.NOT_APPLICABLE
+        )
+        hooked_scenario.assert_counts_match_call_logs(hooked)

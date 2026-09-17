@@ -598,6 +598,21 @@ def _current_r3_binding() -> Any:
 # ---------------------------------------------------------------------------
 
 
+#: The one cell whose launch may carry a ``while_running`` hook (ADR-0045 s.12).
+HOOK_CELL_ID: Final = "R1-BLD-BOOTSTRAP"
+
+
+def while_running_for(
+    cell: vc.CellDefinition, hook: Callable[[Any], None] | None
+) -> Callable[[Any], None] | None:
+    """``hook`` for the released build verification bootstrap alone; ``None`` otherwise."""
+    if hook is None or cell.cell_id != HOOK_CELL_ID:
+        return None
+    if cell.release_mode not in (None, ReleaseMode.NORMAL):
+        return None
+    return hook
+
+
 def _launch_argv(
     arguments: argparse.Namespace,
     cell: vc.CellDefinition,
@@ -862,8 +877,14 @@ def main(
     security_of: Callable[[Path], Any] | None = None,
     r3_binding_source: Callable[[], Any] | None = None,
     permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
+    while_running: Callable[[Any], None] | None = None,
 ) -> int:
     """Derive the matrix (default), or prepare / execute / complete / verdict one cell.
+
+    ``while_running`` (ADR-0045 s.12) rides exactly one cell -- the released build
+    verification bootstrap, ``R1-BLD-BOOTSTRAP`` -- where the launcher hands it the exact
+    task it started; it is the R-2 corroboration attachment point and is never passed to
+    any other cell (:func:`while_running_for`).
 
     Every keyword is a seam the launch tool takes, forwarded unchanged; with none
     injected, the launch tool builds its real clients only inside its own authorized
@@ -963,6 +984,7 @@ def main(
             code: int = launch.main(
                 [*_launch_argv(arguments, cell, record.identity), launch.AUTHORIZATION_FLAG],
                 **seams,
+                while_running=while_running_for(cell, while_running),
             )
             evidence = recorded_evidence(
                 arguments,

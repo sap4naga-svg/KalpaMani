@@ -77,6 +77,7 @@ from kalpamani.data.production.sharadar.release import (
 from kalpamani.data.production.sharadar.vocabulary import (
     MAX_ADVANCED_PARAMETER_BYTES,
     IdentityPath,
+    ProductionActor,
     constants_for,
 )
 
@@ -158,8 +159,8 @@ class LaunchHandle:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HeldTask:
-    """What a fresh ``DescribeTasks`` established about the launched probe task at the
-    moment the launcher's check was admitted (ADR-0048 s.3): the task, the
+    """What a fresh ``DescribeTasks`` established about the launched task at the
+    moment the launcher's hook was admitted (ADR-0048 s.3; ADR-0045 s.12): the task, the
     revision and image it reported, its ``lastStatus`` and when it was observed. This is
     what proves the probe task was *available* -- running, on the registered revision and
     image, released by this sequence -- and nothing more: whether the service evaluates
@@ -379,6 +380,25 @@ def _image_incident(compiled: CompiledLaunch, task: TaskDescription) -> Placemen
     return None
 
 
+def admits_while_running(
+    compiled: CompiledLaunch, authorization: LaunchAuthorization, release_mode: ReleaseMode
+) -> bool:
+    """Whether a ``while_running`` hook may ride this launch: a released permission-probe
+    launch (ADR-0048 s.3), or a released **build** verification launch with a ``verify-``
+    identity (ADR-0045 s.12). Never a production launch, never an acquisition verification
+    (its task holds a provider credential path and needs no reachability corroboration),
+    never a negative release mode."""
+    if release_mode is not ReleaseMode.NORMAL:
+        return False
+    if compiled.probe:
+        return True
+    return (
+        compiled.verification
+        and compiled.actor is ProductionActor.BUILD
+        and authorization.identity.startswith("verify-")
+    )
+
+
 def launch_authorized_run(
     *,
     compiled: CompiledLaunch,
@@ -405,10 +425,14 @@ def launch_authorized_run(
     ``RUNNING`` at the ceiling, that cannot be described, or that reports another
     revision or image is **not checked** -- the report says which
     (:class:`~kalpamani.data.production.sharadar.outcomes.HeldCheckOutcome`) and the
-    sequence continues unchanged. The check is admitted for a permission-probe launch
-    only, its own exception is swallowed (the check records its own answer), and it never
-    changes the sequence: the task is observed to its terminal state and the prescribed
-    cleanup runs as always.
+    sequence continues unchanged. The check is admitted for a released (``NORMAL``)
+    permission-probe launch, and -- the R-2 corroboration attachment point (ADR-0045 s.3,
+    s.12) -- for a released **build verification** launch, whose hook receives the exact
+    task this sequence started so a Reachability Analyzer path can be bound to *its*
+    interface rather than to a family listing; for every other launch a hook is refused
+    before anything is done. Its own exception is swallowed (the check records its own
+    answer), and it never changes the sequence: the task is observed to its terminal
+    state and the prescribed cleanup runs as always.
 
     ``identity_proof`` is invoked with ``HUMAN`` before the input is materialized and
     before it is deleted, and with ``LAUNCHER`` before the launch and before the
@@ -442,8 +466,13 @@ def launch_authorized_run(
         raise ValueError("a probe identity is a permission-probe launch's alone")
     if compiled.probe and compiled.started_by is None:
         raise ValueError("a permission-probe launch carries the session's startedBy tag")
-    if while_running is not None and (not compiled.probe or release_mode is not ReleaseMode.NORMAL):
-        raise ValueError("a while-running check is a released permission-probe launch's alone")
+    if while_running is not None and not admits_while_running(
+        compiled, authorization, release_mode
+    ):
+        raise ValueError(
+            "a while-running check is a released permission-probe or build verification "
+            "launch's alone"
+        )
     constants = constants_for(compiled.actor)
     before = _AdapterCounts.of(adapters)
     identity_calls = 0
@@ -774,5 +803,6 @@ __all__ = [
     "LaunchAuthorization",
     "LaunchHandle",
     "LaunchReport",
+    "admits_while_running",
     "launch_authorized_run",
 ]
