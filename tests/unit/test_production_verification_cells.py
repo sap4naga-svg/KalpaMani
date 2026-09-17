@@ -37,7 +37,7 @@ from fixtures.production_launch import (
     specification_for,
 )
 from fixtures.production_runtime import CANARIES, OTHER_RUN_ID, RUN_ID, encode
-from kalpamani.data.contracts.canonical import canonical_bytes
+from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.production.sharadar import launch_records as lr
 from kalpamani.data.production.sharadar import launch_store as ls
 from kalpamani.data.production.sharadar import probe as pp
@@ -174,6 +174,12 @@ def _prepared(**cells: str) -> dict[str, vc.PreparedCell]:
     }
 
 
+def _corroboration_chain(**fields: Any) -> _Chain:
+    """The dedicated R-2 corroboration launch's chain (a fresh verify- identity) beside its
+    PASSED bootstrap chain (ADR-0052)."""
+    return _Chain(BLD, identity="verify-" + OTHER_RUN_ID, cell="R2-BLD-CORROBORATION", **fields)
+
+
 class _Chain:
     """A complete, bound evidence chain for one runtime cell on the fixtures' records.
 
@@ -190,17 +196,27 @@ class _Chain:
         inputs: dict[str, Any] | None = None,
         release_mode: ReleaseMode = ReleaseMode.NORMAL,
         identity: str | None = None,
+        cell: str | None = None,
     ) -> None:
         self.actor = actor
         self.release_mode = release_mode
         self.identity = ("verify-" + RUN_ID) if identity is None else identity
         short = "BLD" if actor is BLD else "ACQ"
-        self.cell_id = {
-            ReleaseMode.NORMAL: f"R1-{short}-BOOTSTRAP",
-            ReleaseMode.WITHHELD: f"R1-{short}-NO-RELEASE",
-            ReleaseMode.MISMATCHED: f"R1-{short}-RELEASE-MISMATCH",
-        }[release_mode]
+        self.cell_id = (
+            {
+                ReleaseMode.NORMAL: f"R1-{short}-BOOTSTRAP",
+                ReleaseMode.WITHHELD: f"R1-{short}-NO-RELEASE",
+                ReleaseMode.MISMATCHED: f"R1-{short}-RELEASE-MISMATCH",
+            }[release_mode]
+            if cell is None
+            else cell
+        )
         self.cell = vc.definition(self.cell_id)
+        # The dedicated corroboration launch (ADR-0052) rides beside its PASSED bootstrap:
+        # its evidence and its prepared cells carry the bootstrap chain too.
+        self.bootstrap: _Chain | None = (
+            _Chain(actor, inputs=inputs) if self.cell_id == "R2-BLD-CORROBORATION" else None
+        )
         self.entry = TaskEntry.BUILD_VERIFY if actor is BLD else TaskEntry.ACQUISITION_VERIFY
         self.inputs_document = launch_inputs_document() if inputs is None else inputs
         self.specification = specification_for(
@@ -260,7 +276,7 @@ class _Chain:
         )
 
     def prepared(self, digest: str | None = None) -> dict[str, vc.PreparedCell]:
-        return {
+        cells = {
             self.cell_id: vc.PreparedCell(
                 cell_id=self.cell_id,
                 identity=self.identity,
@@ -268,13 +284,23 @@ class _Chain:
                 prepared_at=NOW,
             )
         }
+        if self.bootstrap is not None:
+            cells.update(self.bootstrap.prepared())
+        return cells
 
     def evidence(self, **overrides: Any) -> vc.RecordedEvidence:
         record = _r3_record()
+        rows = [ledger_row(RUN_ID), self.row]
+        reservations = {self.identity: self.reservation}
+        launch_records = {self.identity: self.record}
+        if self.bootstrap is not None:
+            rows.insert(1, self.bootstrap.row)
+            reservations[self.bootstrap.identity] = self.bootstrap.reservation
+            launch_records[self.bootstrap.identity] = self.bootstrap.record
         fields: dict[str, Any] = {
-            "rows": [ledger_row(RUN_ID), self.row],
-            "reservations": {self.identity: self.reservation},
-            "launch_records": {self.identity: self.record},
+            "rows": rows,
+            "reservations": reservations,
+            "launch_records": launch_records,
             "r3_record": record,
             "inputs": lr.parse_launch_inputs(
                 encode({**self.inputs_document, "r3_verification_digest": record.digest})
@@ -367,15 +393,27 @@ def _parsed(*documents: dict[str, Any]) -> tuple[pp.IsolationVerdictDocument, ..
 
 def test_the_required_cells_are_enumerated_from_the_accepted_contracts() -> None:
     ids = [cell.cell_id for cell in vc.REQUIRED_CELLS]
-    assert ids[:4] == ["R3", "R1-ACQ-BOOTSTRAP", "R1-BLD-BOOTSTRAP", "R2-BLD-ISOLATION"]
+    assert ids[:5] == [
+        "R3",
+        "R1-ACQ-BOOTSTRAP",
+        "R1-BLD-BOOTSTRAP",
+        "R2-BLD-CORROBORATION",
+        "R2-BLD-ISOLATION",
+    ]
+    # ADR-0052: the verdict binds to the dedicated corroboration launch, which itself needs
+    # the bootstrap cell PASSED; the hook rides the corroboration launch alone.
+    assert vc.definition("R2-BLD-ISOLATION").depends_on == ("R2-BLD-CORROBORATION",)
+    assert vc.definition("R2-BLD-CORROBORATION").depends_on == ("R3", "R1-BLD-BOOTSTRAP")
+    assert vc.definition("R2-BLD-CORROBORATION").kind is vc.CellKind.RUNTIME_LAUNCH
     assert {c.cell_ref for c in vc.REQUIRED_CELLS} == {f"R-{n}" for n in range(1, 10)}
     for cell in vc.REQUIRED_CELLS:
         for dependency in cell.depends_on:
             assert dependency in vc.CELL_BY_ID and ids.index(dependency) < ids.index(cell.cell_id)
         assert cell.authorization and cell.execution
-    assert vc.definition("R2-BLD-ISOLATION").depends_on == ("R1-BLD-BOOTSTRAP",)
     assert all(
-        c.depends_on == ("R3",) for c in vc.REQUIRED_CELLS if c.kind is vc.CellKind.RUNTIME_LAUNCH
+        c.depends_on == ("R3",)
+        for c in vc.REQUIRED_CELLS
+        if c.kind is vc.CellKind.RUNTIME_LAUNCH and c.cell_id != "R2-BLD-CORROBORATION"
     )
     with pytest.raises(ValueError):
         vc.definition("R0")
@@ -636,7 +674,7 @@ class TestEvidenceChain:
             assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
 
     def test_the_verdict_cell_accepts_only_closed_consistent_documents(self) -> None:
-        chain = _Chain()
+        chain = _corroboration_chain()
         digest = chain.specification.digest
         # The minimal forged shape the runner once accepted does not parse.
         with pytest.raises(ValueError):
@@ -698,7 +736,7 @@ class TestEvidenceChain:
         )
 
     def test_verdict_records_resolve_deterministically(self) -> None:
-        chain = _Chain()
+        chain = _corroboration_chain()
         digest = chain.specification.digest
         no_corroboration = _verdict_document(chain, VerdictReason.NO_CORROBORATION)
         corroborated = _verdict_document(
@@ -769,9 +807,26 @@ def test_the_isolation_cell_is_separate_from_bootstrap_and_stays_inconclusive_un
     chain = _Chain()
     states = vc.derive_states(chain.evidence(), chain.prepared())
     assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
+    # ADR-0052: a PASSED bootstrap alone leaves the verdict BLOCKED behind the dedicated
+    # corroboration launch, which is UNEXECUTED until prepared and launched itself.
+    assert states["R2-BLD-CORROBORATION"].status is vc.CellStatus.UNEXECUTED
+    assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.BLOCKED
+    # The corroboration launch passed through its own chain beside the bootstrap's: the
+    # verdict cell reads UNEXECUTED (no document) and then follows the documents.
+    chain = _corroboration_chain()
+    states = vc.derive_states(chain.evidence(), chain.prepared())
+    assert states["R1-BLD-BOOTSTRAP"].status is vc.CellStatus.PASSED
+    assert states["R2-BLD-CORROBORATION"].status is vc.CellStatus.PASSED
     assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNEXECUTED
-    # Bootstrap passed through its chain: the verdict cell follows the documents.
-    chain = _Chain()
+    # ... and a verdict document written against the BOOTSTRAP launch's digest binds nothing
+    # here: the previous failed hook launch is never read as corroboration evidence.
+    assert chain.bootstrap is not None
+    stray = _verdict_document(chain.bootstrap, VerdictReason.CORROBORATED)
+    states = vc.derive_states(
+        chain.evidence(verdicts={chain.bootstrap.specification.digest: _parsed(stray)}),
+        chain.prepared(),
+    )
+    assert states["R2-BLD-ISOLATION"].status is vc.CellStatus.UNEXECUTED
     for reason, result, status in (
         (VerdictReason.NO_CORROBORATION, pp.ProbeResult.TIMED_OUT, vc.CellStatus.INCONCLUSIVE),
         (VerdictReason.OBSERVED_CONNECTION, pp.ProbeResult.CONNECTED, vc.CellStatus.FAILED),
@@ -1138,25 +1193,48 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
     cells.r3.write_bytes(canonical_bytes(cells.record.document()))
     reservation = scenario.reservation()
     assert reservation is not None
-    # The prepared-cells record names the launch the scenario made.
+    # ADR-0052: the scenario's launch is the dedicated corroboration cell's; the PASSED
+    # bootstrap cell's own chain -- another identity -- sits in the store beside it.
+    bootstrap = _Chain(
+        BLD, identity="verify-" + OTHER_RUN_ID, inputs=json.loads(scenario.inputs.read_bytes())
+    )
+    # Its launch record is the scenario's target and placement under its own identity and
+    # specification (the fixtures' constants would not bind to the scenario's registration).
+    scenario_record = lr.parse_launch_record(record_path.read_bytes())
+    bootstrap_record = lr.LaunchRecord(
+        **{
+            **{f: getattr(scenario_record, f) for f in lr.LaunchRecord.__slots__},
+            "identity": bootstrap.identity,
+            "specification_digest": bootstrap.specification.digest,
+        }
+    )
+    scenario.store().reserve(bootstrap.reservation)
+    rows = json.loads(scenario.ledger.read_bytes())["rows"]
+    scenario.ledger.write_bytes(encode(ledger_document([*rows, bootstrap.row])))
+    (scenario.records / "launch-record-20260905T010000Z-0000.json").write_bytes(
+        encode(bootstrap_record.document())
+    )
+    # The prepared-cells record names both launches.
     path = scenario.ledger.with_name("ledger.json" + runner.CELLS_SUFFIX)
     path.write_bytes(
         canonical_bytes(
             vc.cells_document(
                 [
+                    *bootstrap.prepared().values(),
                     vc.PreparedCell(
-                        cell_id="R1-BLD-BOOTSTRAP",
+                        cell_id="R2-BLD-CORROBORATION",
                         identity=scenario.identity,
                         specification_digest=reservation["specification_digest"],
                         prepared_at=NOW,
-                    )
+                    ),
                 ]
             )
         )
     )
     assert cells.main(*cells.base()) == runner.EXIT_MATRIX
     out = capsys.readouterr().out
-    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=LAUNCHED" in out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=LAUNCHED" in out
     assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=BLOCKED" in out
     verdict = [
         *cells.base(),
@@ -1169,12 +1247,12 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
         "--verification-configuration",
         str(scenario.verification_configuration),
     ]
-    # The verdict is blocked until the bootstrap cell's receipt verified.
+    # The verdict is blocked until the corroboration cell's receipt verified.
     assert cells.main(*verdict) == runner.EXIT_REFUSED_PREREQUISITE
     complete = [
         *cells.base(),
         "--complete-cell",
-        "R1-BLD-BOOTSTRAP",
+        "R2-BLD-CORROBORATION",
         "--launch-record",
         str(record_path),
         "--receipt-lines",
@@ -1182,7 +1260,7 @@ def test_the_build_verdict_cell_follows_its_bootstrap_cell_and_stays_inconclusiv
     ]
     assert cells.main(*complete) == launch.EXIT_ROW_COMPLETED
     out = capsys.readouterr().out
-    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=PASSED" in out
     assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
     # Without a corroboration the verdict stays INCONCLUSIVE, and the aggregate INCOMPLETE.
     assert cells.main(*verdict) == launch.EXIT_VERDICT_RECORDED
@@ -1711,7 +1789,7 @@ def test_the_runner_reads_a_placement_changed_record_as_unbound_on_real_files(
     assert cells.main(*cells.base()) == runner.EXIT_MATRIX
     out = capsys.readouterr().out
     assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
-    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=BLOCKED" in out
     document = chain.record.document()
     document["subnet_id"] = "subnet-0fedcba9876543210"
     record_path.write_bytes(encode(lr.parse_launch_record(encode(document)).document()))
@@ -1859,18 +1937,19 @@ def test_negative_evidence_is_recovered_offline_after_an_interrupted_completion(
         assert canary not in out
 
 
-def test_the_while_running_hook_is_the_build_bootstrap_cell_s_alone() -> None:
-    """ADR-0045 s.12: the runner hands the hook to exactly one cell."""
+def test_the_while_running_hook_is_the_dedicated_corroboration_cell_s_alone() -> None:
+    """ADR-0052 (amending ADR-0045 s.12): the runner hands the hook to exactly one cell --
+    the dedicated corroboration launch -- and never to the bootstrap cell any more."""
     from kalpamani.data.production.sharadar.verification_cells import CELL_BY_ID
 
     def hook(_held: object) -> None:
         return None
 
-    assert runner.HOOK_CELL_ID == "R1-BLD-BOOTSTRAP"
-    assert runner.while_running_for(CELL_BY_ID["R1-BLD-BOOTSTRAP"], hook) is hook
-    assert runner.while_running_for(CELL_BY_ID["R1-BLD-BOOTSTRAP"], None) is None
+    assert runner.HOOK_CELL_ID == "R2-BLD-CORROBORATION"
+    assert runner.while_running_for(CELL_BY_ID["R2-BLD-CORROBORATION"], hook) is hook
+    assert runner.while_running_for(CELL_BY_ID["R2-BLD-CORROBORATION"], None) is None
     for cell_id, cell in CELL_BY_ID.items():
-        if cell_id != "R1-BLD-BOOTSTRAP":
+        if cell_id != "R2-BLD-CORROBORATION":
             assert runner.while_running_for(cell, hook) is None, cell_id
 
 
@@ -1911,37 +1990,25 @@ def _verified_bootstrap_receipt_lines(record: lr.LaunchRecord, verification_file
     return receipt_line(receipt) + "\n"
 
 
-def test_the_build_bootstrap_lifecycle_over_the_empty_run_set_end_to_end_on_fakes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """ADR-0045 s.11, the whole offline lifecycle the readiness S9 build bootstrap will
-    take, on isolated fixtures and fakes with clearly synthetic receipts.
-
-    A ledger with NO acquisition row: prepare ``R1-BLD-BOOTSTRAP`` with no run identity
-    (the specification's workload is the empty run set and the accepted parser reads it
-    back), execute it through the runner on fakes (the launch tool writes the
-    reservation over that specification and the store reads it back bound), complete
-    the row with a synthetic ``VERIFIED_BOOTSTRAP`` receipt (exit 18) and read the cell
-    PASSED from the matrix; then prepare and execute both build negatives over the same
-    empty run set (exit 15 / exit 16), complete them with their refusal receipts and read
-    each PASSED. Nothing here touches the workstation's private root.
-    """
-    import copy
-
-    cells = _Cells(tmp_path, actor=BLD, ledger_rows=[])
-    scenario = cells.scenario
-    assert scenario.ledger_rows() == []
-    fresh_descriptions = copy.deepcopy(scenario.ecs.descriptions)  # one launch consumes them
-    argv = [
+def _verification_argv(scenario: _Scenario) -> list[str]:
+    """The verification-only launch's configuration arguments: no ``--run-identity``."""
+    return [
         "--production-configuration",
         str(scenario.production_configuration),
         "--verification-configuration",
         str(scenario.verification_configuration),
         "--acquisition-configuration",
         str(scenario.acquisition_configuration),
-    ]  # no --run-identity: the verification-only launch
-    identity = "verify-synthetic-production-build-0010"
+    ]
 
+
+def _bootstrap_passed_on_fakes(
+    cells: _Cells, capsys: pytest.CaptureFixture[str], argv: list[str], identity: str
+) -> tuple[str, Path, lr.LaunchRecord]:
+    """``R1-BLD-BOOTSTRAP`` prepared, executed (exit 18) and completed on fakes over the
+    empty run set, asserting each step; returns the specification digest, the launch
+    record's path and the record. The store afterwards reads the cell PASSED."""
+    scenario = cells.scenario
     # Prepare: the specification carries runs == [] and the accepted parser admits it.
     assert (
         cells.main(
@@ -2003,12 +2070,36 @@ def test_the_build_bootstrap_lifecycle_over_the_empty_run_set_end_to_end_on_fake
     assert cells.main(*complete) == launch.EXIT_ROW_COMPLETED
     out = capsys.readouterr().out
     assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
-    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=BLOCKED" in out
     row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
     assert row["outcome"] == "VERIFIED" and row["evidence"] == "RECEIPT_VERIFIED"
-    # A refusal receipt handed for the positive cell completes the row REFUSED and the
-    # matrix reads the cell FAILED -- a wrong receipt never passes it.
-    # (Checked on the negatives below; the positive row is already completed.)
+    return digest, record_path, record
+
+
+def test_the_build_bootstrap_lifecycle_over_the_empty_run_set_end_to_end_on_fakes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR-0045 s.11, the whole offline lifecycle the readiness S9 build bootstrap will
+    take, on isolated fixtures and fakes with clearly synthetic receipts.
+
+    A ledger with NO acquisition row: prepare ``R1-BLD-BOOTSTRAP`` with no run identity
+    (the specification's workload is the empty run set and the accepted parser reads it
+    back), execute it through the runner on fakes (the launch tool writes the
+    reservation over that specification and the store reads it back bound), complete
+    the row with a synthetic ``VERIFIED_BOOTSTRAP`` receipt (exit 18) and read the cell
+    PASSED from the matrix; then prepare and execute both build negatives over the same
+    empty run set (exit 15 / exit 16), complete them with their refusal receipts and read
+    each PASSED. Nothing here touches the workstation's private root.
+    """
+    import copy
+
+    cells = _Cells(tmp_path, actor=BLD, ledger_rows=[])
+    scenario = cells.scenario
+    assert scenario.ledger_rows() == []
+    fresh_descriptions = copy.deepcopy(scenario.ecs.descriptions)  # one launch consumes them
+    argv = _verification_argv(scenario)
+    identity = "verify-synthetic-production-build-0010"
+    _bootstrap_passed_on_fakes(cells, capsys, argv, identity)
 
     # Both negatives over the same empty run set: prepared, executed, completed, PASSED.
     for cell_id, suffix, exit_code, outcome, mode in (
@@ -2085,4 +2176,301 @@ def test_the_build_bootstrap_lifecycle_over_the_empty_run_set_end_to_end_on_fake
     out = capsys.readouterr().out
     assert "unbound=" not in out and "interrupted=" not in out
     for canary in (*CANARIES, identity):
+        assert canary not in out
+
+
+def test_the_dedicated_corroboration_cell_lifecycle_end_to_end_on_fakes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR-0052: the whole offline lifecycle the dedicated R-2 corroboration cell will
+    take, after the bootstrap cell PASSED, on isolated fixtures and fakes.
+
+    The PASSED ``R1-BLD-BOOTSTRAP`` is never rebound or relaunched: re-preparing it over
+    a new identity is refused and its binding, row, reservation and record stay byte for
+    byte what they were; its spent identity is refused for the new cell. The new cell is
+    prepared under its own fresh identity and specification, executed through the runner
+    with the ``while_running`` hook -- invoked exactly once, on the held running task,
+    on the registered revision and image -- and completed from its own receipt; the
+    isolation verdict is INCONCLUSIVE without returned evidence, never PASSED on
+    mis-attributed, out-of-window or wrong-destination evidence, and PASSED only from
+    evidence bound to the corroboration launch's own interface, window and destination.
+    Nothing here touches the workstation's private root; **mocked results are not AWS
+    verification.**
+    """
+    import copy
+
+    from kalpamani.data.production.sharadar.compiled import parse_compiled_configuration
+    from kalpamani.data.production.sharadar.launcher import HeldTask
+
+    cells = _Cells(tmp_path, actor=BLD, ledger_rows=[])
+    scenario = cells.scenario
+    fresh_descriptions = copy.deepcopy(scenario.ecs.descriptions)
+    argv = _verification_argv(scenario)
+    bootstrap_identity = "verify-synthetic-production-build-0010"
+    bootstrap_digest, bootstrap_record_path, bootstrap_record = _bootstrap_passed_on_fakes(
+        cells, capsys, argv, bootstrap_identity
+    )
+    cells_path = scenario.ledger.with_name("ledger.json" + runner.CELLS_SUFFIX)
+    bootstrap_reservation = (
+        scenario.ledger.parent / "ledger.json.reservations" / f"{bootstrap_identity}.json"
+    )
+    bootstrap_bytes = {
+        path: path.read_bytes()
+        for path in (cells_path, bootstrap_reservation, bootstrap_record_path)
+    }
+    bootstrap_row = next(r for r in scenario.ledger_rows() if r["identity"] == bootstrap_identity)
+
+    def unchanged() -> None:
+        """The PASSED bootstrap cell's binding, reservation, record and row: untouched."""
+        for path, before in bootstrap_bytes.items():
+            if path == cells_path:
+                assert (
+                    json.loads(path.read_bytes())["cells"]["R1-BLD-BOOTSTRAP"]
+                    == (json.loads(before)["cells"]["R1-BLD-BOOTSTRAP"])
+                )
+            else:
+                assert path.read_bytes() == before, path.name
+        assert (
+            next(r for r in scenario.ledger_rows() if r["identity"] == bootstrap_identity)
+            == bootstrap_row
+        )
+
+    # Negative controls before anything new: the PASSED cell is never rebound ...
+    scenario.ecs.descriptions = copy.deepcopy(fresh_descriptions)
+    assert (
+        cells.main(
+            *cells.base(),
+            "--prepare-cell",
+            "R1-BLD-BOOTSTRAP",
+            "--identity",
+            "verify-synthetic-production-build-0021",
+            *argv,
+        )
+        == runner.EXIT_REFUSED_CELL_STATE
+    )
+    capsys.readouterr()
+    assert cells.cells()["R1-BLD-BOOTSTRAP"]["identity"] == bootstrap_identity
+    # ... and its spent identity is never the new cell's.
+    assert (
+        cells.main(
+            *cells.base(),
+            "--prepare-cell",
+            "R2-BLD-CORROBORATION",
+            "--identity",
+            bootstrap_identity,
+            *argv,
+        )
+        != runner.EXIT_PREPARED
+    )
+    capsys.readouterr()
+    assert "R2-BLD-CORROBORATION" not in cells.cells()
+    unchanged()
+
+    # Prepare the dedicated cell under a fresh identity: its own specification over the
+    # empty run set, the bootstrap PASSED beside it, the verdict cell still blocked.
+    identity = "verify-synthetic-production-build-0020"
+    assert (
+        cells.main(
+            *cells.base(), "--prepare-cell", "R2-BLD-CORROBORATION", "--identity", identity, *argv
+        )
+        == runner.EXIT_PREPARED
+    )
+    out = capsys.readouterr().out
+    digest = out.split("specification_digest=")[1].split()[0]
+    assert digest != bootstrap_digest
+    written = json.loads(scenario.files("launch-specification")[-1].read_bytes())
+    assert written["workload"] == {"runs": []} and written["release_mode"] == "NORMAL"
+    assert cells.cells()["R2-BLD-CORROBORATION"]["identity"] == identity
+    assert cells.main(*cells.base()) == runner.EXIT_MATRIX
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=PREPARED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=BLOCKED" in out
+
+    # Execute with the reviewed hook: one launch, the hook invoked once on the held task.
+    held: list[HeldTask] = []
+    scenario.authorize(identity=identity, specification_digest=digest)
+    scenario.ecs.descriptions = copy.deepcopy(fresh_descriptions)
+    scenario.ecs.descriptions[-1]["containers"][0]["exitCode"] = 18
+    execute = [
+        *cells.base(),
+        "--execute-cell",
+        "R2-BLD-CORROBORATION",
+        *argv,
+        "--authorization",
+        str(scenario.authorization),
+        runner.AUTHORIZATION_FLAG,
+    ]
+    run_tasks_before = len(scenario.ecs.names("run_task"))
+    assert cells.main(*execute, while_running=held.append) == launch.EXIT_LAUNCH_TERMINAL
+    out = capsys.readouterr().out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=LAUNCHED" in out
+    assert len(scenario.ecs.names("run_task")) == run_tasks_before + 1
+    record_path = next(
+        path
+        for path in scenario.files("launch-record")
+        if lr.parse_launch_record(path.read_bytes()).identity == identity
+    )
+    record = lr.parse_launch_record(record_path.read_bytes())
+    assert record.observed_exit_code == 18 and record.entry is TaskEntry.BUILD_VERIFY
+    assert record.specification_digest == digest and record.plan_digest is None
+    # The same registered target (the fake reports one task identity for every launch);
+    # a distinct identity, specification and record.
+    assert record.task_definition_arn == bootstrap_record.task_definition_arn
+    assert record.identity != bootstrap_record.identity and record_path != bootstrap_record_path
+    # The hook saw exactly the launched task, running on the registered revision and image.
+    assert len(held) == 1
+    assert held[0].task_arn == record.task_arn
+    assert held[0].task_definition_arn == record.task_definition_arn
+    assert held[0].image_digest == record.image_digest
+    assert held[0].last_status == "RUNNING" and held[0].describe_calls >= 1
+    assert repr(held[0]) == "HeldTask(last_status='RUNNING')"
+    assert cells.main(*execute, while_running=held.append) == runner.EXIT_REFUSED_CELL_STATE
+    capsys.readouterr()
+    assert len(held) == 1  # never twice
+    constructions = len(scenario.clients.constructions)  # nothing below builds a client
+    unchanged()
+
+    # Complete from the corroboration's own receipt; the bootstrap's receipt is refused.
+    lines = scenario.root / "corroboration-receipt.txt"
+    verification_file = scenario.verification_configuration.read_bytes()
+    lines.write_text(_verified_bootstrap_receipt_lines(record, verification_file), "utf-8")
+    foreign = scenario.root / "bootstrap-receipt-again.txt"
+    foreign.write_text(
+        _verified_bootstrap_receipt_lines(bootstrap_record, verification_file), "utf-8"
+    )
+    # ... and a receipt claiming a production data-plane operation is refused: a
+    # verification task performs none, released or not. (The receipt contract refuses
+    # to even construct one, so the control is the wire line with its counts edited and
+    # its digest recomputed -- what a tampered or foreign task would have printed.)
+    from kalpamani.data.production.sharadar.receipts import (
+        RECEIPT_LINE_PREFIX,
+        decode_receipt_line,
+    )
+
+    document = decode_receipt_line(lines.read_text("utf-8").splitlines()[0])
+    document["counts"]["s3_operations"] = 1
+    del document["receipt_digest"]
+    document["receipt_digest"] = sha256_hex(canonical_bytes(document))
+    touched = scenario.root / "corroboration-receipt-data-plane.txt"
+    touched.write_text(
+        RECEIPT_LINE_PREFIX + canonical_bytes(document).decode("utf-8") + "\n", "utf-8"
+    )
+    complete = [*cells.base(), "--complete-cell", "R2-BLD-CORROBORATION", "--launch-record"]
+    for wrong in (foreign, touched):
+        assert cells.main(*complete, str(record_path), "--receipt-lines", str(wrong)) != (
+            launch.EXIT_ROW_COMPLETED
+        ), wrong.name
+        capsys.readouterr()
+        row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+        assert row["evidence"] == "EXIT_CODE_ONLY", wrong.name  # still provisional
+    assert cells.main(*complete, str(record_path), "--receipt-lines", str(lines)) == (
+        launch.EXIT_ROW_COMPLETED
+    )
+    out = capsys.readouterr().out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=UNEXECUTED" in out
+    row = next(r for r in scenario.ledger_rows() if r["identity"] == identity)
+    assert row["outcome"] == "VERIFIED" and row["evidence"] == "RECEIPT_VERIFIED"
+    unchanged()
+
+    # The verdict: INCONCLUSIVE without evidence; never PASSED on unattributed, stale or
+    # wrong-destination evidence; PASSED only from evidence transcribed for THIS launch's
+    # interface and window to the smallest compiled origin address, port 443, tcp.
+    verdict = [
+        *cells.base(),
+        "--verdict-cell",
+        "R2-BLD-ISOLATION",
+        "--launch-record",
+        str(record_path),
+        "--receipt-lines",
+        str(lines),
+        "--verification-configuration",
+        str(scenario.verification_configuration),
+    ]
+    assert cells.main(*verdict) == launch.EXIT_VERDICT_RECORDED
+    out = capsys.readouterr().out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=INCONCLUSIVE" in out
+    assert record.network_interface_id is not None and record.subnet_id is not None
+    origin = parse_compiled_configuration(verification_file)[0].origin_addresses
+    assert origin is not None
+    inside = record.launched_at + (record.recorded_at - record.launched_at) / 2
+    bound = {
+        "source_interface_id": record.network_interface_id,
+        "start_date": inside.isoformat(),
+        "destination_ip": min(origin),
+        "destination_port": 443,
+        "protocol": "tcp",
+        "explanations": [
+            {
+                "explanation_code": "NO_ROUTE_TO_DESTINATION",
+                "component_kind": "ROUTE_TABLE",
+                "component_id": "rtb-0123456789abcdef0",
+                "subnet_id": record.subnet_id,
+            }
+        ],
+    }
+    evidence = scenario.root / "reachability.json"
+    before_launch = (record.launched_at - timedelta(seconds=1)).isoformat()
+    after_record = (record.recorded_at + timedelta(seconds=1)).isoformat()
+    for label, override in (
+        ("another interface", {"source_interface_id": "eni-0fedcba9876543210"}),
+        ("before the launch", {"start_date": before_launch}),
+        ("after the record", {"start_date": after_record}),
+        ("another destination", {"destination_ip": "198.51.100.7"}),
+        ("another port", {"destination_port": 8443}),
+    ):
+        evidence.write_bytes(encode(_reachability_evidence(**{**bound, **override})))
+        assert (
+            cells.main(*verdict, "--reachability-evidence", str(evidence))
+            == launch.EXIT_VERDICT_RECORDED
+        ), label
+        out = capsys.readouterr().out
+        assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=INCONCLUSIVE" in out, (
+            label
+        )
+    # A path FOUND against this launch's own binding contradicts the task's observation:
+    # INCONCLUSIVE with the unresolvable reason -- never PASSED, and (resolve_verdicts) a
+    # later corroboration recorded beside it would read UNBOUND, so it is checked on the
+    # verdict tool over the record's own binding rather than written into this store.
+    observation = pp.ProbeObservation(  # the one the receipt above carried
+        resolution=pp.ProbeResolution.RESOLVED_IN_SET,
+        result=pp.ProbeResult.TIMED_OUT,
+        attempts=1,
+        destination_digest=pp.destination_binding_digest(
+            record.input_digest, min(origin), pp.PROBE_PORT
+        ),
+    )
+    binding = pp.VerdictBinding(
+        network_interface_id=record.network_interface_id,
+        subnet_id=record.subnet_id,
+        security_group_ids=frozenset(record.security_group_ids or ()),
+        launched_at=record.launched_at,
+        recorded_at=record.recorded_at,
+        binding_key=record.input_digest,
+        origin_addresses=frozenset(origin),
+    )
+    found = pp.parse_reachability_evidence(
+        encode(_reachability_evidence(**{**bound, "network_path_found": True}))
+    )
+    result = pp.isolation_verdict(observation, found, binding=binding)
+    assert result.verdict is IsolationVerdict.INCONCLUSIVE
+    assert result.reason is VerdictReason.PATH_FOUND_CONTRADICTS_OBSERVATION
+    assert pp.isolation_verdict(observation, None, binding=binding).reason is (
+        VerdictReason.NO_CORROBORATION
+    )
+    evidence.write_bytes(encode(_reachability_evidence(**bound)))
+    assert (
+        cells.main(*verdict, "--reachability-evidence", str(evidence))
+        == launch.EXIT_VERDICT_RECORDED
+    )
+    out = capsys.readouterr().out
+    assert "cell=R2-BLD-ISOLATION ref=R-2 kind=ISOLATION_VERDICT status=PASSED" in out
+    assert "cell=R2-BLD-CORROBORATION ref=R-2 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert "cell=R1-BLD-BOOTSTRAP ref=R-1 kind=RUNTIME_LAUNCH status=PASSED" in out
+    assert len(scenario.ecs.names("run_task")) == run_tasks_before + 1
+    assert len(scenario.clients.constructions) == constructions
+    unchanged()
+    for canary in (*CANARIES, identity, bootstrap_identity):
         assert canary not in out
