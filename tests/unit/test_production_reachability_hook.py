@@ -114,10 +114,17 @@ class FakeEc2:
 
     def create_network_insights_path(self, **kwargs: Any) -> Any:
         self._call("create_path", kwargs)
-        return {"NetworkInsightsPath": {"NetworkInsightsPathId": "nip-0123456789abcdef0", **kwargs}}
+        self.path_tags = kwargs.get("TagSpecifications", [{}])[0].get("Tags", [])
+        return {
+            "NetworkInsightsPath": {
+                "NetworkInsightsPathId": "nip-0123456789abcdef0",
+                "Tags": list(self.path_tags),
+            }
+        }
 
     def start_network_insights_analysis(self, **kwargs: Any) -> Any:
         self._call("start_analysis", kwargs)
+        self.analysis_tags = kwargs.get("TagSpecifications", [{}])[0].get("Tags", [])
         return {
             "NetworkInsightsAnalysis": {
                 "NetworkInsightsAnalysisId": "nia-0123456789abcdef0",
@@ -126,8 +133,47 @@ class FakeEc2:
             }
         }
 
+    def describe_network_insights_paths(self, **kwargs: Any) -> Any:
+        self._call("describe_paths", kwargs)
+        # a tag-filtered listing: the fake applies the filter exactly as the API would
+        wanted = kwargs["Filters"][0]["Values"][0]
+        paths = [
+            {
+                "NetworkInsightsPathId": "nip-0123456789abcdef0",
+                "Tags": list(getattr(self, "path_tags", [])),
+            },
+            {
+                "NetworkInsightsPathId": "nip-0fedcba9876543210",
+                "Tags": [{"Key": rh.INVOCATION_TAG_KEY, "Value": "another-invocation"}],
+            },
+        ]
+        return {
+            "NetworkInsightsPaths": [
+                p for p in paths if any(t.get("Value") == wanted for t in p["Tags"])
+            ]
+        }
+
     def describe_network_insights_analyses(self, **kwargs: Any) -> Any:
         self._call("describe_analysis", kwargs)
+        if "NetworkInsightsPathId" in kwargs:
+            # the by-path listing used only by cleanup / recovery: one tagged analysis of
+            # ours and one foreign analysis on the same path, which must never be deleted
+            return {
+                "NetworkInsightsAnalyses": [
+                    {
+                        "NetworkInsightsAnalysisId": "nia-0123456789abcdef0",
+                        "NetworkInsightsPathId": kwargs["NetworkInsightsPathId"],
+                        "Status": "running",
+                        "Tags": list(getattr(self, "analysis_tags", [])),
+                    },
+                    {
+                        "NetworkInsightsAnalysisId": "nia-0fedcba9876543210",
+                        "NetworkInsightsPathId": kwargs["NetworkInsightsPathId"],
+                        "Status": "running",
+                        "Tags": [{"Key": rh.INVOCATION_TAG_KEY, "Value": "another-invocation"}],
+                    },
+                ]
+            }
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         entry: dict[str, Any] = {
             "NetworkInsightsAnalysisId": "nia-0123456789abcdef0",
@@ -217,17 +263,30 @@ def test_completed_path_proposes_evidence_the_accepted_parser_admits_and_cleans_
         "delete_path",
     ]
     create = ec2.calls[0][1]
+    token = s.invocation_token
     assert create == {
         "Source": ENI,
         "DestinationIp": "198.51.100.7",
         "DestinationPort": 443,
         "Protocol": "tcp",
+        "ClientToken": f"{token}-path",
+        "TagSpecifications": [
+            {
+                "ResourceType": "network-insights-path",
+                "Tags": [{"Key": rh.INVOCATION_TAG_KEY, "Value": token}],
+            }
+        ],
     }
+    start = ec2.calls[1][1]
+    assert start["ClientToken"] == f"{token}-analysis"
+    assert start["TagSpecifications"][0]["ResourceType"] == "network-insights-analysis"
+    assert start["TagSpecifications"][0]["Tags"] == [{"Key": rh.INVOCATION_TAG_KEY, "Value": token}]
     assert s.counts.document() == {
         "describe_task": 1,
         "create_path": 1,
         "start_analysis": 1,
         "describe_analysis": 3,
+        "describe_paths": 0,
         "delete_analysis": 1,
         "delete_path": 1,
     }
@@ -375,8 +434,12 @@ def test_analysis_start_failure_deletes_the_path_only(tmp_path: Path) -> None:
     w, _ = watcher(tmp_path, ec2)
     w(held())
     assert w.state.outcome is rh.HookOutcome.ANALYSIS_NOT_STARTED
-    assert ec2.names() == ["create_path", "start_analysis", "delete_path"]
+    # a start that raised may still have committed server-side: the path's analyses are
+    # listed once and only a tagged one would be deleted (none here), then the path is
+    assert ec2.names() == ["create_path", "start_analysis", "describe_analysis", "delete_path"]
+    assert ec2.calls[2][1] == {"NetworkInsightsPathId": "nip-0123456789abcdef0"}
     assert w.state.analysis_id is None and w.state.cleanup_failures == []
+    assert w.state.counts.delete_analysis == 0
 
 
 def test_analysis_that_never_finishes_times_out_at_the_poll_ceiling_and_is_deleted(
@@ -516,39 +579,148 @@ def test_an_existing_log_refuses_construction(tmp_path: Path) -> None:
         watcher(tmp_path, FakeEc2())
 
 
+def _journal_after(tmp_path: Path, **fields: Any) -> str:
+    """A log as a hard kill would leave it: the state at some journaled step."""
+    state = rh.HookState()
+    document = state.document()
+    document.update(fields)
+    (tmp_path / "hook-log.json").write_bytes(json.dumps(document).encode())
+    return state.invocation_token
+
+
 def test_cleanup_from_log_deletes_exactly_the_named_ids_once(tmp_path: Path) -> None:
     """A hard kill between the analysis start and the invocation's own cleanup leaves the
     ids in the log with no delete attempted; the recovery deletes each once and no more."""
-    document = rh.HookState().document()
-    document.update(
-        {
-            "path_id": "nip-0123456789abcdef0",
-            "analysis_id": "nia-0123456789abcdef0",
-            "outcome": None,
-        }
+    _journal_after(
+        tmp_path,
+        path_id="nip-0123456789abcdef0",
+        analysis_id="nia-0123456789abcdef0",
+        counts={**rh.HookCounts().document(), "create_path": 1, "start_analysis": 1},
     )
-    (tmp_path / "hook-log.json").write_bytes(json.dumps(document).encode())
     recovery = FakeEc2()
     result = rh.cleanup_from_log(tmp_path / "hook-log.json", recovery)
-    assert result == {"deleted_analysis": True, "deleted_path": True}
+    assert result == {
+        "deleted_analyses": ["nia-0123456789abcdef0"],
+        "deleted_paths": ["nip-0123456789abcdef0"],
+        "recovered_path_ids": [],
+    }
     assert recovery.calls == [
         ("delete_analysis", {"NetworkInsightsAnalysisId": "nia-0123456789abcdef0"}),
         ("delete_path", {"NetworkInsightsPathId": "nip-0123456789abcdef0"}),
     ]
     again = FakeEc2()
     assert rh.cleanup_from_log(tmp_path / "hook-log.json", again) == {
-        "deleted_analysis": False,
-        "deleted_path": False,
+        "deleted_analyses": [],
+        "deleted_paths": [],
+        "recovered_path_ids": [],
     }
     assert again.calls == []
-    assert log(tmp_path)["counts"] == {
-        "describe_task": 0,
-        "create_path": 0,
-        "start_analysis": 0,
-        "describe_analysis": 0,
-        "delete_analysis": 1,
-        "delete_path": 1,
+    assert log(tmp_path)["counts"]["delete_analysis"] == 1
+    assert log(tmp_path)["counts"]["delete_path"] == 1
+
+
+def test_cleanup_from_log_finds_a_path_created_but_never_acknowledged_by_its_tag_only(
+    tmp_path: Path,
+) -> None:
+    """The kill lands after CreateNetworkInsightsPath succeeded and before its id reached
+    the journal: the journal shows the request and the token; recovery lists by that tag,
+    deletes that path (and only that path), and never repeats the listing."""
+    token = _journal_after(tmp_path, counts={**rh.HookCounts().document(), "create_path": 1})
+    recovery = FakeEc2()
+    recovery.path_tags = [{"Key": rh.INVOCATION_TAG_KEY, "Value": token}]
+    result = rh.cleanup_from_log(tmp_path / "hook-log.json", recovery)
+    assert result == {
+        "deleted_analyses": [],
+        "deleted_paths": ["nip-0123456789abcdef0"],
+        "recovered_path_ids": ["nip-0123456789abcdef0"],
     }
+    assert recovery.calls[0] == (
+        "describe_paths",
+        {"Filters": [{"Name": f"tag:{rh.INVOCATION_TAG_KEY}", "Values": [token]}]},
+    )
+    assert [n for n, _ in recovery.calls] == ["describe_paths", "delete_path"]
+    assert "nip-0fedcba9876543210" not in json.dumps(recovery.calls)
+    # the listing is made once; a second recovery does not list or delete again
+    again = FakeEc2()
+    again.path_tags = recovery.path_tags
+    assert rh.cleanup_from_log(tmp_path / "hook-log.json", again)["deleted_paths"] == []
+    assert again.calls == []
+
+
+def test_cleanup_from_log_with_no_request_journaled_lists_nothing(tmp_path: Path) -> None:
+    _journal_after(tmp_path)  # constructed, then killed before any request
+    recovery = FakeEc2()
+    assert rh.cleanup_from_log(tmp_path / "hook-log.json", recovery) == {
+        "deleted_analyses": [],
+        "deleted_paths": [],
+        "recovered_path_ids": [],
+    }
+    assert recovery.calls == []
+
+
+def test_cleanup_from_log_finds_an_analysis_started_but_never_acknowledged_through_our_path(
+    tmp_path: Path,
+) -> None:
+    """The kill lands after StartNetworkInsightsAnalysis succeeded and before its id reached
+    the journal: recovery lists the analyses of this invocation's path, deletes the one
+    carrying the token, leaves the foreign one, then deletes the path."""
+    token = _journal_after(
+        tmp_path,
+        path_id="nip-0123456789abcdef0",
+        counts={**rh.HookCounts().document(), "create_path": 1, "start_analysis": 1},
+    )
+    recovery = FakeEc2()
+    recovery.analysis_tags = [{"Key": rh.INVOCATION_TAG_KEY, "Value": token}]
+    result = rh.cleanup_from_log(tmp_path / "hook-log.json", recovery)
+    assert result["deleted_analyses"] == ["nia-0123456789abcdef0"]
+    assert result["deleted_paths"] == ["nip-0123456789abcdef0"]
+    assert [n for n, _ in recovery.calls] == [
+        "describe_analysis",
+        "delete_analysis",
+        "delete_path",
+    ]
+    assert recovery.calls[0][1] == {"NetworkInsightsPathId": "nip-0123456789abcdef0"}
+    assert "nia-0fedcba9876543210" not in json.dumps(recovery.calls)
+
+
+def test_a_start_that_succeeded_without_a_parseable_id_is_cleaned_up_through_the_path(
+    tmp_path: Path,
+) -> None:
+    class Unacknowledged(FakeEc2):
+        def start_network_insights_analysis(self, **kwargs: Any) -> Any:
+            self._call("start_analysis", kwargs)
+            self.analysis_tags = kwargs["TagSpecifications"][0]["Tags"]
+            return {"NetworkInsightsAnalysis": {"Status": "running"}}  # no id in the response
+
+    ec2 = Unacknowledged()
+    w, _ = watcher(tmp_path, ec2)
+    w(held())
+    assert w.state.outcome is rh.HookOutcome.ANALYSIS_NOT_STARTED
+    assert [n for n, _ in ec2.calls] == [
+        "create_path",
+        "start_analysis",
+        "describe_analysis",
+        "delete_analysis",
+        "delete_path",
+    ]
+    assert ec2.calls[3][1] == {"NetworkInsightsAnalysisId": "nia-0123456789abcdef0"}
+    assert w.state.cleanup_failures == [] and w.state.counts.delete_analysis == 1
+
+
+def test_the_request_is_journaled_before_the_create_and_start_calls(tmp_path: Path) -> None:
+    class Killing(FakeEc2):
+        def create_network_insights_path(self, **kwargs: Any) -> Any:
+            doc = log(tmp_path)
+            assert doc["counts"]["create_path"] == 1 and doc["path_id"] is None
+            assert doc["invocation_token"] == kwargs["TagSpecifications"][0]["Tags"][0]["Value"]
+            assert doc["events"][-1]["event"] == "create_path_requested"
+            raise KeyboardInterrupt  # the process dies with the request in flight
+
+    ec2 = Killing()
+    w, _ = watcher(tmp_path, ec2)
+    with pytest.raises(KeyboardInterrupt):
+        w(held())
+    assert log(tmp_path)["outcome"] == "OBSERVATION_FAILED"
 
 
 def test_cleanup_from_log_never_retries_a_delete_the_invocation_already_attempted(
@@ -559,11 +731,37 @@ def test_cleanup_from_log_never_retries_a_delete_the_invocation_already_attempte
     w(held())
     recovery = FakeEc2()
     assert rh.cleanup_from_log(tmp_path / "hook-log.json", recovery) == {
-        "deleted_analysis": False,
-        "deleted_path": False,
+        "deleted_analyses": [],
+        "deleted_paths": [],
+        "recovered_path_ids": [],
     }
     assert recovery.calls == []
     assert log(tmp_path)["cleanup_failures"] == ["delete_analysis", "delete_path"]
+
+
+def test_cleanup_from_log_refuses_a_log_without_a_token(tmp_path: Path) -> None:
+    (tmp_path / "log.json").write_bytes(
+        json.dumps({"contract_id": rh.LOG_CONTRACT_ID, "invocation_token": ""}).encode()
+    )
+    with pytest.raises(ValueError):
+        rh.cleanup_from_log(tmp_path / "log.json", FakeEc2())
+
+
+def test_the_state_repr_carries_no_identifier(tmp_path: Path) -> None:
+    w, _ = watcher(tmp_path, FakeEc2())
+    w(held())
+    text = repr(w.state)
+    assert text == "HookState(outcome='COMPLETED')"
+    for secret in (TASK_ARN, ENI, "nip-", "nia-", w.state.invocation_token):
+        assert secret not in text
+
+
+def test_the_proposed_evidence_is_marked_unattested(tmp_path: Path) -> None:
+    w, _ = watcher(tmp_path, FakeEc2())
+    w(held())
+    doc = log(tmp_path)
+    assert doc["evidence_is_owner_attested"] is False
+    assert doc["proposed_evidence"]["contract_id"] == "kalpamani-reachability-evidence/v1"
 
 
 def test_cleanup_from_log_refuses_a_foreign_document(tmp_path: Path) -> None:
@@ -578,9 +776,11 @@ def test_the_log_never_carries_more_than_the_closed_fields(tmp_path: Path) -> No
     assert set(log(tmp_path)) == {
         "contract_id",
         "schema_version",
+        "invocation_token",
         "outcome",
         "reason",
         "task_arn",
+        "held_observed_at",
         "network_interface_id",
         "path_id",
         "analysis_id",
@@ -590,6 +790,7 @@ def test_the_log_never_carries_more_than_the_closed_fields(tmp_path: Path) -> No
         "raw_analysis",
         "proposed_evidence",
         "evidence_parses",
+        "evidence_is_owner_attested",
         "cleanup_failures",
         "counts",
         "events",
