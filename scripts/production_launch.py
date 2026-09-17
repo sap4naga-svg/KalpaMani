@@ -763,8 +763,14 @@ def execute_launch(
     sleep: Callable[[float], None],
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
+    while_running: Callable[[Any], None] | None = None,
 ) -> LaunchResult:
     """The authorized branch, after the reservation: two bootstraps, one launch, the records.
+
+    ``while_running`` is handed to the launcher unchanged (ADR-0045 s.12): it is admitted
+    for a released permission-probe or build verification launch alone, and for any
+    other launch the tool refuses before its first bootstrap -- ``refused_arguments`` --
+    rather than letting the launcher raise.
 
     The human bootstrap runs under the actor's human profile and again under its
     launcher profile, each proving its own identity against the same private binding
@@ -782,12 +788,20 @@ def execute_launch(
     )
     from kalpamani.data.production.sharadar.inputs import input_digest
     from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
-    from kalpamani.data.production.sharadar.launcher import LaunchAdapters, launch_authorized_run
+    from kalpamani.data.production.sharadar.launcher import (
+        LaunchAdapters,
+        admits_while_running,
+        launch_authorized_run,
+    )
     from kalpamani.data.production.sharadar.outcomes import LaunchOutcome
     from kalpamani.data.production.sharadar.parameters import SsmParameterAdapter
     from kalpamani.data.production.sharadar.runner import HumanBootstrapOutcome, human_bootstrap
     from kalpamani.data.production.sharadar.vocabulary import IdentityPath, constants_for
 
+    if while_running is not None and not admits_while_running(
+        prepared.compiled, prepared.authorization, prepared.specification.release_mode
+    ):
+        raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     actor = prepared.actor
     constants = constants_for(actor)
     profile_of = {
@@ -848,6 +862,7 @@ def execute_launch(
         monotonic=monotonic,
         sleep=sleep,
         release_mode=prepared.specification.release_mode,
+        while_running=while_running,
     )
     recorded_at = now()
 
@@ -1529,6 +1544,7 @@ def main(
     sleep: Callable[[float], None] | None = None,
     root_source: Callable[[], Path] | None = None,
     security_of: Callable[[Path], Any] | None = None,
+    while_running: Callable[[Any], None] | None = None,
 ) -> int:
     """Prepare offline; launch only with the flag and an authorization naming this specification.
 
@@ -1607,6 +1623,7 @@ def main(
             sleep=sleep if sleep is not None else time.sleep,
             root_source=root_source,
             security_of=security_of,
+            while_running=while_running,
         )
     except LaunchRefusalError as refusal:
         _emit([SENTENCES[refusal.key]])

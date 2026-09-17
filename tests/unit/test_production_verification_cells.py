@@ -1857,3 +1857,18 @@ def test_negative_evidence_is_recovered_offline_after_an_interrupted_completion(
     )
     for canary in (*CANARIES, identity):
         assert canary not in out
+
+
+def test_the_while_running_hook_is_the_build_bootstrap_cell_s_alone() -> None:
+    """ADR-0045 s.12: the runner hands the hook to exactly one cell."""
+    from kalpamani.data.production.sharadar.verification_cells import CELL_BY_ID
+
+    def hook(_held: object) -> None:
+        return None
+
+    assert runner.HOOK_CELL_ID == "R1-BLD-BOOTSTRAP"
+    assert runner.while_running_for(CELL_BY_ID["R1-BLD-BOOTSTRAP"], hook) is hook
+    assert runner.while_running_for(CELL_BY_ID["R1-BLD-BOOTSTRAP"], None) is None
+    for cell_id, cell in CELL_BY_ID.items():
+        if cell_id != "R1-BLD-BOOTSTRAP":
+            assert runner.while_running_for(cell, hook) is None, cell_id

@@ -1732,3 +1732,35 @@ class TestIsolationVerdict:
             str(scenario.verification_configuration),
         ]
         assert scenario.mode(*argv) == launch.EXIT_REFUSED_RECORDS
+
+
+# ---------------------------------------------------------------------------
+# The while-running hook through the tool (ADR-0045 s.12)
+# ---------------------------------------------------------------------------
+
+
+def test_the_hook_rides_a_build_verification_launch_and_is_refused_elsewhere_before_any_client(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[str] = []
+
+    def hook(held: Any) -> None:
+        seen.append(held.task_arn)
+
+    build = _Scenario(tmp_path / "b", actor=BLD, kind="verification", exit_code=18)
+    build.register_targets()
+    build.authorize()
+    assert build.run(while_running=hook) == launch.EXIT_LAUNCH_TERMINAL
+    assert len(build.ecs.names("run_task")) == 1 and len(seen) == 1
+    assert seen[0].startswith("arn:aws:ecs:") and ":task/" in seen[0]
+    # Every other launch refuses the hook before its first bootstrap: no client, no
+    # reservation, the refusal sentence -- the launcher's own ValueError is never reached.
+    for scenario in (
+        _Scenario(tmp_path / "a", actor=ACQ, kind="verification", exit_code=18),
+        _Scenario(tmp_path / "p", actor=BLD),
+    ):
+        scenario.register_targets()
+        scenario.authorize()
+        assert scenario.run(while_running=hook) == launch.EXIT_REFUSED_ARGUMENTS
+        assert capsys.readouterr().out.strip().endswith(launch.SENTENCES["refused_arguments"])
+        assert scenario.clients.constructions == [] and len(seen) == 1
