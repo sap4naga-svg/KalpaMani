@@ -113,6 +113,12 @@ class ObservedClass(StrEnum):
     NETWORK_FAILURE = "NETWORK_FAILURE"
     AMBIGUOUS = "AMBIGUOUS"
     NOT_EXERCISED = "NOT_EXERCISED"
+    #: The service reported that the addressed resource does not exist (ECS's documented
+    #: ``TaskDefinition not found.`` / ``ClusterNotFoundException``): a validation answer
+    #: before any authorization answer and before any task -- never a denial, never a
+    #: success. Emitted by the permission-subcell classifier only; the S3 classifier
+    #: below never produces it (an S3 absence is ``NOT_FOUND_404`` / ``NO_SUCH_BUCKET``).
+    TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
 
 
 class R3Result(StrEnum):
