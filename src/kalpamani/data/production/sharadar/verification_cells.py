@@ -173,7 +173,9 @@ class CellDefinition:
 
 
 _LAUNCH_TOOL: Final = (
-    "scripts/production_launch.py -- one prepared specification, one identity, one authorization"
+    "scripts/production_verification_cells.py --prepare-cell / --execute-cell / --complete-cell:"
+    " the launch tool once, through the cell runner -- one prepared specification, one"
+    " identity, one authorization; a launch made outside the runner is not attributed"
 )
 _NEGATIVE: Final = (
     "scripts/production_verification_cells.py --prepare-cell / --execute-cell / --complete-cell: "
@@ -264,7 +266,10 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
         ),
         depends_on=("R1-BLD-BOOTSTRAP",),
         authorization="none beyond the launch's; the owner supplies the transcription (D-16)",
-        execution="scripts/production_launch.py --isolation-verdict on the cell's launch record",
+        execution=(
+            "scripts/production_verification_cells.py --verdict-cell R2-BLD-ISOLATION on the"
+            " cell's launch record (the launch tool's --isolation-verdict, through the runner)"
+        ),
     ),
     *(
         CellDefinition(

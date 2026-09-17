@@ -296,6 +296,56 @@ class TestBuildInput:
                     now=NOW,
                 )
 
+    def test_a_build_verification_input_may_name_no_run_and_a_production_one_may_not(
+        self,
+    ) -> None:
+        """ADR-0045 s.11: a build VERIFICATION launch is materialized over an empty run
+        set from a ledger with no acquisition at all; a PRODUCTION launch over the same
+        ledger is refused, and so is any unverified row named for either kind."""
+        from kalpamani.data.production.sharadar.documents import decode_document
+        from kalpamani.data.production.sharadar.inputs import InputError, ledger_digest
+
+        # No acquisition ever ran: the ledger holds one verification row only.
+        ledger = _ledger(ledger_row(VERIFY_ID, kind="verification", outcome="VERIFIED"))
+        raw = lr.materialize_build_input(
+            ledger,
+            identity="verify-" + BUILD_ID,
+            kind=lr.LaunchKind.VERIFICATION,
+            run_identities=[],
+            now=NOW,
+        )
+        document = decode_document(raw, max_bytes=8 * 1024)
+        assert document["runs"] == [] and document["ledger_digest"] == ledger_digest([])
+        with pytest.raises(InputError):
+            parse_build_input(document, now=NOW)  # the production parser still refuses
+        assert parse_build_input(document, now=NOW, verification_only=True).runs == ()
+        # The production kind over the same ledger: refused, empty or not.
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.materialize_build_input(
+                ledger,
+                identity=BUILD_ID,
+                kind=lr.LaunchKind.PRODUCTION,
+                run_identities=[],
+                now=NOW,
+            )
+        with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
+            lr.materialize_build_input(
+                ledger,
+                identity=BUILD_ID,
+                kind=lr.LaunchKind.PRODUCTION,
+                run_identities=[VERIFY_ID],
+                now=NOW,
+            )
+        # A verification launch that DOES name a run still needs a buildable one.
+        with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
+            lr.materialize_build_input(
+                ledger,
+                identity="verify-" + BUILD_ID,
+                kind=lr.LaunchKind.VERIFICATION,
+                run_identities=[VERIFY_ID],
+                now=NOW,
+            )
+
     def test_duplicates_empties_and_the_ceiling_are_refused(self) -> None:
         ledger = _ledger(ledger_row(RUN_ID))
         with _refuses(lr.LaunchRecordDefect.IDENTITY_DUPLICATE):

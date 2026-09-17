@@ -1076,3 +1076,19 @@ launch; no receipt collected; no log read; no image; no plan or apply; no variab
 granted; every owner value MISSING; the bucket-policy transition (G-14), the control principal's ECS
 actions and the deferred `logs:GetLogEvents` delta for the actor launchers unchanged. **G2 OPEN · CONTROL
 DEFERRED · Phase 3 NOT COMPLETE · live trading HARD-DISABLED.**
+
+## 16. The build-verification prerequisite cycle (2026-09-17) — ADR-0045 §11 PROPOSED
+
+`R1-BLD-BOOTSTRAP` could not be prepared: the build input admitted only a `RECEIPT_VERIFIED` `COMPLETED` production
+acquisition row, none exists before S10a, and S10a's prerequisite reads "S9 verified" (§4.3). ADR-0045 §11 (proposed)
+lets a verification-only build launch carry an empty run set with zero data processing; the production build's
+requirement is unchanged and held by regressions. **Deployment impact if accepted:** the build-verify image must be
+rebuilt from a release containing the amendment (the `21fa654e` image would refuse the empty input), the
+`kalpamani-research-build-verify` task definition replaced (revision 2) with the build launcher policy updated, and the
+launch-inputs registration re-issued (earlier permission records HISTORICAL). No other image needs rebuilding. Until
+then the build half of S9 stays unpreparable. **Procedure, standing from this date: every S9 cell is prepared and
+executed through `scripts/production_verification_cells.py` (`--prepare-cell` / `--execute-cell` / `--complete-cell` /
+`--verdict-cell`), never through `production_launch.py` directly** — the cell runner attributes a launch to its cell
+only through its own preparation record, and a launch made outside it, however well evidenced, reads `UNEXECUTED`
+in the matrix (the 2026-09-17 acquisition bootstrap launch, `verify-acq-20260917T005249Z-76b22185`, is such a
+launch: receipt-verified in the ledger, not attributed, preserved as is).

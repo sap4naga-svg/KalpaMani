@@ -1149,6 +1149,31 @@ class TestPublication:
 
 
 class TestBootstrapAndCompatibility:
+    def test_an_empty_run_set_never_enters_the_production_processing_path(self) -> None:
+        """ADR-0045 s.11: the empty run set a verification-only launch may carry is
+        refused at the production build's input stage -- ``NO_RUNS`` -- before any
+        release read, locator read or write. Verification input cannot become a build."""
+        from fixtures.production_build import BUILD_NOW
+        from kalpamani.data.production.sharadar.documents import decode_document
+        from kalpamani.data.production.sharadar.inputs import InputError, parse_build_input
+        from kalpamani.data.production.sharadar.outcomes import RunnerOutcome
+        from kalpamani.data.production.sharadar.runner import RunnerStage
+
+        store = populated_store()
+        scenario = BuildScenario(store, runs=())
+        report = scenario.run()
+        assert report.status is bp.BuildStatus.REFUSED_BOOTSTRAP
+        assert report.bootstrap.outcome is RunnerOutcome.REFUSED_INPUT
+        assert report.bootstrap.stage is RunnerStage.INPUT
+        assert report.counts.data_plane_operations == 0
+        assert scenario.data_plane_calls() == (0, 0)
+        # The same bytes parse only on the verification-only path.
+        document = decode_document(scenario.input_bytes, max_bytes=8 * 1024)
+        with pytest.raises(InputError):
+            parse_build_input(document, now=BUILD_NOW)
+        admitted = parse_build_input(document, now=BUILD_NOW, verification_only=True)
+        assert admitted.runs == ()
+
     def test_no_release_means_no_data_plane_operation(self) -> None:
         store = populated_store()
         scenario = BuildScenario(store, release=False)

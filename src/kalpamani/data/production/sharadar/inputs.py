@@ -539,8 +539,16 @@ class BuildInput:
         return None
 
 
-def parse_build_input(document: object, *, now: datetime) -> BuildInput:
+def parse_build_input(
+    document: object, *, now: datetime, verification_only: bool = False
+) -> BuildInput:
     """Validate an already-decoded build input. **Reads nothing.**
+
+    ``verification_only`` (ADR-0045 s.11): a verification-only build launch -- the
+    ``kalpamani-research-build-verify`` entry, which terminates at the release barrier
+    and processes nothing -- may carry an **empty** run set, because it reads no run. A
+    production build never may: ``NO_RUNS`` stays the refusal, so an input cut for a
+    verification launch cannot enter the production processing path.
 
     Raises:
         InputError: one closed :class:`InputDefect`; never a value.
@@ -553,7 +561,7 @@ def parse_build_input(document: object, *, now: datetime) -> BuildInput:
     raw_rows = document["runs"]
     if type(raw_rows) is not list:
         raise _refuse(InputDefect.FIELD_MALFORMED) from None
-    if not raw_rows:
+    if not raw_rows and not verification_only:
         raise _refuse(InputDefect.NO_RUNS) from None
     if len(raw_rows) > MAX_BUILD_RUNS:
         raise _refuse(InputDefect.TOO_MANY_RUNS) from None
