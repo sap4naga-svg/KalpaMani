@@ -1286,7 +1286,14 @@ def parse_specification(raw: object) -> LaunchSpecification:
         canonical_workload = {"slice": covered.canonical(), "plan_digest": expected}
     else:
         runs = workload.get("runs")
-        if set(workload) != {"runs"} or type(runs) is not list or not runs:
+        # ADR-0045 s.11: the empty run set is the build VERIFICATION launch's workload
+        # (:func:`build_specification` admits it for that kind alone); a production
+        # launch over no run stays malformed.
+        if (
+            set(workload) != {"runs"}
+            or type(runs) is not list
+            or (not runs and kind is not LaunchKind.VERIFICATION)
+        ):
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
         seen: set[str] = set()
         canonical_runs: list[dict[str, Any]] = []

@@ -1003,10 +1003,42 @@ class TestSpecification:
         for canary in CANARIES:
             assert canary not in repr(specification)
 
+    # ---------------------------------------------------------------------------
+    # Provisional rows, the launch record, and completion
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Provisional rows, the launch record, and completion
-# ---------------------------------------------------------------------------
+    def test_a_build_verification_specification_over_the_empty_run_set_round_trips(
+        self,
+    ) -> None:
+        """ADR-0045 s.11: the empty run set is the workload of a build VERIFICATION
+        launch, and the accepted parser must admit what the builder wrote -- a
+        specification the reservation store could not read back would strand the
+        launch after its reservation (the readiness S9 R1-BLD-BOOTSTRAP finding)."""
+        from kalpamani.data.production.sharadar import launch_store as ls
+
+        specification = specification_for(
+            actor=BLD, kind="verification", identity="verify-" + BUILD_ID, run_identities=[]
+        )
+        document = specification.document()
+        assert document["workload"] == {"runs": []}
+        parsed = lr.parse_specification(encode(document))
+        assert parsed.digest == specification.digest and parsed.workload == {"runs": []}
+        # ... and the reservation the launch tool writes over it reads back bound.
+        reservation = ls.Reservation(
+            identity="verify-" + BUILD_ID,
+            actor=BLD,
+            kind=lr.LaunchKind.VERIFICATION,
+            specification=specification,
+            reserved_at=NOW,
+        )
+        assert ls.parse_reservation(encode(reservation.document())) == reservation
+        # A PRODUCTION build over no run stays malformed, builder and parser alike.
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            specification_for(actor=BLD, kind="production", identity=BUILD_ID, run_identities=[])
+        production = specification_for(actor=BLD, kind="production", identity=BUILD_ID).document()
+        production["workload"] = {"runs": []}
+        with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
+            lr.parse_specification(encode(production))
 
 
 class TestProvisionalOutcome:
