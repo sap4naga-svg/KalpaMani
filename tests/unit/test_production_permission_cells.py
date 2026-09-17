@@ -2952,3 +2952,60 @@ class TestBoto3Adapter:
 
         transport.script = [ReadTimeoutError(endpoint_url="https://synthetic")]
         assert r3.classify(adapter.list_objects(BUCKET)) is r3.ObservedClass.TIMEOUT
+
+
+class TestTargetNotFound:
+    """Batch-1 run 4, row 34 (2026-09-16): ECS answered the launcher's ``RunTask`` on a revision
+    that does not exist with ``ClientException: TaskDefinition not found.`` -- a validation
+    error before any task, not an authorization answer. It was ``AMBIGUOUS`` (a subcell decided
+    nothing, correctly) and, as any unknown answer, ``possibly_started`` -- a launch the cleanup
+    could never settle. The answer ECS documents for a missing definition or cluster is now its
+    own closed class: never a denial, never a success, and no launch to discover."""
+
+    NOT_FOUND_DEFINITION = r3.Observation(
+        status=400, code="ClientException", message="TaskDefinition not found."
+    )
+    NOT_FOUND_CLUSTER = r3.Observation(
+        status=400, code="ClusterNotFoundException", message="Cluster not found."
+    )
+
+    def test_the_documented_missing_target_answers_are_one_closed_class(self) -> None:
+        assert pc.classify(self.NOT_FOUND_DEFINITION) is pc.ObservedClass.TARGET_NOT_FOUND
+        assert pc.classify(self.NOT_FOUND_CLUSTER) is pc.ObservedClass.TARGET_NOT_FOUND
+        # The exact documented message only: any other ClientException stays unknown.
+        other = r3.Observation(
+            status=400, code="ClientException", message="TaskDefinition is inactive."
+        )
+        assert pc.classify(other) is pc.ObservedClass.AMBIGUOUS
+        # And the S3 classifier is untouched: it never emits the class.
+        assert r3.classify(self.NOT_FOUND_DEFINITION) is pc.ObservedClass.AMBIGUOUS
+        s3_absence = r3.Observation(status=404, code="NoSuchKey")
+        assert r3.classify(s3_absence) is pc.ObservedClass.NOT_FOUND_404
+
+    def test_a_missing_target_is_never_a_denial_and_never_a_success(self) -> None:
+        for subcell_id in (
+            "R6-ACQ-RUN-OTHER-REVISION",
+            "R6-BLD-RUN-OTHER-CLUSTER",
+            "R4-PUT-PAYLOAD-HUMAN",
+        ):
+            cell = pc.subcell(subcell_id)
+            assert pc.decide(cell, pc.ObservedClass.TARGET_NOT_FOUND) is pc.SubcellOutcome.UNDECIDED
+        # The denial classes are unchanged: an access denial on an existing target still matches.
+        denied = r3.Observation(status=400, code="AccessDeniedException", message="not authorized")
+        assert pc.classify(denied) is pc.ObservedClass.DENIED_OTHER
+
+    def test_a_missing_target_started_nothing_so_the_cleanup_has_no_launch_to_settle(self) -> None:
+        cell = pc.subcell("R6-ACQ-RUN-OTHER-REVISION")
+        client = FakePermissionClient(self.NOT_FOUND_DEFINITION)
+        record = _run(cell, client)
+        assert record.observed is pc.ObservedClass.TARGET_NOT_FOUND
+        assert record.outcome is pc.SubcellOutcome.UNDECIDED
+        assert record.started_task_ids == () and not record.possibly_started
+        assert not record.launch_open
+        assert [c[0] for c in client.calls] == ["run_task"]
+        assert pc.parse_permission_record(canonical_bytes(record.document())) == record
+        # A record cannot claim a possibly started launch its class rules out.
+        document = record.document()
+        document["possibly_started"] = True
+        with pytest.raises(ValueError):
+            pc.parse_permission_record(canonical_bytes(document))

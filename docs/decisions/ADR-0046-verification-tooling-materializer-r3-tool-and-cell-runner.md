@@ -103,7 +103,8 @@ counts, and the record digest **only** when the result is `VERIFIED` (readiness 
 `NOT_FOUND_404`, `NO_SUCH_UPLOAD`, `DENIED_RESOURCE_POLICY` (a `403` carrying the documented *explicit
 deny in a resource-based policy* context), `DENIED_IDENTITY_POLICY`, `DENIED_OTHER`,
 `NOT_IMPLEMENTED_501`, `AUTHENTICATION_FAILURE`, `NO_SUCH_BUCKET`, `THROTTLED`, `TIMEOUT`,
-`NETWORK_FAILURE`, `AMBIGUOUS`, `NOT_EXERCISED`. Only `DENIED_RESOURCE_POLICY` satisfies a negative
+`NETWORK_FAILURE`, `AMBIGUOUS`, `NOT_EXERCISED`, and — added 2026-09-17 for the permission subcells of
+ADR-0047, never emitted by the R-3 classifier — `TARGET_NOT_FOUND`. Only `DENIED_RESOURCE_POLICY` satisfies a negative
 row (row 5 also admits the documented `501`); an authentication failure, a missing bucket, a throttle,
 a timeout, an identity-based or context-less denial and anything unrecognised fail the row. The
 message text, which names the caller ARN, is classified and dropped.
@@ -281,3 +282,21 @@ Terraform plan or apply, **no** image build or publication, **no** IAM or bucket
 tool refuses by default; each authorized branch is opened by its own flag under its own written
 authorization; none has run against AWS. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3 stays NOT
 COMPLETE, live trading stays HARD-DISABLED.**
+
+## Vocabulary addition (2026-09-17) — `TARGET_NOT_FOUND`
+
+One member was added to the closed `ObservedClass` this decision fixed, and nothing else here changes. On
+2026-09-16 (permission batch 1, run 4, row 34) the acquisition launcher's `RunTask` on a task-definition
+revision that does not exist was answered by ECS with `ClientException: TaskDefinition not found.` — a
+**target validation failure**: the service reported that the addressed resource does not exist, before any
+authorization answer and before any task. It is **neither a permission denial nor a success**, and the R-3
+classifier reads it as `AMBIGUOUS` (an answer it does not know), which is correct for R-3 and stays so.
+
+`TARGET_NOT_FOUND` names that answer as its own closed class so that a permission record can carry it
+without pretending it decided anything: it is emitted **only** by the ADR-0047 permission-subcell classifier,
+for ECS's exact documented message `TaskDefinition not found.` on a `ClientException` (any other
+`ClientException` message stays `AMBIGUOUS`) and for `ClusterNotFoundException`; the R-3 classifier of this
+decision never produces it, no R-3 row admits it, and no R-3 record is affected. Under ADR-0047 it decides
+nothing (`UNDECIDED` for either expectation) and, because such a request created no task, it is "definitely
+not committed": no launch is recorded as possibly started and the cleanup has nothing to discover. The
+original row-34 record, written before the member existed, is preserved as `AMBIGUOUS` / `UNDECIDED`.

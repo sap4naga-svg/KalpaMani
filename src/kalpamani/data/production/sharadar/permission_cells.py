@@ -1337,17 +1337,34 @@ _SERVICE_DENIAL_CODES: Final[frozenset[str]] = frozenset(
 )
 
 
+#: ECS's documented answers for a ``RunTask`` whose target does not exist: the exact message
+#: of the ``ClientException`` for a missing task definition (any other ``ClientException``
+#: stays unknown), and the code for a missing cluster. Batch-1 run 4, row 34 (2026-09-16):
+#: the launcher's ``RunTask`` on a revision that does not exist was answered by this
+#: validation error before any authorization answer and before any task.
+_TARGET_NOT_FOUND_MESSAGE: Final = "TaskDefinition not found."
+_TARGET_NOT_FOUND_CODES: Final[frozenset[str]] = frozenset({"ClusterNotFoundException"})
+
+
 def classify(observation: Observation) -> ObservedClass:
     """The class of one answer from any service a subcell issues.
 
     The accepted S3 classifier, except that a non-S3 service's documented denial code is
-    a denial (which policy refused is not what a subcell decides). Everything else --
-    an ``InvalidParameterException``, a ``TargetNotConnectedException``, a
+    a denial (which policy refused is not what a subcell decides), and ECS's documented
+    missing-target answers are ``TARGET_NOT_FOUND`` (the request addressed nothing: no
+    authorization answer, no task -- never a denial). Everything else -- an
+    ``InvalidParameterException``, a ``TargetNotConnectedException``, a
     ``ResourceNotFoundException`` -- stays what the accepted classifier makes of it, and
     an answer it does not know is ``AMBIGUOUS``: a subcell decided nothing.
     """
-    if observation.transport_failure is None and (observation.code or "") in _SERVICE_DENIAL_CODES:
-        return ObservedClass.DENIED_OTHER
+    if observation.transport_failure is None:
+        code = observation.code or ""
+        if code in _SERVICE_DENIAL_CODES:
+            return ObservedClass.DENIED_OTHER
+        if code in _TARGET_NOT_FOUND_CODES or (
+            code == "ClientException" and (observation.message or "") == _TARGET_NOT_FOUND_MESSAGE
+        ):
+            return ObservedClass.TARGET_NOT_FOUND
     return _classify_s3(observation)
 
 
@@ -1386,6 +1403,7 @@ _UNDECIDED_CLASSES: Final[frozenset[ObservedClass]] = frozenset(
         ObservedClass.NETWORK_FAILURE,
         ObservedClass.AMBIGUOUS,
         ObservedClass.NOT_EXERCISED,
+        ObservedClass.TARGET_NOT_FOUND,
     }
 )
 #: The classes after which a write or a launch definitely did NOT commit: the request was
@@ -1400,6 +1418,7 @@ _DEFINITELY_NOT_COMMITTED: Final[frozenset[ObservedClass]] = frozenset(
         ObservedClass.NOT_FOUND_404,
         ObservedClass.NOT_IMPLEMENTED_501,
         ObservedClass.NO_SUCH_UPLOAD,
+        ObservedClass.TARGET_NOT_FOUND,
     }
 )
 #: The RunTask operations, whose unexpected success is a task to stop.
