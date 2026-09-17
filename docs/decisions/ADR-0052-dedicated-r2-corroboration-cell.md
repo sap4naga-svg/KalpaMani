@@ -13,6 +13,21 @@ beside it. **Acceptance authorizes no execution** (§5): no launch, no path, no 
 collection, no reservation, no D-16 attestation, no verdict, no rerun of any PASSED cell, no permission
 batch, no IAM, Terraform, tfvars, registration or image change, no acquisition.
 
+**The condition above has since been satisfied.** **PR #126 merged** — merged **2026-09-17T18:53:23Z**, merge commit
+**`01f77a10a2341b1d1d99a7fe0024b104563d692c`**, ordered parents **`d5407d8a84538827730e576240e9ec0023997671`** (the PR #125 merge,
+which carried the corrected watcher request shape) then **`a489f13f277b12109af5b792c6616f7327be495d`** (the reviewed head), with a
+**merge tree identical to the reviewed pull-request head tree** (`a207f4146dba274e8294f87bbe26f44b4ee9ee7f`). ADR-0052 is therefore
+**ACCEPTED / IN FORCE** exactly as the clause above states — the cell of §2.1, the re-attachment of §2.2, the rebinding refusal of §2.3
+and the evidence rules of §2.4, effective together with the offline tooling change merged beside it, and nothing else. While the pull
+request was open it was proposed and carried no authority — true then, and not rewritten. **The owner's acceptance (2026-09-17) takes
+this design as the governed execution vehicle for completing build-isolation verification and waives, weakens and marks nothing**:
+R-2 still requires a successful dedicated corroboration launch, exact task/interface attribution, an analysis started inside the
+accepted launch window, returned path and analysis evidence matching the accepted destination over TCP port 443,
+`network_path_found = false`, an admitted explanation on a placed component, complete cleanup, the owner's later D-16 attestation and
+the accepted `--verdict-cell R2-BLD-ISOLATION` step. Acceptance authorized no execution; the one execution of the prepared cell is its
+own separate written authorization, and the verdict step another. **This synchronization changed no runtime behaviour, task image,
+compiled configuration, Terraform, IAM or registration**, and it leaves the prepared specification (`b93d656d…`) exactly as prepared.
+
 **Nothing was run to produce this decision.** No AWS call, no STS call, no S3 operation, no image
 built or pulled, no credential retrieved, no provider request, no private input inspected. Every result
 beside this text is a counting fake's, on synthetic temporary files. **Mocked results are not AWS

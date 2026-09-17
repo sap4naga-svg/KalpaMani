@@ -542,7 +542,8 @@ the store, the launcher's report and the guards changed with them, and the examp
 ## 11. Amendment (2026-09-17) — a verification-only build launch may carry an empty run set
 
 **Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; nothing here is
-deployed.** It amends §6's build-input rule in one respect and leaves the production build's requirement
+deployed.** *[Since accepted: PR #120 merged 2026-09-17T02:07:08Z, merge commit `d5349d9516643af4dedddc7ada6af2c06fcb71d8`, ordered parents
+`696749f6…` then `da6742c7…`; effective on that merge — true when written, not rewritten.]* It amends §6's build-input rule in one respect and leaves the production build's requirement
 exactly as it was.
 
 **The cycle it removes.** §6 admits only a `RECEIPT_VERIFIED` `COMPLETED` production acquisition row as a build
@@ -586,7 +587,9 @@ wrong). None of that is authorized by this amendment.
 ## 12. Amendment (2026-09-17) — the launcher's held-task hook is the R-2 corroboration attachment point
 
 **Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; nothing here is
-deployed, and it changes no task image and no compiled configuration.**
+deployed, and it changes no task image and no compiled configuration.** *[Since accepted: PR #121 merged 2026-09-17T12:43:29Z, merge commit `1c707d30bc53d585445822e315a2bfe83a4b7ccc`, ordered parents
+`d5349d95…` then `07af84bb…`; the attachment point named here has since moved to the dedicated cell by §13 / ADR-0052, accepted on the
+merge of PR #126 — true when written, not rewritten.]*
 
 **Why.** §3 admits one Reachability Analyzer analysis as R-2's corroboration, bound by the verdict to the
 launched task's own interface (`SOURCE_MISMATCH` otherwise) and to `[launched_at, recorded_at]`
@@ -623,7 +626,9 @@ compiled configuration carries no field the hook reads. The build-verify image b
 ## 13. Amendment (2026-09-17) — the hook's attachment point is the dedicated `R2-BLD-CORROBORATION` cell
 
 **Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
-task image and no compiled configuration.** Proposed by ADR-0052, and effective with it.
+task image and no compiled configuration.** Proposed by ADR-0052, and effective with it. *[Since accepted: ADR-0052 is ACCEPTED / IN FORCE on the merge of PR #126 — 2026-09-17T18:53:23Z, merge commit
+`01f77a10a2341b1d1d99a7fe0024b104563d692c`, ordered parents `d5407d8a…` then `a489f13f…`, merge tree identical to the reviewed head
+tree — and this section with it; true when written, not rewritten.]*
 
 §12 had the cell runner hand the `while_running` hook to `R1-BLD-BOOTSTRAP`. That cell has since run once
 and PASSED on its receipt, while the hook's path request was refused by the service at parameter

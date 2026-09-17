@@ -286,6 +286,9 @@ COMPLETE, live trading stays HARD-DISABLED.**
 
 ## Vocabulary addition (2026-09-17) — `TARGET_NOT_FOUND`
 
+*[On `main` since PR #118 merged 2026-09-17T00:42:22Z, merge commit `696749f6e8fbc4b6647c76e0d6349650d997dd69`, ordered parents
+`a59ad2c4…` then `f6d0efca…`.]*
+
 One member was added to the closed `ObservedClass` this decision fixed, and nothing else here changes. On
 2026-09-16 (permission batch 1, run 4, row 34) the acquisition launcher's `RunTask` on a task-definition
 revision that does not exist was answered by ECS with `ClientException: TaskDefinition not found.` — a
@@ -305,7 +308,9 @@ original row-34 record, written before the member existed, is preserved as `AMBI
 ## 7. Amendment (2026-09-17) — the dedicated R-2 corroboration cell, and a launched binding is never rebound
 
 **Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open.** Proposed by
-ADR-0052, and effective with it; nothing else in this decision changes.
+ADR-0052, and effective with it; nothing else in this decision changes. *[Since accepted: ADR-0052 is ACCEPTED / IN FORCE on the merge of PR #126 — 2026-09-17T18:53:23Z, merge commit
+`01f77a10a2341b1d1d99a7fe0024b104563d692c`, ordered parents `d5407d8a…` then `a489f13f…`, merge tree identical to the reviewed head
+tree — and this section with it; true when written, not rewritten.]*
 
 §2.3's catalogue gains one runtime-launch cell under R-2, **`R2-BLD-CORROBORATION`** — the build actor,
 the `kalpamani-research-build-verify` entry, prerequisites `R3` and `R1-BLD-BOOTSTRAP` PASSED, executed by
