@@ -59,6 +59,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -246,6 +247,22 @@ def _iso(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def failure_code(error: BaseException) -> str:
+    """The closed, sanitized name of a failure for the journal: the exception class and,
+    for an SDK client error, the service's error code -- never the message, which can
+    carry an ARN, an interface id or an account."""
+    name = type(error).__name__
+    response = getattr(error, "response", None)
+    code = None
+    if isinstance(response, Mapping):
+        inner = response.get("Error")
+        if isinstance(inner, Mapping) and isinstance(inner.get("Code"), str):
+            code = inner["Code"]
+    if code is None or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", code):
+        return name
+    return f"{name}:{code}"
+
+
 def _tag_specification(resource_type: str, token: str) -> list[dict[str, Any]]:
     return [{"ResourceType": resource_type, "Tags": [{"Key": INVOCATION_TAG_KEY, "Value": token}]}]
 
@@ -425,8 +442,10 @@ class ReachabilityWatcher:
         counts.describe_task += 1
         try:
             described = self._describe_task(held.task_arn)
-        except Exception:
-            self._finish(HookOutcome.ATTRIBUTION_REFUSED, "DescribeTasks failed")
+        except Exception as error:
+            self._finish(
+                HookOutcome.ATTRIBUTION_REFUSED, f"DescribeTasks failed: {failure_code(error)}"
+            )
             return
         attachment = described.attachment
         if (
@@ -461,8 +480,11 @@ class ReachabilityWatcher:
             path_id = created["NetworkInsightsPath"]["NetworkInsightsPathId"]
             if type(path_id) is not str:
                 raise TypeError("path id")
-        except Exception:
-            self._finish(HookOutcome.PATH_NOT_CREATED, "CreateNetworkInsightsPath failed")
+        except Exception as error:
+            self._finish(
+                HookOutcome.PATH_NOT_CREATED,
+                f"CreateNetworkInsightsPath failed: {failure_code(error)}",
+            )
             return
         state.path_id = path_id
         self._journal("path_created")
@@ -482,9 +504,10 @@ class ReachabilityWatcher:
                 state.analysis_id = analysis_id
                 state.start_date = _iso(analysis.get("StartDate"))
                 state.status = analysis.get("Status")
-            except Exception:
+            except Exception as error:
                 self._finish(
-                    HookOutcome.ANALYSIS_NOT_STARTED, "StartNetworkInsightsAnalysis failed"
+                    HookOutcome.ANALYSIS_NOT_STARTED,
+                    f"StartNetworkInsightsAnalysis failed: {failure_code(error)}",
                 )
                 return
             self._journal("analysis_started")
@@ -545,9 +568,10 @@ class ReachabilityWatcher:
                 ):
                     raise ValueError("not exactly this analysis")
                 analysis = analyses[0]
-            except Exception:
+            except Exception as error:
                 self._finish(
-                    HookOutcome.OBSERVATION_FAILED, "DescribeNetworkInsightsAnalyses failed"
+                    HookOutcome.OBSERVATION_FAILED,
+                    f"DescribeNetworkInsightsAnalyses failed: {failure_code(error)}",
                 )
                 return None
             state.status = analysis.get("Status")
@@ -581,14 +605,14 @@ class ReachabilityWatcher:
                 self._ec2.delete_network_insights_analysis(
                     NetworkInsightsAnalysisId=state.analysis_id
                 )
-            except Exception:
-                state.cleanup_failures.append("delete_analysis")
+            except Exception as error:
+                state.cleanup_failures.append(f"delete_analysis:{failure_code(error)}")
         if state.path_id is not None and counts.delete_path < MAX_DELETE_PATH:
             counts.delete_path += 1
             try:
                 self._ec2.delete_network_insights_path(NetworkInsightsPathId=state.path_id)
-            except Exception:
-                state.cleanup_failures.append("delete_path")
+            except Exception as error:
+                state.cleanup_failures.append(f"delete_path:{failure_code(error)}")
         self._journal("cleanup_attempted")
 
 
@@ -688,5 +712,6 @@ __all__ = [
     "ReachabilityTarget",
     "ReachabilityWatcher",
     "cleanup_from_log",
+    "failure_code",
     "propose_evidence",
 ]

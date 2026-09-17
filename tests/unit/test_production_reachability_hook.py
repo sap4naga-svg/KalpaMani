@@ -525,9 +525,12 @@ def test_cleanup_failures_are_recorded_beside_a_completed_outcome_never_retried(
     w, _ = watcher(tmp_path, ec2)
     w(held())
     assert w.state.outcome is rh.HookOutcome.COMPLETED
-    assert w.state.cleanup_failures == ["delete_analysis", "delete_path"]
+    assert w.state.cleanup_failures == ["delete_analysis:RuntimeError", "delete_path:RuntimeError"]
     assert ec2.names().count("delete_analysis") == 1 and ec2.names().count("delete_path") == 1
-    assert log(tmp_path)["cleanup_failures"] == ["delete_analysis", "delete_path"]
+    assert log(tmp_path)["cleanup_failures"] == [
+        "delete_analysis:RuntimeError",
+        "delete_path:RuntimeError",
+    ]
 
 
 def test_unparseable_evidence_is_recorded_raw_and_still_cleaned_up(tmp_path: Path) -> None:
@@ -736,7 +739,10 @@ def test_cleanup_from_log_never_retries_a_delete_the_invocation_already_attempte
         "recovered_path_ids": [],
     }
     assert recovery.calls == []
-    assert log(tmp_path)["cleanup_failures"] == ["delete_analysis", "delete_path"]
+    assert log(tmp_path)["cleanup_failures"] == [
+        "delete_analysis:RuntimeError",
+        "delete_path:RuntimeError",
+    ]
 
 
 def test_cleanup_from_log_refuses_a_log_without_a_token(tmp_path: Path) -> None:
@@ -795,3 +801,47 @@ def test_the_log_never_carries_more_than_the_closed_fields(tmp_path: Path) -> No
         "counts",
         "events",
     }
+
+
+class _ClientError(Exception):
+    """An SDK client-error-shaped exception: a ``response`` with ``Error.Code`` and a
+    message that carries what must never reach the journal."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"An error occurred ({code}) on {TASK_ARN} / {ENI}")
+        self.response = {"Error": {"Code": code, "Message": f"about {ENI}"}}
+
+
+def test_a_failed_operation_journals_its_sanitized_failure_code_never_the_message(
+    tmp_path: Path,
+) -> None:
+    """The readiness S9 build-bootstrap finding: a create that failed left only
+    "CreateNetworkInsightsPath failed" in the journal, so its cause could not be told
+    apart. The class name and the service's error code are journaled; the message --
+    which quotes ARNs and interface ids -- never is."""
+
+    class Refusing(FakeEc2):
+        def create_network_insights_path(self, **kwargs: Any) -> Any:
+            self._call("create_path", kwargs)
+            raise _ClientError("UnauthorizedOperation")
+
+    w, _ = watcher(tmp_path, Refusing())
+    w(held())
+    assert w.state.outcome is rh.HookOutcome.PATH_NOT_CREATED
+    assert w.state.reason == "CreateNetworkInsightsPath failed: _ClientError:UnauthorizedOperation"
+    doc = log(tmp_path)
+    assert ENI not in doc["reason"] and "An error occurred" not in json.dumps(doc)
+    assert doc["events"][-1]["event"] == "finished:PATH_NOT_CREATED"
+    assert rh.failure_code(RuntimeError("x")) == "RuntimeError"
+    assert rh.failure_code(_ClientError("bad code with spaces")) == "_ClientError"
+
+
+def test_cleanup_failures_carry_the_sanitized_code(tmp_path: Path) -> None:
+    class Failing(FakeEc2):
+        def delete_network_insights_path(self, **kwargs: Any) -> Any:
+            self._call("delete_path", kwargs)
+            raise _ClientError("DependencyViolation")
+
+    w, _ = watcher(tmp_path, Failing())
+    w(held())
+    assert w.state.cleanup_failures == ["delete_path:_ClientError:DependencyViolation"]
