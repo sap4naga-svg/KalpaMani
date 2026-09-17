@@ -79,6 +79,15 @@ def described(**overrides: Any) -> TaskDescription:
     return TaskDescription(**values)
 
 
+class _ClientError(Exception):
+    """An SDK client-error-shaped exception: a ``response`` with ``Error.Code`` and a
+    message that carries what must never reach the journal."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"An error occurred ({code}) on {TASK_ARN} / {ENI}")
+        self.response = {"Error": {"Code": code, "Message": f"about {ENI}"}}
+
+
 class FakeEc2:
     """Documented response shapes; scripted statuses; counts every call."""
 
@@ -114,10 +123,20 @@ class FakeEc2:
 
     def create_network_insights_path(self, **kwargs: Any) -> Any:
         self._call("create_path", kwargs)
+        # The service's documented refusal (CloudTrail, 2026-09-17T16:09:20Z): a bare
+        # destination address is not a destination; a filter at the source is.
+        if "FilterAtSource" not in kwargs and "Destination" not in kwargs:
+            raise _ClientError("Client.MissingParameter")
+        if "FilterAtSource" in kwargs and ("DestinationPort" in kwargs or "SourceIp" in kwargs):
+            raise _ClientError("InvalidParameterCombination")
         self.path_tags = kwargs.get("TagSpecifications", [{}])[0].get("Tags", [])
+        # the documented NetworkInsightsPath response: the filter and protocol as recorded
         return {
             "NetworkInsightsPath": {
                 "NetworkInsightsPathId": "nip-0123456789abcdef0",
+                "Source": kwargs["Source"],
+                "Protocol": kwargs["Protocol"],
+                "FilterAtSource": dict(kwargs["FilterAtSource"]),
                 "Tags": list(self.path_tags),
             }
         }
@@ -266,9 +285,11 @@ def test_completed_path_proposes_evidence_the_accepted_parser_admits_and_cleans_
     token = s.invocation_token
     assert create == {
         "Source": ENI,
-        "DestinationIp": "198.51.100.7",
-        "DestinationPort": 443,
         "Protocol": "tcp",
+        "FilterAtSource": {
+            "DestinationAddress": "198.51.100.7",
+            "DestinationPortRange": {"FromPort": 443, "ToPort": 443},
+        },
         "ClientToken": f"{token}-path",
         "TagSpecifications": [
             {
@@ -793,6 +814,7 @@ def test_the_log_never_carries_more_than_the_closed_fields(tmp_path: Path) -> No
         "start_date",
         "status",
         "network_path_found",
+        "raw_path",
         "raw_analysis",
         "proposed_evidence",
         "evidence_parses",
@@ -801,15 +823,6 @@ def test_the_log_never_carries_more_than_the_closed_fields(tmp_path: Path) -> No
         "counts",
         "events",
     }
-
-
-class _ClientError(Exception):
-    """An SDK client-error-shaped exception: a ``response`` with ``Error.Code`` and a
-    message that carries what must never reach the journal."""
-
-    def __init__(self, code: str) -> None:
-        super().__init__(f"An error occurred ({code}) on {TASK_ARN} / {ENI}")
-        self.response = {"Error": {"Code": code, "Message": f"about {ENI}"}}
 
 
 def test_a_failed_operation_journals_its_sanitized_failure_code_never_the_message(
@@ -924,3 +937,75 @@ def test_failure_classification_changes_no_bound_ownership_or_recovery(tmp_path:
     # more (read-only; the in-run lookup count is not journaled), deletes nothing that
     # does not carry the token, and never retries the path delete already attempted
     assert [n for n, _ in recovery.calls] == ["describe_analysis"]
+
+
+def test_the_path_request_is_the_shape_the_service_accepts(tmp_path: Path) -> None:
+    """The first live invocation sent the deprecated bare ``DestinationIp`` and was refused
+    ``Client.MissingParameter`` (CloudTrail); the request now scopes the destination at
+    the source -- address and the one port as a range of one -- with the protocol, the
+    source interface, the client token and the tag, and nothing deprecated or combined
+    with the filter. The fake refuses the old shape exactly as the service did."""
+    ec2 = FakeEc2()
+    w, _ = watcher(tmp_path, ec2)
+    w(held())
+    assert w.state.outcome is rh.HookOutcome.COMPLETED
+    create = ec2.calls[0][1]
+    assert set(create) == {
+        "Source",
+        "Protocol",
+        "FilterAtSource",
+        "ClientToken",
+        "TagSpecifications",
+    }
+    assert (
+        "DestinationIp" not in create
+        and "DestinationPort" not in create
+        and "Destination" not in create
+    )
+    assert rh.path_filter("198.51.100.7") == {
+        "DestinationAddress": "198.51.100.7",
+        "DestinationPortRange": {"FromPort": 443, "ToPort": 443},
+    }
+    # (the installed SDK's client-side model admits this shape: checked offline in the
+    # readiness evidence; the test stays SDK-free)
+    # ... and the old shape is what the service refused
+    old = FakeEc2()
+    with pytest.raises(_ClientError):
+        old.create_network_insights_path(
+            Source=ENI,
+            DestinationIp="198.51.100.7",
+            DestinationPort=443,
+            Protocol="tcp",
+            ClientToken="x",
+        )
+
+
+def test_the_proposed_destination_is_transcribed_from_the_path_the_service_returned(
+    tmp_path: Path,
+) -> None:
+    """The D-16 proposal's destination address, port and protocol come from the recorded
+    path (``FilterAtSource`` and ``Protocol``), never from the request; a path recorded
+    without them yields an unparseable proposal rather than an invented destination."""
+    ec2 = FakeEc2()
+    w, _ = watcher(tmp_path, ec2)
+    w(held())
+    assert w.state.proposed_evidence is not None and w.state.raw_path is not None
+    assert w.state.proposed_evidence["destination_ip"] == "198.51.100.7"
+    assert w.state.proposed_evidence["destination_port"] == 443
+    assert w.state.proposed_evidence["protocol"] == "tcp"
+    assert w.state.raw_path["FilterAtSource"]["DestinationAddress"] == "198.51.100.7"
+    assert log(tmp_path)["raw_path"]["NetworkInsightsPathId"] == "nip-0123456789abcdef0"
+
+    class Bare(FakeEc2):
+        def create_network_insights_path(self, **kwargs: Any) -> Any:
+            self._call("create_path", kwargs)
+            self.path_tags = kwargs["TagSpecifications"][0]["Tags"]
+            return {"NetworkInsightsPath": {"NetworkInsightsPathId": "nip-0123456789abcdef0"}}
+
+    (tmp_path / "bare").mkdir()
+    w2, _ = watcher(tmp_path / "bare", Bare())
+    w2(held())
+    assert w2.state.outcome is rh.HookOutcome.EVIDENCE_UNPARSEABLE
+    assert w2.state.proposed_evidence is not None
+    assert w2.state.proposed_evidence["destination_ip"] is None
+    assert w2.state.proposed_evidence["protocol"] is None

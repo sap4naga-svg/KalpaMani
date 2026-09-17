@@ -15,10 +15,11 @@ What it does, in order, and what it refuses:
    task ``RUNNING`` with one attached network interface. Anything else records
    ``ATTRIBUTION_REFUSED`` and touches nothing.
 2. **Path and analysis.** One ``CreateNetworkInsightsPath`` (source = that interface,
-   destination = the compiled address, tcp/443) and one ``StartNetworkInsightsAnalysis``,
-   each carrying the invocation's own token as a client token **and as a tag**, journaled
-   before the call -- so a resource whose creation succeeded but whose identifier never
-   reached the journal is still attributable to this invocation and to nothing else
+   ``FilterAtSource`` = the compiled address and port 443 as a range of one, protocol tcp)
+   and one ``StartNetworkInsightsAnalysis``, each carrying the invocation's own token as a
+   client token **and as a tag**, journaled before the call -- so a resource whose
+   creation succeeded but whose identifier never reached the journal is still attributable
+   to this invocation and to nothing else
    (:func:`cleanup_from_log`). The analysis ``startDate`` is what the API returned, never
    the clock here.
 3. **Bounded wait.** ``DescribeNetworkInsightsAnalyses`` on that analysis at
@@ -192,6 +193,7 @@ class HookState:
     start_date: str | None = None
     status: str | None = None
     network_path_found: bool | None = None
+    raw_path: dict[str, Any] | None = None
     raw_analysis: dict[str, Any] | None = None
     proposed_evidence: dict[str, Any] | None = None
     evidence_parses: bool | None = None
@@ -220,6 +222,7 @@ class HookState:
             "start_date": self.start_date,
             "status": self.status,
             "network_path_found": self.network_path_found,
+            "raw_path": self.raw_path,
             "raw_analysis": self.raw_analysis,
             "proposed_evidence": self.proposed_evidence,
             "evidence_parses": self.evidence_parses,
@@ -279,13 +282,47 @@ def _tagged_with(entry: Mapping[str, Any], token: str) -> bool:
     )
 
 
+def path_filter(destination: str) -> dict[str, Any]:
+    """The ``FilterAtSource`` the watcher's path is created with: the probe destination
+    address and the one probe port as a range of one. The protocol is the request's own
+    ``Protocol``; no source address, no source port range (the task's interface is the
+    source resource), no ``Destination`` resource, no deprecated ``DestinationIp`` /
+    ``DestinationPort``."""
+    return {
+        "DestinationAddress": destination,
+        "DestinationPortRange": {"FromPort": PROBE_PORT, "ToPort": PROBE_PORT},
+    }
+
+
+def _path_destination(path: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    """The destination the service recorded on the path -- ``FilterAtSource``'s address
+    and port range (a range of one), and the path's protocol -- transcribed as found;
+    ``None`` where absent, never the request's own values."""
+    filter_at_source = path.get("FilterAtSource")
+    address = port = None
+    if isinstance(filter_at_source, Mapping):
+        address = filter_at_source.get("DestinationAddress")
+        port_range = filter_at_source.get("DestinationPortRange")
+        if (
+            isinstance(port_range, Mapping)
+            and port_range.get("FromPort") == port_range.get("ToPort")
+            and type(port_range.get("FromPort")) is int
+        ):
+            port = port_range["FromPort"]
+    return address, port, path.get("Protocol")
+
+
 def propose_evidence(
-    *, analysis: Mapping[str, Any], path_id: str, source_interface_id: str, destination_ip: str
+    *, analysis: Mapping[str, Any], path: Mapping[str, Any], source_interface_id: str
 ) -> dict[str, Any]:
     """The ``kalpamani-reachability-evidence/v1`` document proposed from one
-    ``NetworkInsightsAnalysis`` response, field by field from the documented attributes.
-    A proposal: the owner's attestation is a separate act, and the accepted parser decides
-    admission of the attested document."""
+    ``NetworkInsightsAnalysis`` response and the ``NetworkInsightsPath`` the service
+    returned at creation, field by field from the documented attributes -- the
+    destination address, port and protocol from the PATH as recorded, never from the
+    request. A proposal: the owner's attestation is a separate act, and the accepted
+    parser decides admission of the attested document."""
+    destination_ip, destination_port, protocol = _path_destination(path)
+    path_id = path.get("NetworkInsightsPathId")
     explanations: list[dict[str, Any]] = []
     for entry in analysis.get("Explanations") or []:
         if not isinstance(entry, Mapping):
@@ -317,8 +354,8 @@ def propose_evidence(
         "start_date": _iso(analysis.get("StartDate")),
         "source_interface_id": source_interface_id,
         "destination_ip": destination_ip,
-        "destination_port": PROBE_PORT,
-        "protocol": PROBE_PROTOCOL,
+        "destination_port": destination_port,
+        "protocol": protocol,
         "explanations": explanations,
     }
 
@@ -469,17 +506,22 @@ class ReachabilityWatcher:
         counts.create_path += 1
         self._journal("create_path_requested")
         try:
+            # The destination is scoped AT THE SOURCE: the service requires either a
+            # destination resource or ``FilterAtSource.DestinationAddress`` and refuses the
+            # bare (deprecated) ``DestinationIp`` with ``Client.MissingParameter``; with a
+            # filter, ``DestinationPort`` may not be given and the port is the filter's range.
             created = self._ec2.create_network_insights_path(
                 Source=state.network_interface_id,
-                DestinationIp=destination,
-                DestinationPort=PROBE_PORT,
                 Protocol=PROBE_PROTOCOL,
+                FilterAtSource=path_filter(destination),
                 ClientToken=f"{token}-path",
                 TagSpecifications=_tag_specification("network-insights-path", token),
             )
-            path_id = created["NetworkInsightsPath"]["NetworkInsightsPathId"]
+            path = created["NetworkInsightsPath"]
+            path_id = path["NetworkInsightsPathId"]
             if type(path_id) is not str:
                 raise TypeError("path id")
+            state.raw_path = _sanitize(path)
         except Exception as error:
             self._finish(
                 HookOutcome.PATH_NOT_CREATED,
@@ -520,9 +562,8 @@ class ReachabilityWatcher:
             state.start_date = _iso(final.get("StartDate")) or state.start_date
             proposed = propose_evidence(
                 analysis=final,
-                path_id=path_id,
+                path=path,
                 source_interface_id=state.network_interface_id,
-                destination_ip=destination,
             )
             state.proposed_evidence = proposed
             try:
@@ -713,5 +754,6 @@ __all__ = [
     "ReachabilityWatcher",
     "cleanup_from_log",
     "failure_code",
+    "path_filter",
     "propose_evidence",
 ]
