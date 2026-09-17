@@ -849,6 +849,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # and its isolation contracts; the synthetic M0 path merged as PR #112 on 2026-09-16
     # (88053d37...), and slice 3 with its corrections is carried by PR #113.
     ("ADR-0051", "PR #111 merged"),
+    # ADR-0052 merged as PR #126 on 2026-09-17: the dedicated R-2 corroboration cell; the hook
+    # rides it alone; a launched binding is never rebound.
+    ("ADR-0052", "PR #126 merged"),
 )
 
 #: How a current-status row states that its ADR is in force and names the pull

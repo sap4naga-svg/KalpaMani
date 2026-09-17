@@ -36,11 +36,16 @@ PROPOSED: Final = (
 )
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
 CELL: Final = "R2-BLD-CORROBORATION"
+MERGE_COMMIT: Final = "01f77a10a2341b1d1d99a7fe0024b104563d692c"
+APPROVED_HEAD: Final = "a489f13f277b12109af5b792c6616f7327be495d"
 
 
 def test_the_adr_exists_is_proposed_and_authorizes_nothing() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0052-*.md"))] == [ADR.name]
-    assert PROPOSED in ADR_TEXT
+    assert PROPOSED in ADR_TEXT  # the historical clause stays
+    assert "ADR-0052 is therefore ACCEPTED / IN FORCE exactly as the clause above" in ADR_PLAIN
+    assert MERGE_COMMIT in ADR_TEXT and APPROVED_HEAD in ADR_TEXT
+    assert "waives, weakens and marks nothing" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     for phrase in (
         "no launch, no path, no analysis, no receipt collection, no reservation, no D-16",
@@ -96,3 +101,11 @@ def test_the_amended_documents_name_the_cell_and_the_amendment() -> None:
     assert CELL in ADR_0046 and "never rebound" in ADR_0046
     assert CELL in OWNER_INPUTS and "ADR-0052" in OWNER_INPUTS
     assert "owner-attested" in OWNER_INPUTS
+    for name in ("CLAUDE.md", "README.md"):
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        rows = [line for line in text.splitlines() if "[ADR-0052](docs/decisions/" in line]
+        assert len(rows) == 1, name
+        assert "ACCEPTED / IN FORCE" in rows[0] and "PR #126 merged" in rows[0], name
+        assert MERGE_COMMIT in rows[0] and APPROVED_HEAD in rows[0]
+        assert "PRs #115" + chr(0x2013) + "#126" in text  # the en dash the registers use
+        assert "PREPARED, not executed" in rows[0]
