@@ -1009,3 +1009,225 @@ def test_the_proposed_destination_is_transcribed_from_the_path_the_service_retur
     assert w2.state.proposed_evidence is not None
     assert w2.state.proposed_evidence["destination_ip"] is None
     assert w2.state.proposed_evidence["protocol"] is None
+
+
+# ---------------------------------------------------------------------------
+# The plural ``SecurityGroups`` explanation shape (the shape the service returned on the
+# 2026-09-17 corroboration launch)
+# ---------------------------------------------------------------------------
+
+SG = "sg-0123456789abcdef0"
+SUBNET = "subnet-0123456789abcdef0"
+PATH_RETURNED: dict[str, Any] = {
+    "NetworkInsightsPathId": "nip-0123456789abcdef0",
+    "Source": ENI,
+    "Protocol": "tcp",
+    "FilterAtSource": {
+        "DestinationAddress": "198.51.100.7",
+        "DestinationPortRange": {"FromPort": 443, "ToPort": 443},
+    },
+}
+
+
+def _sg_mismatch(groups: Any, **extra: Any) -> dict[str, Any]:
+    """An ``ENI_SG_RULES_MISMATCH`` explanation as the service returns it: the blocking
+    group under the plural ``SecurityGroups`` list beside the interface, the subnet and
+    the VPC it belongs to, with the direction. ``groups is None`` omits the list."""
+    entry: dict[str, Any] = {
+        "ExplanationCode": "ENI_SG_RULES_MISMATCH",
+        "Direction": "egress",
+        "NetworkInterface": {"Id": ENI, "Arn": "arn:aws:ec2:us-east-1:111111111111:eni/" + ENI},
+        "Subnet": {"Id": SUBNET, "Arn": "arn:aws:ec2:us-east-1:111111111111:subnet/" + SUBNET},
+        "Vpc": {"Id": "vpc-0123456789abcdef0"},
+    }
+    if groups is not None:
+        entry["SecurityGroups"] = groups
+    entry.update(extra)
+    return entry
+
+
+def _analysis(*explanations: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "NetworkInsightsAnalysisId": "nia-0123456789abcdef0",
+        "Status": "succeeded",
+        "NetworkPathFound": False,
+        "StartDate": T0,
+        "Explanations": list(explanations),
+    }
+
+
+def _verdict_on(proposal: dict[str, Any]) -> Any:
+    from kalpamani.data.production.sharadar.probe import (
+        ProbeObservation,
+        ProbeResolution,
+        ProbeResult,
+        destination_binding_digest,
+    )
+
+    key = "0" * 64
+    observation = ProbeObservation(
+        resolution=ProbeResolution.RESOLVED_IN_SET,
+        result=ProbeResult.TIMED_OUT,
+        attempts=1,
+        destination_digest=destination_binding_digest(key, "198.51.100.7", 443),
+    )
+    binding = VerdictBinding(
+        binding_key=key,
+        origin_addresses=ORIGIN,
+        network_interface_id=ENI,
+        subnet_id=SUBNET,
+        security_group_ids=frozenset({SG}),
+        launched_at=T0,
+        recorded_at=T0 + timedelta(seconds=60),
+    )
+    evidence = parse_reachability_evidence(json.dumps(proposal).encode())
+    return isolation_verdict(observation, evidence, binding=binding)
+
+
+def test_the_plural_security_groups_shape_transcribes_the_returned_group_as_the_component(
+    tmp_path: Path,
+) -> None:
+    """The exact returned shape: the group comes from ``Explanations[0].SecurityGroups``
+    and is the ``SECURITY_GROUP`` component; the subnet beside it is placement, not the
+    blocking component; nothing in the proposal comes from the request or the binding."""
+    import copy
+
+    group = {"Id": SG, "Arn": "arn:aws:ec2:us-east-1:111111111111:security-group/" + SG}
+    explanation = _sg_mismatch([group])
+    ec2 = FakeEc2(explanations=[copy.deepcopy(explanation)])
+    w, _ = watcher(tmp_path, ec2)
+    w(held())
+    s = w.state
+    assert s.outcome is rh.HookOutcome.COMPLETED and s.evidence_parses is True
+    assert s.proposed_evidence is not None and s.raw_analysis is not None
+    assert s.proposed_evidence["explanations"] == [
+        {
+            "explanation_code": "ENI_SG_RULES_MISMATCH",
+            "component_kind": "SECURITY_GROUP",
+            "component_id": SG,
+            "subnet_id": SUBNET,
+        }
+    ]
+    # The verdict admits it because the returned group is the compiled one -- an equality
+    # the verdict checks itself; the transcription never consulted the binding.
+    verdict = _verdict_on(s.proposed_evidence)
+    assert verdict.verdict.value == "VERIFIED" and verdict.reason.value == "CORROBORATED"
+    # The raw analysis is journaled exactly as returned, and the fixture was not mutated.
+    assert s.raw_analysis["Explanations"][0] == explanation
+    assert log(tmp_path)["raw_analysis"]["Explanations"][0] == explanation
+
+
+def test_a_direct_proposal_from_the_returned_objects_carries_the_plural_group() -> None:
+    """``propose_evidence`` over the returned objects alone -- the offline regeneration
+    path -- transcribes the plural group and leaves the non-admitted explanation
+    component-less; the inputs are not mutated."""
+    import copy
+
+    analysis = _analysis(
+        _sg_mismatch([{"Id": SG}]),
+        {
+            "ExplanationCode": "NO_POSSIBLE_DESTINATION",
+            "Component": {"Id": "vpc-0123456789abcdef0"},
+        },
+    )
+    path = copy.deepcopy(PATH_RETURNED)
+    before = copy.deepcopy((analysis, path))
+    proposal = rh.propose_evidence(analysis=analysis, path=path, source_interface_id=ENI)
+    assert (analysis, path) == before
+    assert proposal["explanations"] == [
+        {
+            "explanation_code": "ENI_SG_RULES_MISMATCH",
+            "component_kind": "SECURITY_GROUP",
+            "component_id": SG,
+            "subnet_id": SUBNET,
+        },
+        {
+            "explanation_code": "NO_POSSIBLE_DESTINATION",
+            "component_kind": None,
+            "component_id": None,
+            "subnet_id": None,
+        },
+    ]
+    verdict = _verdict_on(proposal)
+    assert verdict.verdict.value == "VERIFIED"
+    assert {c.value for c in verdict.blocking_components} == {"SECURITY_GROUP"}
+
+
+@pytest.mark.parametrize(
+    ("groups", "label"),
+    [
+        ([], "empty list"),
+        ([{"Id": SG}, {"Id": "sg-0fedcba9876543210"}], "two groups: ambiguous"),
+        ([{"Arn": "arn:aws:ec2:us-east-1:111111111111:security-group/" + SG}], "no Id"),
+        ([{"Id": 7}], "non-string Id"),
+        ("sg-0123456789abcdef0", "not a list"),
+    ],
+)
+def test_an_empty_ambiguous_or_malformed_plural_list_names_no_component_and_never_verifies(
+    groups: Any, label: str
+) -> None:
+    """The closed document has one component per explanation: nothing is chosen from
+    several, nothing is invented from none, and the subnet beside the list is never
+    promoted to the blocking component. Such a proposal stays INCONCLUSIVE under the
+    accepted rule (UNSUPPORTED_EXPLANATION), never VERIFIED."""
+    entry = _sg_mismatch(None)
+    entry["SecurityGroups"] = groups
+    proposal = rh.propose_evidence(
+        analysis=_analysis(entry), path=PATH_RETURNED, source_interface_id=ENI
+    )
+    assert proposal["explanations"] == [
+        {
+            "explanation_code": "ENI_SG_RULES_MISMATCH",
+            "component_kind": None,
+            "component_id": None,
+            "subnet_id": SUBNET,
+        }
+    ], label
+    verdict = _verdict_on(proposal)
+    assert verdict.verdict.value == "INCONCLUSIVE", label
+    assert verdict.reason.value == "UNSUPPORTED_EXPLANATION", label
+
+
+def test_a_security_group_explanation_without_any_group_object_is_not_a_group_component() -> None:
+    """No ``SecurityGroup`` and no ``SecurityGroups``: the subnet beside the explanation
+    is transcribed as what it is -- a subnet object -- which the accepted rule does not
+    admit for this code, so the verdict stays INCONCLUSIVE."""
+    proposal = rh.propose_evidence(
+        analysis=_analysis(_sg_mismatch(None)), path=PATH_RETURNED, source_interface_id=ENI
+    )
+    assert proposal["explanations"][0]["component_kind"] == "SUBNET"
+    verdict = _verdict_on(proposal)
+    assert verdict.verdict.value == "INCONCLUSIVE"
+    assert verdict.reason.value == "UNSUPPORTED_EXPLANATION"
+
+
+def test_the_singular_security_group_shape_stays_supported() -> None:
+    proposal = rh.propose_evidence(
+        analysis=_analysis(
+            {
+                "ExplanationCode": "SG_HAS_NO_RULES",
+                "SecurityGroup": {"Id": SG},
+                "Subnet": {"Id": SUBNET},
+            }
+        ),
+        path=PATH_RETURNED,
+        source_interface_id=ENI,
+    )
+    assert proposal["explanations"][0]["component_kind"] == "SECURITY_GROUP"
+    assert proposal["explanations"][0]["component_id"] == SG
+    assert _verdict_on(proposal).verdict.value == "VERIFIED"
+
+
+def test_a_returned_group_that_is_not_the_compiled_one_is_outside_the_placement() -> None:
+    """The transcription takes whatever group the service returned; whether it is the
+    compiled group is the verdict's own separate check, and a foreign group reads
+    COMPONENT_OUTSIDE_PLACEMENT -- it is never chosen away in favour of the expected one."""
+    proposal = rh.propose_evidence(
+        analysis=_analysis(_sg_mismatch([{"Id": "sg-0fedcba9876543210"}])),
+        path=PATH_RETURNED,
+        source_interface_id=ENI,
+    )
+    assert proposal["explanations"][0]["component_id"] == "sg-0fedcba9876543210"
+    verdict = _verdict_on(proposal)
+    assert verdict.verdict.value == "INCONCLUSIVE"
+    assert verdict.reason.value == "COMPONENT_OUTSIDE_PLACEMENT"
