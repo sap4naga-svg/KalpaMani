@@ -845,3 +845,82 @@ def test_cleanup_failures_carry_the_sanitized_code(tmp_path: Path) -> None:
     w, _ = watcher(tmp_path, Failing())
     w(held())
     assert w.state.cleanup_failures == ["delete_path:_ClientError:DependencyViolation"]
+
+
+class _TransportError(Exception):
+    """A botocore transport-shaped failure: no ``response`` at all, a message that
+    names the endpoint. Never a service refusal."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f'Connect timeout on endpoint URL: "https://ec2.example.invalid" for {ENI}'
+        )
+
+
+class _ResponseWithoutCodeError(Exception):
+    """A client-error-shaped exception whose response carries no ``Error.Code``."""
+
+    def __init__(self) -> None:
+        super().__init__("malformed")
+        self.response = {"ResponseMetadata": {"HTTPStatusCode": 500}}
+
+
+def test_transport_and_unknown_failures_are_recorded_by_class_alone_never_as_a_refusal(
+    tmp_path: Path,
+) -> None:
+    """A transport failure (no response) and a response without a code keep their
+    class name only: no service code is invented, so a service refusal
+    (``Class:Code``), a transport failure (``Class``) and a parsing failure stay
+    distinguishable in the journal."""
+    assert rh.failure_code(_TransportError()) == "_TransportError"
+    assert rh.failure_code(_ResponseWithoutCodeError()) == "_ResponseWithoutCodeError"
+    assert rh.failure_code(KeyError("NetworkInsightsPathId")) == "KeyError"
+    assert (
+        rh.failure_code(_ClientError("InvalidParameterValue"))
+        == "_ClientError:InvalidParameterValue"
+    )
+
+    class Timing(FakeEc2):
+        def start_network_insights_analysis(self, **kwargs: Any) -> Any:
+            self._call("start_analysis", kwargs)
+            raise _TransportError()
+
+    w, _ = watcher(tmp_path, Timing())
+    w(held())
+    assert w.state.outcome is rh.HookOutcome.ANALYSIS_NOT_STARTED
+    assert w.state.reason == "StartNetworkInsightsAnalysis failed: _TransportError"
+    doc = log(tmp_path)
+    assert "example.invalid" not in json.dumps(doc) and ENI not in doc["reason"]
+
+
+def test_failure_classification_changes_no_bound_ownership_or_recovery(tmp_path: Path) -> None:
+    """The code is a label on the journal: the same operations run in the same order,
+    the same resources are cleaned, and the recovery behaves as before."""
+
+    class Refusing(FakeEc2):
+        def start_network_insights_analysis(self, **kwargs: Any) -> Any:
+            self._call("start_analysis", kwargs)
+            raise _ClientError("UnauthorizedOperation")
+
+    ec2 = Refusing()
+    w, _ = watcher(tmp_path, ec2)
+    w(held())
+    # start raised -> the by-path listing once, no tagged analysis, then the path deleted
+    assert ec2.names() == ["create_path", "start_analysis", "describe_analysis", "delete_path"]
+    assert w.state.counts.document() == {
+        "describe_task": 1,
+        "create_path": 1,
+        "start_analysis": 1,
+        "describe_analysis": 1,
+        "describe_paths": 0,
+        "delete_analysis": 0,
+        "delete_path": 1,
+    }
+    assert w.state.cleanup_failures == []
+    recovery = FakeEc2()
+    result = rh.cleanup_from_log(tmp_path / "hook-log.json", recovery)
+    assert result["deleted_paths"] == [] and result["deleted_analyses"] == []
+    # unchanged by the classification: the recovery lists this invocation's path once
+    # more (read-only; the in-run lookup count is not journaled), deletes nothing that
+    # does not carry the token, and never retries the path delete already attempted
+    assert [n for n, _ in recovery.calls] == ["describe_analysis"]
