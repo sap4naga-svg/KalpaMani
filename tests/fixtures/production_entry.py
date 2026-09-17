@@ -409,6 +409,7 @@ class VerificationHarness:
         at: datetime = RUN_1_AT,
         release: bool = True,
         probe: FakeProbe | None = None,
+        empty_runs: bool = False,
     ) -> None:
         if entry not in (TaskEntry.ACQUISITION_VERIFY, TaskEntry.BUILD_VERIFY):
             raise ValueError("a verification harness runs a verification entry")
@@ -435,7 +436,8 @@ class VerificationHarness:
                 }
             )
         else:
-            rows = [ledger_row(RUN_1, 1, RUN_1_AT, None)]
+            # ADR-0045 s.11: a verification-only build launch may carry no run at all.
+            rows = [] if empty_runs else [ledger_row(RUN_1, 1, RUN_1_AT, None)]
             self.identity = "verify-" + BUILD_ID
             self.input_bytes = encode(
                 build_input_document(

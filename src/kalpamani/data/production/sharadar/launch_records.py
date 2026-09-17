@@ -451,9 +451,17 @@ def materialize_build_input(
     run_identities: list[str],
     now: datetime,
 ) -> bytes:
-    """The build input v1 bytes for one launch over completed, receipt-verified rows only."""
+    """The build input v1 bytes for one launch over completed, receipt-verified rows only.
+
+    A **verification** launch (ADR-0045 s.11) may name no run at all: the verify entry
+    terminates at the release barrier and reads nothing, so its input carries an empty
+    run set and the ledger digest over ``[]``. A production launch must name at least
+    one run, and every run named -- for either kind -- must be a buildable row.
+    """
     admitted = admit_identity(ledger, identity, kind=kind)
-    if type(run_identities) is not list or not run_identities:
+    if type(run_identities) is not list:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    if not run_identities and kind is not LaunchKind.VERIFICATION:
         raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
     if len(run_identities) > MAX_BUILD_RUNS:
         raise _refuse(LaunchRecordDefect.TOO_MANY)
@@ -475,7 +483,7 @@ def materialize_build_input(
         "issued_at": now.isoformat(),
         "expires_at": (now + MAX_INPUT_VALIDITY).isoformat(),
     }
-    parse_build_input(document, now=now)
+    parse_build_input(document, now=now, verification_only=kind is LaunchKind.VERIFICATION)
     return canonical_bytes(document)
 
 
@@ -1411,8 +1419,10 @@ def build_specification(
     else:
         if run_identities is None or slice_document is not None:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
-        if type(run_identities) is not list or not run_identities:
+        if type(run_identities) is not list:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        if not run_identities and kind is not LaunchKind.VERIFICATION:
+            raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)  # ADR-0045 s.11
         if len(set(run_identities)) != len(run_identities):
             raise _refuse(LaunchRecordDefect.IDENTITY_DUPLICATE)
         runs: list[dict[str, Any]] = []

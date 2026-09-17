@@ -538,3 +538,47 @@ corrected in a second cycle:
 The reservation and launch-record contracts changed shape in this cycle as §6 states; the parsers,
 the store, the launcher's report and the guards changed with them, and the examples are unchanged
 (neither document is exemplified).
+
+## 11. Amendment (2026-09-17) — a verification-only build launch may carry an empty run set
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; nothing here is
+deployed.** It amends §6's build-input rule in one respect and leaves the production build's requirement
+exactly as it was.
+
+**The cycle it removes.** §6 admits only a `RECEIPT_VERIFIED` `COMPLETED` production acquisition row as a build
+run identity, and the build input contract refused an empty run set (`NO_RUNS`) for every launch. The build
+verification entry (`kalpamani-research-build-verify`, §2) terminates at the release barrier and reads no run
+— yet its input could not be materialized before an acquisition had completed and been receipt-verified.
+Readiness §4.3 makes "S9 verified" a prerequisite of S10a, so the build half of S9 depended on S10a's evidence
+while S10a depended on S9: a cycle the readiness document did not spell out, established on 2026-09-17 when the
+launch tool's prepare mode refused `R1-BLD-BOOTSTRAP` with `ROW_NOT_BUILDABLE` against a ledger holding only the
+completed acquisition-verification row.
+
+**The amendment.** A build **verification** launch may carry an **empty** run set: the launch tool materializes
+the build input v1 with `runs = []` and the ledger digest over `[]` (for the verification kind only; a production
+launch must still name at least one run), the build verification entry admits it on a `verification_only` path
+of the build input parser that the production entries never take, and the task terminates at the barrier with
+**zero data processing** — the verify entry has no processing path to enter. Every run that **is** named, for
+either kind, must still be a buildable row. The production build (`run_production_build`, the
+`kalpamani-research-build` entry) is unchanged: an empty run set is refused at its input stage (`NO_RUNS`),
+before any release read, locator read or write, and an `EXIT_CODE_ONLY`, `VERIFIED` or halted row is refused
+(`ROW_NOT_BUILDABLE`) as before. **Verification input cannot become a build, and verification cannot enter the
+production processing path.**
+
+**Held by regressions:** a build verification input is materialized from a ledger with no acquisition at all
+and parses only on the verification-only path (`test_production_launch_records`); the production kind over the
+same ledger refuses empty and unverified inputs alike, and a verification launch that names a run still needs a
+buildable one (same); the build verify entry with an empty run set reaches the barrier and terminates
+`VERIFIED_BOOTSTRAP` with zero data-plane, secret and provider operations
+(`test_production_verification_entry`); the production build with the same empty input refuses at the input
+stage with zero data-plane operations (`test_production_build_processing`).
+
+**What it changes in the deployed system, stated.** The task-side parser lives in the image: the build-verify
+image published at release `21fa654e` embeds the pre-amendment parser and would refuse an empty run set
+(`REFUSED_INPUT`, exit 12). So the amendment has **no runtime effect until a build-verify image is built from a
+release that contains it** — S1 (its compiled verification configuration is unchanged: origin addresses only),
+S2, S3, a stage-b-preserving apply that **replaces** the `kalpamani-research-build-verify` task definition (revision
+2) and updates the build launcher's `RunTask` resource, and a launch-inputs registration re-issue, after which
+every earlier permission record reads HISTORICAL under the new registration digest. The acquisition images, the
+production build image and the probe images need no rebuild for this amendment (their parsers are stricter, not
+wrong). None of that is authorized by this amendment.

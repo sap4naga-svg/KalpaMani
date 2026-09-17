@@ -331,7 +331,12 @@ def parse_arguments(argv: Sequence[str]) -> LaunchArguments:
     acquisition = arguments.actor == "acquisition"
     if acquisition and (arguments.slice_path is None or arguments.run_identities):
         raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
-    if not acquisition and (arguments.slice_path is not None or not arguments.run_identities):
+    if not acquisition and (
+        arguments.slice_path is not None
+        # ADR-0045 s.11: a build VERIFICATION launch may name no run; a production
+        # build must name at least one.
+        or (not arguments.run_identities and arguments.kind != "verification")
+    ):
         raise LaunchRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     if arguments.kind == "verification":
         if (

@@ -196,6 +196,23 @@ class TestVerifiedBootstrap:
         else:
             assert receipt.probe is None
 
+    def test_a_build_verification_with_no_run_at_all_reaches_the_barrier(self) -> None:
+        """ADR-0045 s.11: the build verify entry needs no completed acquisition. An input
+        whose run set is empty (ledger digest over ``[]``) is admitted on the
+        verification-only path, the task terminates at the barrier with the same
+        receipt shape and the same zero data-plane counts, and nothing after the
+        barrier runs -- the entry has no processing path to enter."""
+        harness = VerificationHarness(entry=TaskEntry.BUILD_VERIFY, empty_runs=True)
+        receipt = harness.run()
+        assert receipt.outcome is TaskOutcome.VERIFIED_BOOTSTRAP and receipt.exit_code == 18
+        assert receipt.runner is RunnerOutcome.RELEASED
+        assert receipt.counts.data_plane_operations == 0 and receipt.counts.s3_operations == 0
+        assert receipt.counts.secret_retrievals == 0 and receipt.counts.provider_requests == 0
+        assert receipt.counts.parameter_reads == 3 and receipt.counts.identity_calls == 1
+        assert harness.constructions.built == ["ssm", "sts"]
+        verified = pr.collect_and_verify(receipt.render(), expectation=_expectation(harness))
+        assert verified.outcome is TaskOutcome.VERIFIED_BOOTSTRAP and verified.released
+
     @pytest.mark.parametrize("entry", VERIFY_ENTRIES)
     def test_the_receipt_verifies_against_the_launch_record_and_completes_no_run(
         self, entry: TaskEntry

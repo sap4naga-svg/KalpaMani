@@ -179,6 +179,7 @@ def _admit_input(
     now: datetime,
     registry: SpentIdentityRegistry | None,
     probe: bool = False,
+    verification_only: bool = False,
 ) -> tuple[str, AcquisitionInput | BuildInput | PermissionProbeInput, CompiledPlan | None]:
     """The identity, the admitted input and (acquisition) the plan compiled from its slice.
 
@@ -192,7 +193,7 @@ def _admit_input(
     if actor is ProductionActor.ACQUISITION:
         acquisition = parse_acquisition_input(document, now=now, registry=registry)
         return acquisition.run_identity, acquisition, bind_plan(acquisition)
-    build = parse_build_input(document, now=now)
+    build = parse_build_input(document, now=now, verification_only=verification_only)
     return build.build_identity, build, None
 
 
@@ -203,6 +204,7 @@ def run_task_bootstrap(
     adapters: RunnerAdapters,
     registry: SpentIdentityRegistry | None,
     probe: bool = False,
+    verification_only: bool = False,
 ) -> RunnerReport:
     """The task-side sequence through the release barrier; one sanitized report.
 
@@ -252,7 +254,12 @@ def run_task_bootstrap(
         raw_input = adapters.parameters.read_parameter(constants_for(actor).input_parameter)
         digest = input_digest(raw_input)
         identity, admitted, plan = _admit_input(
-            actor, decode_input(raw_input), now=adapters.now(), registry=registry, probe=probe
+            actor,
+            decode_input(raw_input),
+            now=adapters.now(),
+            registry=registry,
+            probe=probe,
+            verification_only=verification_only,
         )
     except (InputError, Exception):
         return RunnerReport(

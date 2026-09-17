@@ -143,6 +143,10 @@ def run_verification_entry(
             compiled=configuration.compiled,
             adapters=adapters,
             registry=None,
+            # ADR-0045 s.11: a verification-only launch may carry an empty build run
+            # set -- it terminates at the barrier and reads no run. The production
+            # entries never pass this, so the same input refuses there.
+            verification_only=True,
         )
     except Exception:
         return TaskReceipt(
