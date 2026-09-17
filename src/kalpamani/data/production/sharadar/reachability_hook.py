@@ -98,14 +98,43 @@ LOG_CONTRACT_ID: Final = "kalpamani-reachability-hook-log/v1"
 #: The tag that names the invocation on every resource it creates.
 INVOCATION_TAG_KEY: Final = "kalpamani:r2-invocation"
 #: The documented explanation component objects and the component kind each names
-#: (https://docs.aws.amazon.com/vpc/latest/reachability/explanation-codes.html).
+#: (https://docs.aws.amazon.com/vpc/latest/reachability/explanation-codes.html). The
+#: service returns a security-group explanation's group either as the singular
+#: ``SecurityGroup`` object or -- for ``ENI_SG_RULES_MISMATCH`` -- as the plural
+#: ``SecurityGroups`` list; both precede the ``Subnet`` the explanation carries as context.
 _COMPONENT_OBJECTS: Final[tuple[tuple[str, str], ...]] = (
     ("SecurityGroup", "SECURITY_GROUP"),
+    ("SecurityGroups", "SECURITY_GROUP"),
     ("Acl", "NETWORK_ACL"),
     ("RouteTable", "ROUTE_TABLE"),
     ("SubnetRouteTable", "ROUTE_TABLE"),
     ("Subnet", "SUBNET"),
 )
+#: The component objects the service returns as a list rather than one object.
+_COMPONENT_LISTS: Final[frozenset[str]] = frozenset({"SecurityGroups"})
+
+
+def _explanation_component(entry: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """The (kind, id) of the component an explanation names, transcribed from the
+    returned objects in documented order. A list-valued object attributes the component
+    only when it holds exactly one entry with a string ``Id``: an empty, malformed or
+    id-less list names no component, and a list of several would need one chosen
+    arbitrarily -- the closed document carries no component for it, and the accepted rule
+    cannot admit it. Once a list-valued object is present the lookup stops there: the
+    ``Subnet`` beside a security-group explanation is its placement, never its blocking
+    component."""
+    for attribute, component_kind in _COMPONENT_OBJECTS:
+        component = entry.get(attribute)
+        if attribute in _COMPONENT_LISTS:
+            if component is None:
+                continue
+            only = component[0] if isinstance(component, list) and len(component) == 1 else None
+            if isinstance(only, Mapping) and isinstance(only.get("Id"), str):
+                return component_kind, only["Id"]
+            return None, None  # absent id, empty, several or malformed: no component
+        if isinstance(component, Mapping) and isinstance(component.get("Id"), str):
+            return component_kind, component["Id"]
+    return None, None
 
 
 class HookOutcome(StrEnum):
@@ -327,13 +356,7 @@ def propose_evidence(
     for entry in analysis.get("Explanations") or []:
         if not isinstance(entry, Mapping):
             continue
-        kind: str | None = None
-        component_id: str | None = None
-        for attribute, component_kind in _COMPONENT_OBJECTS:
-            component = entry.get(attribute)
-            if isinstance(component, Mapping) and isinstance(component.get("Id"), str):
-                kind, component_id = component_kind, component["Id"]
-                break
+        kind, component_id = _explanation_component(entry)
         subnet = entry.get("Subnet")
         subnet_id = subnet.get("Id") if isinstance(subnet, Mapping) else None
         explanations.append(
