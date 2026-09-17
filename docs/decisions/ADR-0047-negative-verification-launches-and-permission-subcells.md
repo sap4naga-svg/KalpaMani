@@ -214,7 +214,9 @@ the operation's success class (`200`, or `204` for a delete); `DENIED` matches a
 whichever policy refused (which policy refused is R-3's question, not these cells'); a timeout, a
 network failure, an authentication failure, a missing bucket, a throttle or an ambiguous answer
 decides nothing — the record reads `UNDECIDED`, the subcell stays unexercised, and **nothing is
-retried**.
+retried**. So does a **target validation failure** (`TARGET_NOT_FOUND`, §11): the service's documented
+answer that the addressed resource does not exist is neither a denial nor a success — a subcell whose
+target does not exist is not a permission test (§3.1), whatever its expectation.
 
 **Unexpected success is a resource, not only an inversion.** A `DENIED` launch whose answer
 returned tasks is stopped **at once** by the same principal — one `StopTask` per returned task, every
@@ -481,3 +483,34 @@ consumed; an unverified pass is preserved for reporting and settles nothing, the
 a verified pass settles the same object or launch again (§3.4, §3.5) — held by object and task cases
 through the public runner beside their verified controls. Counts unchanged at **56 / 6 / 36**; the
 task-role, deletion-role and `ExecuteCommand` cases stay blocked; ADR-0047 stays PROPOSED.
+
+## 11. Correction after batch 1, run 4 (2026-09-17) — target validation failure is its own class
+
+**What happened.** Under the re-issued registration, row 34 (`R6-ACQ-RUN-OTHER-REVISION`) issued the
+acquisition launcher's `RunTask` on the §3.3 derivation "the next revision number" of its verification
+family — a revision that does not exist. ECS answered `ClientException: TaskDefinition not found.` before any
+authorization answer and before any task (established read-only afterwards: the CloudTrail event, correlated
+by time, caller and uniqueness because such events carry no request parameters; and empty RUNNING, PENDING
+and STOPPED listings of the cluster within retention). The classifier of §3.2 knew neither the code nor a
+bare `400`, so the record read `AMBIGUOUS` / `UNDECIDED` — correct, it decided nothing — and, as for every
+unknown answer, `possibly_started`, a launch the cleanup listed by tag, found nothing for, and recorded as
+`launch:<tag>:undiscovered` residue by its own rule that an empty listing proves no absence.
+
+**The correction (code).** `ObservedClass.TARGET_NOT_FOUND` (ADR-0046's vocabulary, extended by one member):
+the service reported that the addressed resource does not exist. The permission classifier emits it for
+ECS's exact documented message `TaskDefinition not found.` on a `ClientException` — any other
+`ClientException` message stays `AMBIGUOUS` — and for `ClusterNotFoundException`; the R-3 classifier never
+emits it. It is an undecided class (never a match for `DENIED` or `ALLOWED`) **and** a definitely-not-committed
+class: a request answered this way created nothing and started nothing, so the record carries no possibly
+started launch, the record contract refuses a document claiming one, and the cleanup has no launch to
+discover. **The distinction is preserved, not collapsed: a target validation failure is neither a permission
+denial nor a success**, and "task definition not found" is never counted as a denial. The row-34 record and
+its cleanup record predate the member and are preserved unchanged; the correction re-classifies nothing.
+
+**What the correction does not decide.** §3.3's derivations for `OTHER_REVISION` ("the next revision
+number"), `OTHER_FAMILY` (a `-verification-other` family) and `OTHER_CLUSTER` (a `-verification-other`
+cluster) name resources that do not exist by construction, and §3.1 already holds that a request against a
+target that does not exist is not a permission test. Those six subcells (three per launcher) therefore
+cannot be decided at L3 by their current targets. Whether they are re-targeted at existing, unpermitted
+resources or blocked with a stated dependency is a separate governance decision, **not made by this
+correction**; until it is made they are not executed, and R-6 is not read as passed.
