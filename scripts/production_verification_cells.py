@@ -598,8 +598,9 @@ def _current_r3_binding() -> Any:
 # ---------------------------------------------------------------------------
 
 
-#: The one cell whose launch may carry a ``while_running`` hook (ADR-0045 s.12).
-HOOK_CELL_ID: Final = "R1-BLD-BOOTSTRAP"
+#: The one cell whose launch may carry a ``while_running`` hook: the dedicated R-2
+#: corroboration launch (ADR-0052, amending ADR-0045 s.12's attachment point).
+HOOK_CELL_ID: Final = "R2-BLD-CORROBORATION"
 
 
 def while_running_for(
@@ -673,6 +674,19 @@ def _cell(cell_id: str | None, kinds: set[vc.CellKind]) -> vc.CellDefinition:
     return cell
 
 
+def _identity_launched(store: Any, identity: str) -> bool:
+    """Whether ``identity`` was ever launched: a reservation beside the ledger or a ledger row."""
+    from kalpamani.data.production.sharadar.launch_store import StoreError
+
+    try:
+        if store.reservation(identity) is not None:
+            return True
+        ledger, _digest = store.read_ledger()
+    except StoreError:
+        return True  # unreadable state is never a licence to rebind
+    return ledger.row(identity) is not None
+
+
 def prepare_cell(
     arguments: argparse.Namespace, launch: Any, store: Any, *, now: datetime, root_source: Any
 ) -> vc.PreparedCell:
@@ -699,6 +713,11 @@ def prepare_cell(
             for other_id, other in existing.items():
                 if other.identity == identity and other_id != cell.cell_id:
                     raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+            # A cell whose bound identity was launched -- reserved beside the ledger or
+            # rowed in it -- is never rebound: its evidence stays what it is (ADR-0052).
+            bound = existing.get(cell.cell_id)
+            if bound is not None and _identity_launched(store, bound.identity):
+                raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
             existing[cell.cell_id] = record
             write_prepared(store, existing)
     except StoreError as error:

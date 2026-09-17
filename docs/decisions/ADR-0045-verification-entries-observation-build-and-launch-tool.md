@@ -619,3 +619,20 @@ runner hands it to `R1-BLD-BOOTSTRAP` alone (`test_production_verification_cells
 compiled configuration carries no field the hook reads. The build-verify image built from release
 `d5349d95` (configuration `da807859…`) stays the image this hook will corroborate.
 
+
+## 13. Amendment (2026-09-17) — the hook's attachment point is the dedicated `R2-BLD-CORROBORATION` cell
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
+task image and no compiled configuration.** Proposed by ADR-0052, and effective with it.
+
+§12 had the cell runner hand the `while_running` hook to `R1-BLD-BOOTSTRAP`. That cell has since run once
+and PASSED on its receipt, while the hook's path request was refused by the service at parameter
+validation (`Client.MissingParameter` — the deprecated `DestinationIp` form; corrected to
+`FilterAtSource.DestinationAddress`, a workstation-only change). Attempting the analysis again under §12 as
+written would mean re-preparing and relaunching a PASSED cell, rebinding its evidence. ADR-0052 instead
+adds a dedicated R-2 runtime-launch cell, `R2-BLD-CORROBORATION`, under its own fresh identity and
+specification, and **the runner hands the hook to that cell alone** — never again to `R1-BLD-BOOTSTRAP`,
+never to the acquisition bootstrap, never to a negative. The launch tool's admission rule (a released build
+verification launch with a `verify-` identity), the launcher's sequence, the `HeldTask` the hook receives
+and the verdict's binding checks are unchanged; `R2-BLD-ISOLATION` is taken on the corroboration launch's
+record. Nothing in §12 other than the named cell is amended.

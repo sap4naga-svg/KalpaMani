@@ -250,6 +250,34 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
         execution=_LAUNCH_TOOL,
     ),
     CellDefinition(
+        cell_id="R2-BLD-CORROBORATION",
+        cell_ref="R-2",
+        kind=CellKind.RUNTIME_LAUNCH,
+        actor=ProductionActor.BUILD,
+        entry=TaskEntry.BUILD_VERIFY,
+        title=(
+            "a dedicated build verification launch carrying the exact-task reachability hook"
+            " (ADR-0052)"
+        ),
+        must_succeed=(
+            "one further launch of the registered build verification revision over the accepted "
+            "empty run set, under a fresh verify- identity and its own specification, with the "
+            "reviewed while_running watcher attached to this cell alone; a matching release; "
+            "receipt VERIFIED_BOOTSTRAP with its probe block; ledger row VERIFIED with "
+            "RECEIPT_VERIFIED evidence; zero S3, secret and provider operations. PASSED here is "
+            "the launch's own success -- the vehicle -- and never the isolation verdict, which "
+            "R2-BLD-ISOLATION derives separately from this launch's record, its receipt and the "
+            "owner-attested analysis"
+        ),
+        must_be_refused=(
+            "the PASSED R1-BLD-BOOTSTRAP cell, its binding, launch record, receipt and reservation "
+            "are never rebound, replaced or rerun for this cell; a spent identity is never reused"
+        ),
+        depends_on=("R3", "R1-BLD-BOOTSTRAP"),
+        authorization="one authorization naming this cell's launch specification digest",
+        execution=_LAUNCH_TOOL,
+    ),
+    CellDefinition(
         cell_id="R2-BLD-ISOLATION",
         cell_ref="R-2",
         kind=CellKind.ISOLATION_VERDICT,
@@ -257,18 +285,21 @@ REQUIRED_CELLS: Final[tuple[CellDefinition, ...]] = (
         entry=TaskEntry.BUILD_VERIFY,
         title="build subnet reaches no provider origin",
         must_succeed=(
-            "the verdict derived from the verified receipt's probe block, the recorded placement "
-            "and one transcribed Reachability Analyzer analysis is VERIFIED"
+            "the verdict derived from the corroboration launch's verified receipt probe block, "
+            "its recorded placement and one owner-attested Reachability Analyzer analysis (D-16) "
+            "bound to that task's interface, destination and window is VERIFIED"
         ),
         must_be_refused=(
             "CONNECTED is FAILED whatever the model says; a non-connection without qualifying "
-            "corroboration stays INCONCLUSIVE"
+            "corroboration -- no attested analysis, a failed one, a source, destination or "
+            "window mismatch, a path found -- stays INCONCLUSIVE"
         ),
-        depends_on=("R1-BLD-BOOTSTRAP",),
+        depends_on=("R2-BLD-CORROBORATION",),
         authorization="none beyond the launch's; the owner supplies the transcription (D-16)",
         execution=(
             "scripts/production_verification_cells.py --verdict-cell R2-BLD-ISOLATION on the"
-            " cell's launch record (the launch tool's --isolation-verdict, through the runner)"
+            " corroboration cell's launch record (the launch tool's --isolation-verdict, through"
+            " the runner)"
         ),
     ),
     *(

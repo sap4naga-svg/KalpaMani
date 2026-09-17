@@ -154,7 +154,8 @@ authorization and how it is executed:
 |---|---|---|
 | `R3` | control R-3 | the R-3 tool's record, named by the launch inputs and attesting to the current declaration |
 | `R1-ACQ-BOOTSTRAP`, `R1-BLD-BOOTSTRAP` | runtime launch | the launch tool: one prepared specification, one `verify-` identity, one authorization naming the digest; `PASSED` only with a `VERIFIED` ledger row of `RECEIPT_VERIFIED` evidence |
-| `R2-BLD-ISOLATION` | isolation verdict | the launch tool's `--isolation-verdict` on the build cell's record; `PASSED` only on `VERIFIED`; `INCONCLUSIVE` without qualifying corroboration; `FAILED` on `CONNECTED` |
+| `R2-BLD-CORROBORATION` | runtime launch | *(added by ADR-0052 — §7)* the launch tool, as the bootstrap cells: one fresh `verify-` identity, its own specification over the accepted empty run set, one authorization; the only cell the runner hands the ADR-0045 §12 hook to; requires `R3` and `R1-BLD-BOOTSTRAP` PASSED; `PASSED` is the launch's own success, never the verdict |
+| `R2-BLD-ISOLATION` | isolation verdict | the launch tool's `--isolation-verdict` on the build cell's record *(since ADR-0052: the corroboration cell's record)*; `PASSED` only on `VERIFIED`; `INCONCLUSIVE` without qualifying corroboration; `FAILED` on `CONNECTED` |
 | `R1-*-NO-RELEASE`, `R1-*-RELEASE-MISMATCH` | negative launch | **BLOCKED** — §4 |
 | `R4-ACQUISITION` … `R9-FOUNDATION-TASK` | permission matrix | not orchestrated: owner-run per readiness S8; a cell decided by simulation only is recorded simulated, never verified |
 
@@ -300,3 +301,29 @@ decision never produces it, no R-3 row admits it, and no R-3 record is affected.
 nothing (`UNDECIDED` for either expectation) and, because such a request created no task, it is "definitely
 not committed": no launch is recorded as possibly started and the cleanup has nothing to discover. The
 original row-34 record, written before the member existed, is preserved as `AMBIGUOUS` / `UNDECIDED`.
+
+## 7. Amendment (2026-09-17) — the dedicated R-2 corroboration cell, and a launched binding is never rebound
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open.** Proposed by
+ADR-0052, and effective with it; nothing else in this decision changes.
+
+§2.3's catalogue gains one runtime-launch cell under R-2, **`R2-BLD-CORROBORATION`** — the build actor,
+the `kalpamani-research-build-verify` entry, prerequisites `R3` and `R1-BLD-BOOTSTRAP` PASSED, executed by
+the launch tool exactly as the bootstrap cells are (a fresh `verify-` identity, its own prepared
+specification over the accepted empty run set with a `NORMAL` release, one authorization naming its
+digest, one launch, the receipt) and the only cell the runner hands ADR-0045 §12's hook to. Its `PASSED`
+is the launch's own success — the vehicle — and never the isolation verdict. **`R2-BLD-ISOLATION` now
+depends on `R2-BLD-CORROBORATION`** rather than on `R1-BLD-BOOTSTRAP`, and is taken on the corroboration
+launch's record and receipt; its rule, its `INCONCLUSIVE` / `FAILED` / `UNBOUND` derivation and its
+resolvable insufficiencies are unchanged.
+
+One rule joins the runner's: **`--prepare-cell` refuses (`refused_cell_state`) a cell whose bound identity
+was launched** — a reservation beside the ledger or a ledger row under that identity — whatever identity is
+offered, and an unreadable store is no licence to rebind. The PASSED `R1-BLD-BOOTSTRAP` cell's binding,
+reservation, launch record, receipt and row therefore stay byte for byte what they are; the corroboration
+is a new binding under a new identity. Why: the S9 build bootstrap ran once and PASSED on its receipt while
+the hook's path request was refused at parameter validation (a request-shape defect since corrected, a
+workstation-only change); a second analysis attempt must not rebind a PASSED cell's evidence to a second
+launch. Held by `test_production_verification_cells.py` (the catalogue, the hook's single cell, the whole
+lifecycle on fakes with the rebinding and reuse refusals) and by this document's governance test.
+
