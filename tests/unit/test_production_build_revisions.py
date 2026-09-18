@@ -46,6 +46,10 @@ from kalpamani.data.production.sharadar import build_processing as bp
 from kalpamani.data.production.sharadar import gold as gd
 from kalpamani.data.production.sharadar import silver as sv
 from kalpamani.data.production.sharadar import universe as uv
+from kalpamani.data.production.sharadar.actions_identity import (
+    ACCEPTED_ACTIONS_SCHEMA_DIGEST,
+    event_identity,
+)
 from kalpamani.data.production.sharadar.inputs import ledger_digest, parse_build_input
 from kalpamani.data.production.sharadar.locator import ProductionLocatorReader
 
@@ -55,7 +59,25 @@ RUN_3: Final = "synthetic-build-source-run-0003"
 RUN_3_AT: Final = datetime(2026, 9, 25, 2, 0, tzinfo=UTC)
 KEY_0901: Final = (ZZAA.security_id, "2026-09-01")
 WIDE: Final = slice_with_stocks_window(2, "2026-09-01/2026-09-14")
-SPLIT_KEY: Final = (ZZAA.security_id, "2026-09-03", "split")
+
+
+#: Under ``sharadar-actions-event-identity/v1`` (ADR-0053 §12) an actions row is keyed
+#: by its resolved security and the SHA-256 of its canonical full row: a changed value
+#: is a distinct event, never a revision of the same key.
+def split_key(value: str) -> tuple[str, str]:
+    row = next(r for r in actions_rows(run=1) if r[1] == "split")
+    fields = {
+        name: (None if cell == "" else cell)
+        for name, cell in zip(ACTIONS_HEADER, (*row[:4], value, *row[5:]), strict=True)
+    }
+    return (
+        ZZAA.security_id,
+        event_identity(fields, schema_digest=ACCEPTED_ACTIONS_SCHEMA_DIGEST),
+    )
+
+
+SPLIT_KEY: Final = split_key("2")
+SPLIT_KEY_3: Final = split_key("3")
 
 Runs = tuple[tuple[str, int, datetime], ...]
 
@@ -329,10 +351,16 @@ class TestRevisionChronology:
         attributes = revisions_of(resolved, "tickers", (ZZAA.security_id,))
         assert [a.row.fields["exchange"] for a in attributes] == ["NYSE", "OTC", "NYSE"]
         assert attributes[2].row.is_return
-        splits = revisions_of(resolved, "actions", SPLIT_KEY)
-        assert [s.row.fields["value"] for s in splits] == ["2", "3", "2"] and splits[
-            2
-        ].row.is_return
+        # actions: value 2 (run 1), value 3 (run 2), value 2 again (run 3) are TWO events
+        # under the full-row identity -- the first re-observed by run 3 (one revision, two
+        # sightings), each gapped by the run that covered its date and did not deliver it.
+        (two,) = revisions_of(resolved, "actions", SPLIT_KEY)
+        (three,) = revisions_of(resolved, "actions", SPLIT_KEY_3)
+        assert two.row.fields["value"] == "2" and three.row.fields["value"] == "3"
+        assert two.row.observation_count == 2 and three.row.observation_count == 1
+        assert not two.row.is_return and two.row.revision_sequence == 0
+        assert two.row.gaps_through(datetime(2026, 9, 30, tzinfo=UTC)) == (RUN_2,)
+        assert three.row.gaps_through(datetime(2026, 9, 30, tzinfo=UTC)) == (RUN_3,)
         # Membership at a cutoff between run 2 and run 3 sees OTC; after run 3, NYSE again.
         sessions = (date(2026, 9, 15),)
         between = uv.build_universe(
@@ -355,21 +383,37 @@ class TestRevisionChronology:
         assert row_between.exclusion_reason is uv.BuildExclusionReason.EXCHANGE
         assert row_after.exclusion_reason is uv.BuildExclusionReason.EXCHANGE
         assert row_between.attribute_revision == attributes[1].row.content_sha256
-        # The split factor follows the chronology too: 2, 3, 2.
-        factors = []
+        # The split events current at each cutoff: one, then both -- and a bar that would
+        # consume a gapped event is withheld by the build rather than served on either.
+        current: list[list[str]] = []
         for as_of in (
             datetime(2026, 9, 10, tzinfo=UTC),
             datetime(2026, 9, 20, tzinfo=UTC),
             datetime(2026, 9, 30, tzinfo=UTC),
         ):
-            actions = list(av.select_current(resolved.actions, cutoff=as_of).values())
-            bar = av.select_current(resolved.stocks, cutoff=as_of)[(ZZAA.security_id, "2026-09-03")]
-            adjusted = gd.adjust_bar(
-                bar, [a for a in actions if a.row.security_id == ZZAA.security_id], as_of=as_of
-            )
-            assert adjusted is not None
-            factors.append(adjusted["factor"])
-        assert factors == ["2", "3", "2"]
+            actions = [
+                a
+                for a in av.select_current(resolved.actions, cutoff=as_of).values()
+                if a.row.security_id == ZZAA.security_id and a.row.fields["action"] == "split"
+            ]
+            current.append(sorted(str(a.row.fields["value"]) for a in actions))
+        assert current == [["2"], ["2", "3"], ["2", "3"]]
+        report = build(
+            store,
+            runs,
+            as_of=datetime(2026, 9, 30, tzinfo=UTC),
+            build_id="synthetic-build-chrono",
+        )
+        served_sessions = {
+            r["session_date"]
+            for r in artifact(report, "gold-adjusted-bars")
+            if r["security_id"] == ZZAA.security_id
+        }
+        assert "2026-09-02" in served_sessions and "2026-09-03" not in served_sessions
+        manifest = manifest_of(store, "synthetic-build-chrono")
+        contract = manifest["identity_contracts"]["action-event-identity"]
+        assert contract["contract_id"] == "sharadar-actions-event-identity/v1"
+        assert contract["action_keys_with_redelivery_gaps"] >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +422,9 @@ class TestRevisionChronology:
 
 
 class TestActionRevisionSelection:
-    def test_a_same_key_revision_supersedes_and_earlier_cutoffs_keep_the_earlier_one(self) -> None:
+    def test_a_changed_value_is_a_distinct_event_and_the_original_is_gapped_not_superseded(
+        self,
+    ) -> None:
         store = FakeS3Store()
         acquire(store, run_id=RUN_1, run=1, at=RUN_1_AT)  # split value 2
         r2 = responses_for_run(2)
@@ -388,27 +434,39 @@ class TestActionRevisionSelection:
         acquire(store, run_id=RUN_2, run=2, at=RUN_2_AT, responses=r2)
         runs: Runs = ((RUN_1, 1, RUN_1_AT), (RUN_2, 2, RUN_2_AT))
         resolved = resolved_layer(store, runs)
-        v1, v2 = revisions_of(resolved, "actions", SPLIT_KEY)
+        (two,) = revisions_of(resolved, "actions", SPLIT_KEY)
+        (three,) = revisions_of(resolved, "actions", SPLIT_KEY_3)
         early = av.select_current(resolved.actions, cutoff=datetime(2026, 9, 10, tzinfo=UTC))
         late = av.select_current(resolved.actions, cutoff=datetime(2026, 9, 20, tzinfo=UTC))
-        assert early[SPLIT_KEY] is v1 and late[SPLIT_KEY] is v2
-        # Never both operative: one lineage entry for the split, at either cutoff.
-        for as_of, factor, revision in (
-            (datetime(2026, 9, 10, tzinfo=UTC), "2", 0),
-            (datetime(2026, 9, 20, tzinfo=UTC), "3", 1),
-        ):
-            bar = av.select_current(resolved.stocks, cutoff=as_of)[(ZZAA.security_id, "2026-09-03")]
-            actions = [
-                a
-                for a in av.select_current(resolved.actions, cutoff=as_of).values()
-                if a.row.security_id == ZZAA.security_id
-            ]
-            adjusted = gd.adjust_bar(bar, actions, as_of=as_of)
-            assert adjusted is not None and adjusted["factor"] == factor
-            split_refs = [ref for ref in adjusted["lineage"] if ref["entity"] == "corporate_action"]
-            assert len(split_refs) == 1 and split_refs[0]["selector"]["revision_sequence"] == str(
-                revision
-            )
+        assert early[SPLIT_KEY] is two and SPLIT_KEY_3 not in early
+        assert late[SPLIT_KEY] is two and late[SPLIT_KEY_3] is three
+        # Before the second delivery: the one event serves factor 2, revision 0.
+        as_of = datetime(2026, 9, 10, tzinfo=UTC)
+        bar = av.select_current(resolved.stocks, cutoff=as_of)[(ZZAA.security_id, "2026-09-03")]
+        actions = [
+            a
+            for a in av.select_current(resolved.actions, cutoff=as_of).values()
+            if a.row.security_id == ZZAA.security_id
+        ]
+        adjusted = gd.adjust_bar(bar, actions, as_of=as_of)
+        assert adjusted is not None and adjusted["factor"] == "2"
+        split_refs = [ref for ref in adjusted["lineage"] if ref["entity"] == "corporate_action"]
+        assert len(split_refs) == 1 and split_refs[0]["selector"]["revision_sequence"] == "0"
+        # After it: the original carries the redelivery gap and the build withholds the
+        # bars that would consume it -- neither factor is served silently.
+        assert two.row.gaps_through(datetime(2026, 9, 20, tzinfo=UTC)) == (RUN_2,)
+        report = build(
+            store, runs, as_of=datetime(2026, 9, 20, tzinfo=UTC), build_id="synthetic-build-dist"
+        )
+        served = {
+            r["session_date"]: r["factor"]
+            for r in artifact(report, "gold-adjusted-bars")
+            if r["security_id"] == ZZAA.security_id
+        }
+        assert "2026-09-03" not in served and "2026-09-04" not in served
+        manifest = manifest_of(store, "synthetic-build-dist")
+        contract = manifest["identity_contracts"]["action-event-identity"]
+        assert contract["adjusted_rows_withheld"] >= 2
         # Membership consumes one revision of a delisting, the one current at the cutoff.
         facts = uv._index(resolved)[ZZHH.security_id]
         current = uv._admissible_actions(
@@ -435,7 +493,16 @@ class TestActionRevisionSelection:
         runs: Runs = ((RUN_1, 1, RUN_1_AT), (RUN_2, 2, RUN_2_AT))
         resolved = resolved_layer(store, runs)
         (original,) = revisions_of(resolved, "actions", SPLIT_KEY)
-        (corrected,) = revisions_of(resolved, "actions", (ZZAA.security_id, "2026-09-02", "split"))
+        corrected_row = next(r for r in rows if r[1] == "split")
+        corrected_fields = {
+            name: (None if cell == "" else cell)
+            for name, cell in zip(ACTIONS_HEADER, corrected_row, strict=True)
+        }
+        corrected_key = (
+            ZZAA.security_id,
+            event_identity(corrected_fields, schema_digest=ACCEPTED_ACTIONS_SCHEMA_DIGEST),
+        )
+        (corrected,) = revisions_of(resolved, "actions", corrected_key)
         # Two keys, both current: the source has no event identity. The original carries
         # the gap naming the run that covered its date and did not repeat it.
         assert (
@@ -456,7 +523,8 @@ class TestActionRevisionSelection:
             and "2026-09-04" not in bars
         )
         manifest = manifest_of(store, "synthetic-build-keyfix")
-        unresolved = manifest["unresolved_contracts"]["action-event-identity"]
+        unresolved = manifest["identity_contracts"]["action-event-identity"]
+        assert unresolved["contract_id"] == "sharadar-actions-event-identity/v1"
         assert unresolved["action_keys_with_redelivery_gaps"] == 2  # the split and the delisting
         assert unresolved["adjusted_rows_withheld"] == 3  # 09-03, 09-04, 09-14
         findings = {(f["check"], f["scope"]): f for f in manifest["quality"]["findings"]}
@@ -478,9 +546,15 @@ class TestActionRevisionSelection:
         # At decision_time(09-15) = 13:00Z the corrected key (public by the 09-15 open,
         # 13:30Z) is not yet admissible; the original, gap-flagged key is, and it is
         # what the clause consumed -- recorded exactly.
-        assert {c.rsplit("#", 2)[0] for c in consumed} == {
-            f"{ZZHH.security_id}/2026-09-14/delisted"
-        }
+        delisting_row = next(r for r in actions_rows(run=2) if r[1] == "delisted")
+        delisting_key = event_identity(
+            {
+                name: (None if cell == "" else cell)
+                for name, cell in zip(ACTIONS_HEADER, delisting_row, strict=True)
+            },
+            schema_digest=ACCEPTED_ACTIONS_SCHEMA_DIGEST,
+        )
+        assert {c.rsplit("#", 2)[0] for c in consumed} == {f"{ZZHH.security_id}/{delisting_key}"}
         baseline = build(store, runs[:1], as_of=AS_OF, build_id="synthetic-build-keyfix-base")
         base_rows = {
             (r["session_date"], r["security_id"]): r
@@ -519,7 +593,6 @@ class TestAdjustmentLineage:
         [
             (datetime(2026, 9, 10, tzinfo=UTC), "1", False, []),
             (datetime(2026, 9, 20, tzinfo=UTC), "2", True, ["0"]),
-            (datetime(2026, 9, 30, tzinfo=UTC), "3", True, ["1"]),
         ],
     )
     def test_derived_availability_follows_every_consumed_input(
@@ -567,31 +640,42 @@ class TestAdjustmentLineage:
         assert before["derived_governing_time"] == before["source_governing_time"]
         assert len(before["lineage"]) == 1 and before["factor"] == "1"
 
-    def test_a_later_correction_can_never_be_labelled_available_before_it(self) -> None:
+    def test_a_later_correction_is_a_distinct_event_and_the_bar_is_withheld_not_relabelled(
+        self,
+    ) -> None:
         store, runs = lineage_store()
         resolved = resolved_layer(store, runs, now=RUN_3_AT + timedelta(days=1))
-        v1, v2 = revisions_of(resolved, "actions", SPLIT_KEY)
-        for as_of, expected in (
-            (datetime(2026, 9, 20, tzinfo=UTC), v1),
-            (datetime(2026, 9, 30, tzinfo=UTC), v2),
-        ):
-            bar = av.select_current(resolved.stocks, cutoff=as_of)[(ZZAA.security_id, "2026-09-03")]
-            actions = [
-                a
-                for a in av.select_current(resolved.actions, cutoff=as_of).values()
-                if a.row.security_id == ZZAA.security_id
-            ]
-            adjusted = gd.adjust_bar(bar, actions, as_of=as_of)
-            assert adjusted is not None
-            assert (
-                adjusted["derived_governing_time"]
-                == expected.availability.governing_time.isoformat()
-            )
-            assert adjusted["derived_governing_time"] >= adjusted["source_governing_time"]
+        (two,) = revisions_of(resolved, "actions", SPLIT_KEY)
+        (three,) = revisions_of(resolved, "actions", SPLIT_KEY_3)
+        # Each event is available from its own first sighting, never earlier.
+        assert two.availability.governing_time == RUN_2_AT
+        assert three.availability.governing_time == RUN_3_AT
+        as_of = datetime(2026, 9, 20, tzinfo=UTC)
+        bar = av.select_current(resolved.stocks, cutoff=as_of)[(ZZAA.security_id, "2026-09-03")]
+        actions = [
+            a
+            for a in av.select_current(resolved.actions, cutoff=as_of).values()
+            if a.row.security_id == ZZAA.security_id
+        ]
+        adjusted = gd.adjust_bar(bar, actions, as_of=as_of)
+        assert adjusted is not None
+        assert adjusted["derived_governing_time"] == two.availability.governing_time.isoformat()
+        assert adjusted["derived_governing_time"] >= adjusted["source_governing_time"]
+        # At 09-30 the original is gapped by run 3: the build withholds the bar rather than
+        # serving the corrected ratio under the original's availability, or vice versa.
+        report = build(
+            store, runs, as_of=datetime(2026, 9, 30, tzinfo=UTC), build_id="synthetic-build-corr"
+        )
+        assert "2026-09-03" not in {
+            r["session_date"]
+            for r in artifact(report, "gold-adjusted-bars")
+            if r["security_id"] == ZZAA.security_id
+        }
+        assert two.row.gaps_through(datetime(2026, 9, 30, tzinfo=UTC)) == (RUN_3,)
 
     def test_verification_reconstructs_the_value_and_dependencies_from_the_lineage(self) -> None:
         store, runs = lineage_store()
-        as_of = datetime(2026, 9, 30, tzinfo=UTC)
+        as_of = datetime(2026, 9, 20, tzinfo=UTC)  # the one split event is served
         report = build(store, runs, as_of=as_of, build_id="synthetic-build-verify")
         resolved = resolved_layer(store, runs, now=as_of)
         bars = av.select_current(resolved.stocks, cutoff=as_of)
@@ -646,8 +730,10 @@ class TestAdjustmentLineage:
         transformation = manifest["transformation"]
         assert transformation["adjustment_derivation_version"] == gd.ADJUSTMENT_DERIVATION_VERSION
         assert transformation["action_selection_version"] == av.ACTION_SELECTION_VERSION
-        assert transformation["silver_normalization_version"] == "sharadar-silver-v2"
+        assert transformation["silver_normalization_version"] == "sharadar-silver-v3"
         assert transformation["resolution_policy_version"] == "sharadar-availability-v2"
+        assert transformation["actions_identity_version"] == "sharadar-actions-event-identity/v1"
+        assert transformation["pagination_policy_version"] == "sharadar-pagination-admission-v2"
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +746,8 @@ class TestAdjustedRowVerification:
     provenance and availability is validated against the resolved lineage; the
     expectation is derived from the resolved bar, never from the document."""
 
-    AS_OF: Final = datetime(2026, 9, 30, tzinfo=UTC)
+    #: Before the corrected split: the served split row consumes the one event (factor 2).
+    AS_OF: Final = datetime(2026, 9, 20, tzinfo=UTC)
 
     def _context(
         self,
@@ -690,7 +777,7 @@ class TestAdjustedRowVerification:
 
     def test_positive_controls_reconstruct(self) -> None:
         split_row, plain_row, bars, actions = self._context()
-        assert len(split_row["lineage"]) == 2 and split_row["factor"] == "3"
+        assert len(split_row["lineage"]) == 2 and split_row["factor"] == "2"
         assert len(plain_row["lineage"]) == 1 and plain_row["factor"] == "1"
         assert self.verify(split_row, bars, actions) is None
         assert self.verify(plain_row, bars, actions) is None
@@ -716,7 +803,7 @@ class TestAdjustedRowVerification:
             ("source_content_sha256", "0" * 64, gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
             ("revision_sequence", 9, gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
             ("revision_sequence", "0", gd.AdjustedRowDefect.PROVENANCE_MISMATCH),
-            ("factor", "2", gd.AdjustedRowDefect.VALUE_MISMATCH),
+            ("factor", "3", gd.AdjustedRowDefect.VALUE_MISMATCH),
             ("open", "1.000000", gd.AdjustedRowDefect.VALUE_MISMATCH),
             ("volume", "1", gd.AdjustedRowDefect.VALUE_MISMATCH),
             (
@@ -773,7 +860,7 @@ class TestAdjustedRowVerification:
                 lambda row: [
                     row["lineage"][0],
                     dict(
-                        row["lineage"][1], selector=dict(row["lineage"][1]["selector"], ratio="2")
+                        row["lineage"][1], selector=dict(row["lineage"][1]["selector"], ratio="3")
                     ),
                 ],
                 gd.AdjustedRowDefect.LINEAGE_MISMATCH,
@@ -803,7 +890,7 @@ class TestAdjustedRowVerification:
                     row["lineage"][0],
                     dict(
                         row["lineage"][1],
-                        selector=dict(row["lineage"][1]["selector"], revision_sequence="0"),
+                        selector=dict(row["lineage"][1]["selector"], revision_sequence="1"),
                     ),
                 ],
                 gd.AdjustedRowDefect.LINEAGE_UNRESOLVABLE,

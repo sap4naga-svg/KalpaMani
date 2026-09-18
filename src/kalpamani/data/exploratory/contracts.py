@@ -207,7 +207,7 @@ _PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 #: The production build manifest an exploratory publication may be derived from.
-SOURCE_MANIFEST_CONTRACT: Final = "kalpamani-production-build-manifest/v1"
+SOURCE_MANIFEST_CONTRACT: Final = "kalpamani-production-build-manifest/v2"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -82,6 +82,33 @@ ACQ: Final = ProductionActor.ACQUISITION
 SECRET_ID: Final = "synthetic/production/sharadar"  # noqa: S105 - an identifier, not a secret
 SECRET_VALUE: Final = "synthetic-fake-not-a-real-sharadar-key-0009"  # noqa: S105 - announces itself fake
 
+#: Minimal valid CSV bodies per dataset: the accepted parser's required fields, and for
+#: tickers the ``table`` column the predicate names. Pagination v2 parses every data
+#: response, so a synthetic body must be a page the parser admits.
+HEADERS: Final[dict[str, str]] = {
+    "actions": "date,action,ticker,name,value,contraticker,contraname",
+    "tickers": "table,permaticker,ticker,isdelisted",
+    "stocks": "ticker,date,close",
+}
+
+
+def csv_page(dataset: str, rows: int = 0, *, seed: int = 0) -> bytes:
+    """A short page of ``rows`` distinct synthetic rows for ``dataset``."""
+    lines = [HEADERS[dataset]]
+    for index in range(rows):
+        if dataset == "actions":
+            lines.append(
+                f"2025-03-{(index % 28) + 1:02d},dividend,ZZ{seed}{index},Synthetic,0.{index + 1},,"
+            )
+        elif dataset == "tickers":
+            lines.append(f"stocks,{100000 + seed * 1000 + index},ZZ{seed}{index},N")
+        else:
+            lines.append(f"ZZ{seed}{index},2025-09-01,{index + 1}.00")
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+DEFAULT_RESPONSES: Final[list[bytes]] = [csv_page("actions", 2), csv_page("tickers", 3)]
+
 
 # ---------------------------------------------------------------------------
 # The compiled plan
@@ -89,24 +116,28 @@ SECRET_VALUE: Final = "synthetic-fake-not-a-real-sharadar-key-0009"  # noqa: S10
 
 
 class TestCompiledPlan:
-    def test_the_default_slice_compiles_to_six_canonical_requests(self) -> None:
+    def test_the_default_slice_compiles_to_two_canonical_data_coordinates(self) -> None:
         plan = pplan.compile_plan(
             parse_slice(slice_document()), acquisition_mode=AcquisitionMode.BACKFILL
         )
         coordinates = [
-            (r.ordinal, r.dataset, r.window, r.page_offset, r.page_limit) for r in plan.requests
+            (r.ordinal, r.dataset, r.window, r.predicate, r.page_offset, r.page_limit)
+            for r in plan.requests
         ]
         assert coordinates == [
-            (0, "actions", "2025-01-01/2025-12-31", 0, 10000),
-            (1, "actions", "2025-01-01/2025-12-31", 10000, 10000),
-            (2, "tickers", "SNAPSHOT", 0, 10000),
-            (3, "tickers", "SNAPSHOT", 10000, 10000),
-            (4, "tickers", "SNAPSHOT", 20000, 10000),
-            (5, "tickers", "SNAPSHOT", 30000, 10000),
+            (0, "actions", "2025-01-01/2025-12-31", (), 0, 100000),
+            (1, "tickers", "SNAPSHOT", (("table", "stocks"),), 0, 100000),
         ]
         assert plan.digest == PLAN_DIGEST and plan.provider_max_attempts == 1
         assert plan.deadline_seconds == 1800.0 and plan.min_request_interval_seconds == 1.0
+        assert plan.data_coordinates == 2 and plan.max_provider_calls == 4
+        assert plan.expected_writes == 8 and plan.probe_policy == "CONDITIONAL_ON_FULL_PAGE"
+        assert plan.contract_id == "kalpamani-production-acquisition-plan/v2"
         assert PLAN_DIGEST not in repr(plan)
+        # The probe of a coordinate is the same shape at offset L, never planned as a page.
+        probe = plan.requests[1].probe()
+        assert probe.page_offset == probe.page_limit == 100000
+        assert probe.predicate == plan.requests[1].predicate and probe.ordinal == 1
 
     def test_the_digest_is_deterministic_and_sensitive_to_every_coordinate(self) -> None:
         base = compiled_digest()
@@ -125,18 +156,20 @@ class TestCompiledPlan:
             slice_document(
                 datasets=["actions", "stocks"],
                 windows={"actions": "1998-01-01/2000-06-30", "stocks": "2025-09-01/2025-09-03"},
-                request_count=3 * 2 + 3 * 2,
+                request_count=3 + 3,
             )
         )
         plan = pplan.compile_plan(covered, acquisition_mode=AcquisitionMode.BACKFILL)
-        windows = [r.window for r in plan.requests if r.dataset == "actions"][::2]
+        windows = [r.window for r in plan.requests if r.dataset == "actions"]
         assert windows == [
             "1998-01-01/1999-01-01",
             "1999-01-02/2000-01-02",
             "2000-01-03/2000-06-30",
         ]
-        days = [r.window for r in plan.requests if r.dataset == "stocks"][::2]
+        days = [r.window for r in plan.requests if r.dataset == "stocks"]
         assert days == ["2025-09-01/2025-09-01", "2025-09-02/2025-09-02", "2025-09-03/2025-09-03"]
+        assert all(r.page_offset == 0 for r in plan.requests)
+        assert [r.page_limit for r in plan.requests] == [100000] * 3 + [10000] * 3
 
     @pytest.mark.parametrize(
         ("overrides", "mode"),
@@ -186,14 +219,28 @@ class TestCompiledPlan:
         with pytest.raises(pplan.ProductionPlanError):
             pplan.compile_plan(parse_slice(document), acquisition_mode=mode)
 
-    def test_no_slice_can_exceed_the_per_run_request_ceiling(self) -> None:
+    def test_no_slice_can_exceed_the_per_run_call_ceiling(self) -> None:
+        # 48 session dates: 48 data coordinates, a worst case of 96 provider calls.
         covered = parse_slice(
             slice_document(
-                datasets=["stocks"], windows={"stocks": "2025-01-01/2025-02-17"}, request_count=96
+                datasets=["stocks"], windows={"stocks": "2025-01-01/2025-02-17"}, request_count=48
             )
         )
         plan = pplan.compile_plan(covered, acquisition_mode=AcquisitionMode.UPDATE)
-        assert plan.request_count == 96 == pplan.MAX_REQUESTS_PER_RUN
+        assert plan.request_count == 48 == pplan.MAX_DATA_COORDINATES_PER_RUN
+        assert plan.max_provider_calls == 96 == pplan.MAX_PROVIDER_CALLS_PER_RUN
+        # One more session date would need 98 worst-case calls: refused, never trimmed.
+        with pytest.raises(pplan.ProductionPlanError):
+            pplan.compile_plan(
+                parse_slice(
+                    slice_document(
+                        datasets=["stocks"],
+                        windows={"stocks": "2025-01-01/2025-02-18"},
+                        request_count=49,
+                    )
+                ),
+                acquisition_mode=AcquisitionMode.UPDATE,
+            )
 
     def test_the_plan_refuses_a_slice_ceiling_above_the_compiled_one(self) -> None:
         with pytest.raises(pplan.ProductionPlanError):
@@ -222,9 +269,14 @@ class FakeSecrets:
 
 @dataclass
 class FakeProvider:
-    """Answers each request with queued bytes; records every request coordinate."""
+    """Answers each data request by ordinal, each probe from ``probes``; records every call.
+
+    A probe (offset ``L``) with no scripted body raises: under pagination v2 every
+    synthetic default page is short, so an unscripted probe is a defect, never silence.
+    """
 
     responses: list[bytes] = field(default_factory=list)
+    probes: dict[int, bytes] = field(default_factory=dict)
     fail_at: int | None = None
     calls: list[tuple[int, str, str, int]] = field(default_factory=list)
     revealed: list[str] = field(default_factory=list)
@@ -234,6 +286,10 @@ class FakeProvider:
         if self.fail_at is not None and len(self.calls) == self.fail_at:
             raise RuntimeError("synthetic provider failure 000000000000")
         self.revealed.append(credential.reveal())
+        if request.page_offset > 0:
+            if request.ordinal not in self.probes:
+                raise RuntimeError("synthetic probe refused 000000000000")
+            return self.probes[request.ordinal]
         return self.responses[request.ordinal]
 
 
@@ -266,11 +322,22 @@ class FakeS3Put:
 
 
 class Scenario:
-    def __init__(self, *, responses: list[bytes] | None = None, release: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        responses: list[bytes] | None = None,
+        release: bool = True,
+        slice_doc: dict[str, Any] | None = None,
+    ) -> None:
         constants = constants_for(ACQ)
         self.ssm = FakeSsm()
         self.ssm.values[constants.binding_parameter] = encode(binding_document(ACQ))
-        self.input_bytes = encode(acquisition_input_document())
+        self.slice_doc = slice_document() if slice_doc is None else slice_doc
+        self.input_bytes = encode(
+            acquisition_input_document(
+                slice=self.slice_doc, plan_digest=compiled_digest(self.slice_doc)
+            )
+        )
         self.ssm.values[constants.input_parameter] = self.input_bytes
         if release:
             self.ssm.values[constants.release_parameter] = build_release_document(
@@ -288,9 +355,7 @@ class Scenario:
         self.clock = FakeClock()
         self.secrets = FakeSecrets()
         self.provider = FakeProvider(
-            responses=responses
-            if responses is not None
-            else [f"synthetic-payload-{i}".encode() for i in range(6)]
+            responses=list(DEFAULT_RESPONSES) if responses is None else responses
         )
         self.s3 = FakeS3Put()
         self.registry: Any = LedgerSpentIdentities([])
@@ -359,29 +424,33 @@ class TestEndToEnd:
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.COMPLETED
         assert report.bootstrap.outcome is RunnerOutcome.RELEASED
-        assert report.completed_requests == report.planned_requests == 6
-        assert report.payloads_written == 6 and report.payloads_already_present == 0
+        assert report.completed_requests == report.planned_requests == 2
+        assert report.payloads_written == 2 and report.payloads_already_present == 0
+        assert report.probes_issued == 0 and report.max_provider_calls == 4
         assert (
             report.locator is not None
             and report.locator.status is LocatorPublicationStatus.PUBLISHED
         )
-        # Exactly the plan's requests, in canonical order, once each.
-        assert [c[0] for c in scenario.provider.calls] == [0, 1, 2, 3, 4, 5]
-        # 1 reservation + 3 conditional writes per request + 1 locator = 20; provider 6; secret 1.
-        assert report.counts.provider_requests == 6 and report.counts.s3_operations == 20
+        # Exactly the plan's data coordinates, in canonical order, once each, no probe.
+        assert scenario.provider.calls == [
+            (0, "actions", "2025-01-01/2025-12-31", 0),
+            (1, "tickers", "SNAPSHOT", 0),
+        ]
+        # 1 reservation + 3 conditional writes per coordinate + 1 locator = 8; provider 2.
+        assert report.counts.provider_requests == 2 and report.counts.s3_operations == 8
         assert report.reservation is PayloadDisposition.WRITTEN
         assert report.counts.secret_retrievals == 1
         _assert_counts_match(scenario, report)
         # Pacing at the compiled interval, on the injected clock, before every request.
-        assert scenario.clock.sleeps.count(1.0) >= 5
+        assert scenario.clock.sleeps.count(1.0) >= 1
         # The credential was revealed only inside the provider adapter.
-        assert scenario.provider.revealed == [SECRET_VALUE] * 6
+        assert scenario.provider.revealed == [SECRET_VALUE] * 2
 
     def test_every_object_lies_in_a_production_namespace_and_nowhere_else(self) -> None:
         scenario = Scenario()
         scenario.run()
         keys = sorted(scenario.s3.objects)
-        assert len(keys) == 20
+        assert len(keys) == 8
         for key in keys:
             assert (
                 key.startswith("bronze/sharadar/actions/production/")
@@ -389,11 +458,11 @@ class TestEndToEnd:
                 or key.startswith("bronze/_production_claims/")
                 or key == f"bronze/sharadar/_indexes/{RUN_ID}.json"
             ), key
-        assert sum(1 for k in keys if "/production/objects/sha256/" in k) == 6
-        assert sum(1 for k in keys if "/production/acquisitions/" in k) == 6
+        assert sum(1 for k in keys if "/production/objects/sha256/" in k) == 2
+        assert sum(1 for k in keys if "/production/acquisitions/" in k) == 2
         assert (
             sum(1 for k in keys if k.startswith("bronze/_production_claims/") and "/runs/" not in k)
-            == 6
+            == 2
         )
         assert f"bronze/_production_claims/runs/{RUN_ID}.json" in keys
         # Nothing under any earlier namespace.
@@ -419,7 +488,15 @@ class TestEndToEnd:
             completed_at=NOW + timedelta(hours=1),
         )
         validated = validate_run_locator(document, run_id=RUN_ID, ledger_row=row)
-        assert len(validated.entries) == 6
+        assert len(validated.entries) == 2
+        assert document["schema_version"] == "kalpamani-production-run-locator/v2"
+        assert document["probes_issued"] == 0 and document["provider_calls"] == 2
+        assert document["max_provider_calls"] == 4 and document["expected_writes"] == 8
+        evidence = [e["pagination"] for e in document["entries"]]
+        assert [e["completion"] for e in evidence] == ["SHORT_PAGE_COMPLETE"] * 2
+        assert [e["row_count"] for e in evidence] == [2, 3]
+        assert [e["governed_limit"] for e in evidence] == [100000, 100000]
+        assert all(e["probe"] is None for e in evidence)
 
         class GetOnly:
             def get_object(self, **kwargs: Any) -> Any:
@@ -440,11 +517,31 @@ class TestEndToEnd:
         read_back = reader.read_run_locator(run_id=RUN_ID, ledger_row=row)
         objects = list(reader.iter_locator_objects(read_back))
         assert [payload for _, payload, _ in objects] == scenario.provider.responses
-        assert reader.get_object_count == 13
+        assert reader.get_object_count == 5
+        # The v2 record wraps the accepted retrieval record with the same evidence.
+        record = decode_run_locator(objects[0][2])
+        assert record["contract_id"] == pp.RECORD_CONTRACT_ID
+        assert record["pagination"] == document["entries"][0]["pagination"]
+        assert record["request"]["page_limit"] == 100000 and record["request"]["predicate"] == {}
+        assert set(record["retrieval"]) == {
+            "provider",
+            "dataset",
+            "requested_range",
+            "retrieved_at",
+            "source_schema_version",
+            "ingestion_run_id",
+            "content_sha256",
+            "byte_count",
+            "acquisition_mode",
+            "classification",
+        }
 
     def test_identical_payloads_across_distinct_requests_keep_distinct_provenance(self) -> None:
-        same = b"synthetic-header-only-page"
-        scenario = Scenario(responses=[same] * 6)
+        # Three stocks session dates answered with one identical header-only page.
+        slice_doc = slice_document(
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=3
+        )
+        scenario = Scenario(responses=[csv_page("stocks")] * 3, slice_doc=slice_doc)
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.COMPLETED
         keys = sorted(scenario.s3.objects)
@@ -453,24 +550,17 @@ class TestEndToEnd:
             k for k in keys if k.startswith("bronze/_production_claims/") and "/runs/" not in k
         ]
         records = [k for k in keys if "/acquisitions/" in k]
-        # One content-addressed payload per dataset; six distinct claims; six distinct records.
-        assert len(payloads) == 2 and len(claims) == 6 and len(records) == 6
-        assert sorted(c.rsplit(".", 2)[1] for c in claims) == ["00", "01", "02", "03", "04", "05"]
+        # One content-addressed payload; three distinct claims; three distinct records.
+        assert len(payloads) == 1 and len(claims) == 3 and len(records) == 3
+        assert sorted(c.rsplit(".", 2)[1] for c in claims) == ["00", "01", "02"]
         # Dispositions say exactly which writes created the payload and which found it present.
-        assert report.payloads_written == 2 and report.payloads_already_present == 4
+        assert report.payloads_written == 1 and report.payloads_already_present == 2
         locator = decode_run_locator(scenario.s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"])
         dispositions = [e["payload_disposition"] for e in locator["entries"]]
-        assert dispositions == [
-            "WRITTEN",
-            "ALREADY_PRESENT",
-            "WRITTEN",
-            "ALREADY_PRESENT",
-            "ALREADY_PRESENT",
-            "ALREADY_PRESENT",
-        ]
-        # 1 reservation + 6 claims + 6 payload attempts + 6 records + 1 locator; every
+        assert dispositions == ["WRITTEN", "ALREADY_PRESENT", "ALREADY_PRESENT"]
+        # 1 reservation + 3 claims + 3 payload attempts + 3 records + 1 locator; every
         # attempt counted.
-        assert report.counts.s3_operations == 20 == len(scenario.s3.calls)
+        assert report.counts.s3_operations == 11 == len(scenario.s3.calls)
 
 
 class TestRefusalsBeforeAnyDataPlaneCall:
@@ -487,7 +577,7 @@ class TestRefusalsBeforeAnyDataPlaneCall:
             (
                 lambda s: s.ssm.values.__setitem__(
                     constants_for(ACQ).input_parameter,
-                    encode(acquisition_input_document(slice=slice_document(request_count=5))),
+                    encode(acquisition_input_document(slice=slice_document(request_count=1))),
                 ),
                 "unauthorized slice",
             ),
@@ -499,7 +589,7 @@ class TestRefusalsBeforeAnyDataPlaneCall:
                             slice=slice_document(
                                 datasets=["stocks"],
                                 windows={"stocks": "2025-01-01/2025-01-02"},
-                                request_count=4,
+                                request_count=2,
                             )
                         )
                     ),
@@ -574,16 +664,17 @@ class TestHalts:
         self,
     ) -> None:
         scenario = Scenario()
-        scenario.provider.fail_at = 3
+        scenario.provider.fail_at = 2
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.HALTED
         assert report.halt is pp.ProcessingHalt.PROVIDER_FAILURE
-        assert report.completed_requests == 2 and report.planned_requests == 6
+        assert report.completed_requests == 1 and report.planned_requests == 2
         # The failed request was issued and counted; nothing after it was.
-        assert report.counts.provider_requests == 3 == len(scenario.provider.calls)
-        assert report.counts.s3_operations == 1 + 2 * 3 + 1
+        assert report.counts.provider_requests == 2 == len(scenario.provider.calls)
+        assert report.counts.s3_operations == 1 + 1 * 3 + 1
         locator = self._partial_locator(scenario)
-        assert locator["completeness"] == "PARTIAL" and locator["completed_requests"] == 2
+        assert locator["completeness"] == "PARTIAL" and locator["completed_requests"] == 1
+        assert locator["provider_calls"] == 2 and locator["probes_issued"] == 0
         assert (
             report.locator is not None
             and report.locator.status is LocatorPublicationStatus.PUBLISHED
@@ -605,10 +696,11 @@ class TestHalts:
         assert "synthetic provider failure" not in repr(report)
 
     def test_the_request_budget_is_the_plans_and_is_never_exceeded(self) -> None:
-        scenario = Scenario(responses=[b"x"] * 50)  # more answers available than the plan asks for
+        # More answers available than the plan asks for: exactly the plan's are issued.
+        scenario = Scenario(responses=list(DEFAULT_RESPONSES) + [csv_page("stocks")] * 50)
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.COMPLETED
-        assert len(scenario.provider.calls) == 6 == report.planned_requests
+        assert len(scenario.provider.calls) == 2 == report.planned_requests
 
     def test_a_response_over_the_ceiling_halts_before_any_write_for_it(self) -> None:
         scenario = Scenario()
@@ -684,9 +776,9 @@ class TestHalts:
         scenario.s3.fail_on[f"bronze/sharadar/_indexes/{RUN_ID}.json"] = "AccessDenied"
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.LOCATOR_NOT_PUBLISHED
-        assert report.completed_requests == 6 and report.halt is None
+        assert report.completed_requests == 2 and report.halt is None
         assert report.locator is not None and report.locator.attempts == 1
-        assert report.counts.s3_operations == 20
+        assert report.counts.s3_operations == 8
         assert report.publication_state_unknown is False  # a refusal is a known state
 
     def test_locator_publication_uncertainty_is_reported_as_uncertainty(self) -> None:
@@ -697,7 +789,7 @@ class TestHalts:
         assert report.locator is not None
         assert report.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
         # An unclassified result is never retried (accepted locator policy).
-        assert report.locator.attempts == 1 and report.counts.s3_operations == 20
+        assert report.locator.attempts == 1 and report.counts.s3_operations == 8
         # Finding 3: an ambiguous locator publication is uncertain publication state.
         assert report.publication_state_unknown is True and report.halt is None
 
@@ -709,7 +801,7 @@ class TestHalts:
         # the run does not complete. Bronze writes were never retried.
         assert report.status is pp.AcquisitionStatus.LOCATOR_NOT_PUBLISHED
         assert report.locator is not None and report.locator.attempts == 3
-        assert report.counts.s3_operations == 19 + 3 == len(scenario.s3.calls)
+        assert report.counts.s3_operations == 7 + 3 == len(scenario.s3.calls)
         assert report.publication_state_unknown is False
 
     def test_an_occupied_locator_name_is_reported_and_never_adopted(self) -> None:
@@ -724,14 +816,14 @@ class TestHalts:
         original = scenario.provider.fetch
 
         def slow(request: pplan.ProductionRequest, *, credential: SharadarCredential) -> bytes:
-            scenario.clock.seconds += 700.0
+            scenario.clock.seconds += 1700.0
             return original(request, credential=credential)
 
         scenario.provider.fetch = slow  # type: ignore[method-assign]
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.HALTED
         assert report.halt is pp.ProcessingHalt.DEADLINE_EXHAUSTED
-        assert report.completed_requests < 6
+        assert report.completed_requests < 2
         assert report.counts.provider_requests == len(scenario.provider.calls)
 
 
@@ -749,7 +841,8 @@ class TestExactRequestValidation:
         )
 
     def _complete(self, slice_doc: dict[str, Any], count: int) -> tuple[Scenario, dict[str, Any]]:
-        scenario = Scenario(responses=[f"synthetic-{i}".encode() for i in range(count)])
+        dataset = slice_doc["datasets"][0]
+        scenario = Scenario(responses=[csv_page(dataset, 1, seed=i) for i in range(count)])
         constants = constants_for(ACQ)
         scenario.input_bytes = encode(
             acquisition_input_document(slice=slice_doc, plan_digest=compiled_digest(slice_doc))
@@ -793,35 +886,33 @@ class TestExactRequestValidation:
 
     def test_a_multi_day_stocks_acquisition_completes_and_the_build_reader_admits_it(self) -> None:
         slice_doc = slice_document(
-            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=3
         )
-        scenario, locator = self._complete(slice_doc, 6)
+        scenario, locator = self._complete(slice_doc, 3)
         windows = [e["request"]["window"] for e in locator["entries"]]
         assert windows == [
             "2025-09-01/2025-09-01",
-            "2025-09-01/2025-09-01",
             "2025-09-02/2025-09-02",
-            "2025-09-02/2025-09-02",
-            "2025-09-03/2025-09-03",
             "2025-09-03/2025-09-03",
         ]
-        assert [e["request"]["page_offset"] for e in locator["entries"]] == [0, 10000] * 3
+        assert [e["request"]["page_offset"] for e in locator["entries"]] == [0] * 3
+        assert [e["request"]["page_limit"] for e in locator["entries"]] == [10000] * 3
         row = self._row_for(slice_doc)
         validated = validate_run_locator(locator, run_id=RUN_ID, ledger_row=row)
         assert [entry.window for entry in validated.entries] == windows
         reader = self._reader(scenario)
         read_back = reader.read_run_locator(run_id=RUN_ID, ledger_row=row)
-        assert len(list(reader.iter_locator_objects(read_back))) == 6
-        assert reader.get_object_count == 13
+        assert len(list(reader.iter_locator_objects(read_back))) == 3
+        assert reader.get_object_count == 7
 
     def test_a_multi_window_actions_acquisition_completes_and_the_build_reader_admits_it(
         self,
     ) -> None:
         slice_doc = slice_document(
-            datasets=["actions"], windows={"actions": "1998-01-01/2000-06-30"}, request_count=6
+            datasets=["actions"], windows={"actions": "1998-01-01/2000-06-30"}, request_count=3
         )
-        scenario, locator = self._complete(slice_doc, 6)
-        windows = [e["request"]["window"] for e in locator["entries"]][::2]
+        scenario, locator = self._complete(slice_doc, 3)
+        windows = [e["request"]["window"] for e in locator["entries"]]
         assert windows == [
             "1998-01-01/1999-01-01",
             "1999-01-02/2000-01-02",
@@ -838,39 +929,47 @@ class TestExactRequestValidation:
                     )
                 )
             )
-            == 6
+            == 3
         )
 
     @pytest.mark.parametrize(
         ("mutate", "defect"),
         [
             (
-                lambda d: d["entries"][3]["request"].__setitem__("window", "2025-09-01/2025-09-01"),
+                lambda d: d["entries"][1]["request"].__setitem__("window", "2025-09-01/2025-09-01"),
                 "REQUEST_COORDINATES_MISMATCH",
             ),
             (
-                lambda d: d["entries"][3]["request"].__setitem__("page_offset", 20000),
+                lambda d: d["entries"][1]["request"].__setitem__("page_offset", 10000),
                 "REQUEST_COORDINATES_MISMATCH",
             ),
             (
-                lambda d: d["entries"][3]["request"].__setitem__("page_limit", 5000),
+                lambda d: d["entries"][1]["request"].__setitem__("page_limit", 5000),
                 "REQUEST_COORDINATES_MISMATCH",
             ),
-            (lambda d: d["entries"].__setitem__(3, dict(d["entries"][2])), "REQUEST_DUPLICATED"),
             (
-                lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 5)),
+                lambda d: d["entries"][1]["request"].__setitem__("predicate", {"table": "stocks"}),
+                "REQUEST_COORDINATES_MISMATCH",
+            ),
+            (lambda d: d["entries"].__setitem__(1, dict(d["entries"][2])), "REQUEST_DUPLICATED"),
+            (
+                lambda d: (
+                    d["entries"].pop(),
+                    d.__setitem__("completed_requests", 2),
+                    d.__setitem__("provider_calls", 2),
+                ),
                 "REQUEST_COUNT_MISMATCH",
             ),
         ],
-        ids=["window", "offset", "limit", "duplicate", "missing"],
+        ids=["window", "offset", "limit", "predicate", "duplicate", "missing"],
     )
     def test_altered_or_missing_requests_are_refused_before_any_referenced_object_is_read(
         self, mutate: Any, defect: str
     ) -> None:
         slice_doc = slice_document(
-            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=3
         )
-        scenario, locator = self._complete(slice_doc, 6)
+        scenario, locator = self._complete(slice_doc, 3)
         mutate(locator)
         scenario.s3.objects[f"bronze/sharadar/_indexes/{RUN_ID}.json"] = encode(locator)
         reader = self._reader(scenario)
@@ -940,8 +1039,8 @@ class TestRunReservation:
     @pytest.mark.parametrize(
         "responses",
         [
-            [f"synthetic-payload-{i}".encode() for i in range(6)],  # identical payloads
-            [f"changed-payload-{i}".encode() for i in range(6)],  # changed payloads
+            list(DEFAULT_RESPONSES),  # identical payloads
+            [csv_page("actions", 5, seed=7), csv_page("tickers", 1, seed=7)],  # changed payloads
         ],
         ids=["identical", "changed"],
     )
@@ -960,13 +1059,13 @@ class TestRunReservation:
         assert report.counts.s3_operations == 1 and report.publication_state_unknown is False
         # The winning run's objects, locator included, are untouched.
         assert first.s3.objects == {k: v for k, v in first.s3.objects.items()}
-        assert len(first.s3.objects) == 20
+        assert len(first.s3.objects) == 8
 
     def test_a_changed_plan_under_the_same_identity_is_refused_at_the_reservation(self) -> None:
         first = Scenario()
         assert first.run().status is pp.AcquisitionStatus.COMPLETED
         slice_doc = slice_document(
-            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=6
+            datasets=["stocks"], windows={"stocks": "2025-09-01/2025-09-03"}, request_count=3
         )
         second = Scenario()
         constants = constants_for(ACQ)
@@ -994,7 +1093,7 @@ class TestRunReservation:
 
     def test_concurrent_contenders_exactly_one_wins_and_the_loser_publishes_nothing(self) -> None:
         store = FakeS3Put()
-        winner, loser = Scenario(), Scenario(responses=[b"other-bytes"] * 6)
+        winner, loser = Scenario(), Scenario(responses=[csv_page("actions"), csv_page("tickers")])
         winner.adopt_store(store)
         loser.adopt_store(store)
         first = winner.run()
@@ -1063,7 +1162,7 @@ class TestFinalUncertainty:
         scenario.s3.fail_on[self.LOCATOR] = "SomethingUnrecognised"
         report = scenario.run()
         assert report.status is pp.AcquisitionStatus.LOCATOR_STATE_UNKNOWN
-        assert report.halt is None and report.completed_requests == 6
+        assert report.halt is None and report.completed_requests == 2
         assert (
             report.locator is not None
             and report.locator.status is LocatorPublicationStatus.STATE_UNKNOWN
@@ -1074,7 +1173,7 @@ class TestFinalUncertainty:
     def test_earlier_failure_then_ambiguous_locator_keeps_both(self, earlier: str) -> None:
         scenario = Scenario()
         if earlier == "provider":
-            scenario.provider.fail_at = 3
+            scenario.provider.fail_at = 2
         else:
             scenario.s3.fail_after_calls = 5
             scenario.s3.fail_code = "AccessDenied"
@@ -1149,7 +1248,11 @@ class TestCompatibility:
             f"licensed/bronze/sharadar/actions/qualification/synthetic-exec-0001/requests/03/sha256/{digest}"
         )
 
-    def test_the_processing_module_imports_no_parser_no_sdk_and_no_read(self) -> None:
+    def test_the_processing_module_imports_the_accepted_parser_only_no_sdk_and_no_read(
+        self,
+    ) -> None:
+        """Pagination v2 (ADR-0053 §11.2) parses the data response with the accepted parser
+        to count rows; no evaluator, no SDK and no read surface may be reached."""
         import ast
         from pathlib import Path
 
@@ -1161,7 +1264,9 @@ class TestCompatibility:
             if isinstance(node, ast.ImportFrom) and node.module
         }
         assert not any(m.startswith(("boto3", "botocore")) for m in imported)
-        assert not any("parser" in m or "evaluator" in m for m in imported)
+        parsers = {m for m in imported if "parser" in m}
+        assert parsers == {"kalpamani.data.qualify.sharadar.parser"}
+        assert not any("evaluator" in m for m in imported)
         body = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         for forbidden in (
             ".get_object(",
@@ -1190,6 +1295,8 @@ class TestCompatibility:
                 reservation=PayloadDisposition.WRITTEN,
                 completed_requests=5,
                 planned_requests=6,
+                probes_issued=0,
+                max_provider_calls=12,
                 payloads_written=5,
                 payloads_already_present=0,
                 publication_state_unknown=False,

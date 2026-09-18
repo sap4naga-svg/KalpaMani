@@ -1181,3 +1181,34 @@ on data coordinates; the plan carries `N` and the `2N` provider-call ceiling). *
 94 worst-case; O-5 ≈ 10 runs / 847 / 2,561). D-19 and D-20 stay failed attempts; run 1 historical; run 2 superseded; S10c blocked; M0 not started; nothing
 deployed.
 
+### 17.4 The pagination-v2 offline implementation (2026-09-18, ADR-0053 §13 Part B)
+
+**Implemented offline, on synthetic fakes only; nothing built, registered, deployed or run.** The dependency closure the
+implementation touched: `ingest/sharadar/datasets.py` (`CrossSectionPage`, the tickers `table=stocks` predicate, per-dataset
+production limits; the qualification `Page` untouched), `qualify/sharadar/parser.py` (explicit ceilings, 32 MiB / 100,000 hard
+caps, qualification defaults pinned), `qualify/sharadar/read.py` (a per-reader read ceiling under a 32 MiB cap),
+`production/sharadar/plan.py` (v2: one data coordinate per group, conditional-probe authorization, `2N` call ceiling under 96,
+`1 + 3N + 1` writes, pinned targets), `program.py` (the accepted O-5 planner), `completion.py` (the closed completion-evidence
+contract and state machine), `provider.py` (predicate, probe shape), `processing.py` (parse every data page, probe only an
+exactly-full page, halt before the group's writes on any failed probe, v2 record, v2 locator, probes and calls counted),
+`locator.py` (v2 schema; v1 refused as superseded; probe not required / passed / failed / missing distinguished),
+`build_inputs.py` (v2 record cross-check; evidence agreement), `pagination.py` (admission v2), `silver.py` (v3: the tickers
+group by predicate, the actions event identity), `actions_identity.py` (promoted), `build_manifest.py` (v2),
+`compiled.py` (pinned pagination targets; new build pins), the M0 adapter (manifest v2), the readiness examples, the test
+fixtures and suites, and the six amended ADR sections' implementation notes.
+
+**The derived arithmetic.** Run 1′ = 47 data coordinates / 143 conditional writes / 94 worst-case provider calls. The O-5
+program over the O-8 window = **18 runs / 855 data coordinates / 2,601 conditional writes** (runs of 47, sixteen of 48, and
+40; every run ≤ 96 worst-case calls; stocks sessions partition the window with no gap or overlap; actions windows
+2024-06-03/2024-09-14, 2024-09-15/2025-09-15, 2025-09-16/2026-09-14 contiguous; one tickers snapshot per run). The
+indicative 10 / 847 / 2,561 assumed 96 data coordinates per run and is superseded. Every figure is read from the compiled
+plans by `tests/unit/test_pagination_v2_planner.py`, never typed.
+
+**Behaviour changes a reader should know.** The acquisition actor now parses every data response (ADR-0053 §11.2), so a
+malformed page halts the run before the group's writes and the build refuses the PARTIAL locator at its inputs; a changed
+actions row is a **distinct event** under the full-row identity (the original carries a redelivery gap and the build
+withholds the bars that would consume it, never serving either value silently); a probe is never a Bronze payload.
+Mutation controls (`tests/unit/test_pagination_v2_mutation_controls.py`) hold nine critical branches before, under and after
+their mutations. **Not deployed**: the four images, the task-definition registration, the S9 verification and any run remain
+separately gated; run 1 stays historical and not buildable; run 2's specification stays superseded; S10c stays blocked.
+

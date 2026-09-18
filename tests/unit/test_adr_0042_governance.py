@@ -81,18 +81,26 @@ def test_the_adr_states_the_shape_its_limits_and_what_a_locator_proves() -> None
 
 
 def test_the_implementation_matches_the_document() -> None:
+    # ADR-0053 §11.2/§13.3 (implemented): v2 adds COMPLETION_UNPROVEN and drops nothing.
     assert {m.value for m in pagination.PaginationDefect} == {
         "PAGE_OVER_LIMIT",
         "DELIVERY_TRUNCATED",
         "PAGINATION_UNSUPPORTED",
         "PAGINATION_INCONSISTENT",
+        "COMPLETION_UNPROVEN",
     }
     assert set(silver._PAGINATION_DEFECTS) == set(pagination.PaginationDefect)
     assert pagination.PAGINATION_POLICY_VERSION in ADR_TEXT or "pagination" in ADR_FLAT
+    assert pagination.PAGINATION_POLICY_VERSION == "sharadar-pagination-admission-v2"
     summary = pagination.PaginationSummary(
-        policy_version=pagination.PAGINATION_POLICY_VERSION, groups_admitted={}, groups_empty={}
+        policy_version=pagination.PAGINATION_POLICY_VERSION,
+        groups_admitted={},
+        groups_empty={},
+        groups_probed={},
     ).document()
-    assert summary["establishes"] == []
+    assert summary["establishes"] == [
+        "no row remained beyond the governed limit at the probe instant, for every probed group"
+    ]
     assert "stable ordering across offsets" in summary["does_not_establish"]
 
 

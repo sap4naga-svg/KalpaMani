@@ -91,7 +91,7 @@ def _acq_refused(document: object, **kwargs: Any) -> pin.InputDefect:
 class TestAcquisitionInput:
     def test_a_valid_input_is_admitted_and_its_identity_hidden(self) -> None:
         parsed = _acq(acquisition_input_document())
-        assert parsed.run_identity == RUN_ID and parsed.slice.request_count == 6
+        assert parsed.run_identity == RUN_ID and parsed.slice.request_count == 2
         assert RUN_ID not in repr(parsed) and PLAN_DIGEST not in repr(parsed)
 
     def test_the_digest_is_over_the_delivered_bytes(self) -> None:

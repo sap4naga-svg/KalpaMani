@@ -19,13 +19,26 @@ refusal, and a refused locator reads nothing further:
    whatever IAM would permit.
 3. **Request scope** -- the plan is **recompiled from the ledger row's slice and
    mode** and its digest must equal the row's; every entry's dataset, window,
-   page offset and page limit must equal the compiled request at that ordinal
-   exactly (never merely lie inside the slice's date range); each ordinal appears
-   exactly once and no two entries share coordinates; the completed-request count
-   equals the plan's; every payload key rebuilds exactly from the recorded dataset
-   and digest; byte counts are within the plan's response ceiling.
+   predicate, page offset and page limit must equal the compiled data coordinate
+   at that ordinal exactly (never merely lie inside the slice's date range); each
+   ordinal appears exactly once and no two entries share coordinates; the
+   completed-request count equals the plan's; every payload key rebuilds exactly
+   from the recorded dataset and digest; byte counts are within the plan's
+   response ceiling.
 4. **Completeness** -- ``COMPLETE``, ``publication_state_unknown = false``, a known
    schema version, and a size within the ceiling (checked before decoding).
+5. **Pagination v2 completion (ADR-0053 §13.3)** -- every entry carries the closed
+   completion evidence of its data coordinate: a short page (``rows < L``) proved
+   complete without a probe, or an exactly-full page (``rows == L``) with a passed
+   probe -- zero rows, the same schema digest, offset ``L``. The validator refuses,
+   with its own member each, a full page with **no probe evidence**, a probe that
+   **failed** (data-bearing, mismatched schema, wrong offset), a probe on a **short
+   page**, a row count **over the limit**, and a run whose probe count or provider
+   calls disagree with its entries or exceed the plan's worst-case ceiling ``2N``.
+
+**The v1 locator (``kalpamani-production-run-locator/v1``) is superseded.** It described
+two-to-four offset pages per group; it is refused as ``SCHEMA_VERSION_SUPERSEDED`` rather
+than reinterpreted under v2, so historical run 1 stays evidence and never a build input.
 
 **There is no fallback** that reconstructs by listing, probing or guessing.
 """
@@ -41,6 +54,14 @@ from typing import Any, Final, Protocol
 from kalpamani.data.contracts.vocabulary import AcquisitionMode, DataClassification
 from kalpamani.data.ingest.publication import BRONZE_NAMESPACE
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER
+from kalpamani.data.production.sharadar.completion import (
+    COMPLETION_CONTRACT_ID,
+    PROBE_POLICY,
+    CompletionDefect,
+    CompletionError,
+    PaginationEvidence,
+    parse_pagination_evidence,
+)
 from kalpamani.data.production.sharadar.documents import (
     DocumentDefect,
     DocumentError,
@@ -65,6 +86,7 @@ from kalpamani.data.production.sharadar.keys import (
     run_locator_logical_key,
 )
 from kalpamani.data.production.sharadar.plan import (
+    PAYLOAD_CEILING_BYTES,
     CompiledPlan,
     ProductionPlanError,
     compile_plan,
@@ -80,8 +102,12 @@ from kalpamani.data.qualify.sharadar.read import (
     read_bounded_body,
 )
 
-#: The one schema version, matched exactly, and the size ceiling.
-LOCATOR_SCHEMA_VERSION: Final = "kalpamani-production-run-locator/v1"
+#: The one schema version, matched exactly, and the size ceiling. The superseded
+#: versions are recognized only to be refused by their own member.
+LOCATOR_SCHEMA_VERSION: Final = "kalpamani-production-run-locator/v2"
+SUPERSEDED_LOCATOR_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset(
+    {"kalpamani-production-run-locator/v1"}
+)
 MAX_LOCATOR_BYTES: Final = 256 * 1024
 
 #: The two production acquisition modes a run locator may record. A production
@@ -105,6 +131,12 @@ LOCATOR_FIELDS: Final[frozenset[str]] = frozenset(
         "publication_state_unknown",
         "planned_requests",
         "completed_requests",
+        "pagination_contract",
+        "probe_policy",
+        "probes_issued",
+        "provider_calls",
+        "max_provider_calls",
+        "expected_writes",
         "entries",
     }
 )
@@ -120,9 +152,12 @@ ENTRY_FIELDS: Final[frozenset[str]] = frozenset(
         "record_sha256",
         "record_bytes",
         "request",
+        "pagination",
     }
 )
-REQUEST_FIELDS: Final[frozenset[str]] = frozenset({"window", "page_offset", "page_limit"})
+REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
+    {"window", "predicate", "page_offset", "page_limit"}
+)
 
 
 class Completeness(StrEnum):
@@ -160,6 +195,7 @@ class RunLocatorDefect(StrEnum):
     DOCUMENT_MALFORMED = "DOCUMENT_MALFORMED"
     DUPLICATE_KEY = "DUPLICATE_KEY"
     SCHEMA_VERSION_UNKNOWN = "SCHEMA_VERSION_UNKNOWN"
+    SCHEMA_VERSION_SUPERSEDED = "SCHEMA_VERSION_SUPERSEDED"
     FIELD_UNKNOWN = "FIELD_UNKNOWN"
     FIELD_MISSING = "FIELD_MISSING"
     FIELD_MALFORMED = "FIELD_MALFORMED"
@@ -181,6 +217,13 @@ class RunLocatorDefect(StrEnum):
     INCOMPLETE = "INCOMPLETE"
     PUBLICATION_STATE_UNKNOWN = "PUBLICATION_STATE_UNKNOWN"
     NO_LEDGER_ROW = "NO_LEDGER_ROW"
+    PAGINATION_MALFORMED = "PAGINATION_MALFORMED"
+    ROW_COUNT_OVER_LIMIT = "ROW_COUNT_OVER_LIMIT"
+    PROBE_EVIDENCE_MISSING = "PROBE_EVIDENCE_MISSING"
+    PROBE_FAILED = "PROBE_FAILED"
+    PROBE_UNEXPECTED = "PROBE_UNEXPECTED"
+    PROBE_COUNT_INCONSISTENT = "PROBE_COUNT_INCONSISTENT"
+    PROVIDER_CALLS_OVER_CEILING = "PROVIDER_CALLS_OVER_CEILING"
 
 
 class RunLocatorError(Exception):
@@ -209,6 +252,18 @@ _DOCUMENT_DEFECTS: Final[dict[DocumentDefect, RunLocatorDefect]] = {
     DocumentDefect.DUPLICATE_KEY: RunLocatorDefect.DUPLICATE_KEY,
 }
 
+#: Total: every completion-evidence defect has a locator defect. A test asserts totality.
+_COMPLETION_DEFECTS: Final[dict[CompletionDefect, RunLocatorDefect]] = {
+    CompletionDefect.EVIDENCE_MALFORMED: RunLocatorDefect.PAGINATION_MALFORMED,
+    CompletionDefect.CONTRACT_UNKNOWN: RunLocatorDefect.PAGINATION_MALFORMED,
+    CompletionDefect.LIMIT_MISMATCH: RunLocatorDefect.PAGINATION_MALFORMED,
+    CompletionDefect.OUTCOME_INCONSISTENT: RunLocatorDefect.PAGINATION_MALFORMED,
+    CompletionDefect.ROW_COUNT_OVER_LIMIT: RunLocatorDefect.ROW_COUNT_OVER_LIMIT,
+    CompletionDefect.PROBE_EVIDENCE_MISSING: RunLocatorDefect.PROBE_EVIDENCE_MISSING,
+    CompletionDefect.PROBE_FAILED: RunLocatorDefect.PROBE_FAILED,
+    CompletionDefect.PROBE_UNEXPECTED: RunLocatorDefect.PROBE_UNEXPECTED,
+}
+
 
 def decode_run_locator(raw: object) -> dict[str, Any]:
     """The closed object of one locator, refused above 256 KiB **before decoding**."""
@@ -228,8 +283,10 @@ class RunLocatorEntry:
     payload_disposition: PayloadDisposition
     record: ExactObjectReference
     window: str
+    predicate: tuple[tuple[str, str], ...]
     page_offset: int
     page_limit: int
+    pagination: PaginationEvidence
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing."""
@@ -251,6 +308,8 @@ class ValidatedRunLocator:
     started_at: datetime
     completed_at: datetime
     entries: tuple[RunLocatorEntry, ...]
+    probes_issued: int
+    provider_calls: int
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse subclassing."""
@@ -318,8 +377,14 @@ def _entry(raw: object, *, covered: Slice, plan: CompiledPlan, run_id: str) -> R
     window = exact_str(request["window"])
     page_offset = exact_int(request["page_offset"])
     page_limit = exact_int(request["page_limit"])
+    raw_predicate = request["predicate"]
     if window is None or page_offset is None or page_limit is None or page_limit < 1:
         raise _refuse(RunLocatorDefect.ENTRY_MALFORMED) from None
+    if type(raw_predicate) is not dict or any(
+        type(name) is not str or type(value) is not str for name, value in raw_predicate.items()
+    ):
+        raise _refuse(RunLocatorDefect.ENTRY_MALFORMED) from None
+    predicate = tuple(sorted(raw_predicate.items()))
 
     # Clause 2: the prefix allowlist, before any exact reconstruction.
     if dataset not in covered.datasets:
@@ -340,13 +405,19 @@ def _entry(raw: object, *, covered: Slice, plan: CompiledPlan, run_id: str) -> R
     if not 0 <= ordinal < plan.request_count:
         raise _refuse(RunLocatorDefect.ORDINAL_INCONSISTENT) from None
     compiled = plan.requests[ordinal]
-    if (dataset, window, page_offset, page_limit) != (
+    if (dataset, window, predicate, page_offset, page_limit) != (
         compiled.dataset,
         compiled.window,
+        tuple(sorted(compiled.predicate)),
         compiled.page_offset,
         compiled.page_limit,
     ):
         raise _refuse(RunLocatorDefect.REQUEST_COORDINATES_MISMATCH) from None
+    # Clause 5: the closed completion evidence, held to this coordinate's governed limit.
+    try:
+        pagination = parse_pagination_evidence(raw["pagination"], governed_limit=page_limit)
+    except CompletionError as error:
+        raise _refuse(_COMPLETION_DEFECTS[error.defect]) from None
 
     # Clause 3, per entry: the key embeds exactly the recorded digest, rebuilt
     # through the one production key builder rather than parsed out of the string.
@@ -384,8 +455,10 @@ def _entry(raw: object, *, covered: Slice, plan: CompiledPlan, run_id: str) -> R
         payload_disposition=PayloadDisposition(disposition),
         record=record,
         window=window,
+        predicate=predicate,
         page_offset=page_offset,
         page_limit=page_limit,
+        pagination=pagination,
     )
 
 
@@ -418,6 +491,8 @@ def validate_run_locator(
     schema = exact_str(document["schema_version"])
     if schema is None:
         raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
+    if schema in SUPERSEDED_LOCATOR_SCHEMA_VERSIONS:
+        raise _refuse(RunLocatorDefect.SCHEMA_VERSION_SUPERSEDED) from None
     if schema != LOCATOR_SCHEMA_VERSION:
         raise _refuse(RunLocatorDefect.SCHEMA_VERSION_UNKNOWN) from None
 
@@ -431,6 +506,23 @@ def validate_run_locator(
     planned = exact_int(document["planned_requests"])
     completed = exact_int(document["completed_requests"])
     entries = document["entries"]
+    contract = exact_str(document["pagination_contract"])
+    policy = exact_str(document["probe_policy"])
+    probes_issued = exact_int(document["probes_issued"])
+    provider_calls = exact_int(document["provider_calls"])
+    max_calls = exact_int(document["max_provider_calls"])
+    expected_writes = exact_int(document["expected_writes"])
+    if (
+        contract != COMPLETION_CONTRACT_ID
+        or policy != PROBE_POLICY
+        or probes_issued is None
+        or probes_issued < 0
+        or provider_calls is None
+        or provider_calls < 0
+        or max_calls is None
+        or expected_writes is None
+    ):
+        raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
     if (
         declared_run is None
         or plan_digest is None
@@ -486,6 +578,14 @@ def validate_run_locator(
         raise _refuse(RunLocatorDefect.REQUEST_COUNT_MISMATCH) from None
     if sorted(entry.ordinal for entry in parsed) != list(range(len(parsed))):
         raise _refuse(RunLocatorDefect.ORDINAL_INCONSISTENT) from None
+    # Clause 5, per run: the plan's bounds and the observed probe and call accounting.
+    if max_calls != plan.max_provider_calls or expected_writes != plan.expected_writes:
+        raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
+    if provider_calls > max_calls:
+        raise _refuse(RunLocatorDefect.PROVIDER_CALLS_OVER_CEILING) from None
+    observed_probes = sum(1 for entry in parsed if entry.pagination.probe_issued)
+    if probes_issued != observed_probes or provider_calls != len(parsed) + observed_probes:
+        raise _refuse(RunLocatorDefect.PROBE_COUNT_INCONSISTENT) from None
 
     # Clause 4: completeness.
     if completeness != Completeness.COMPLETE.value:
@@ -501,6 +601,8 @@ def validate_run_locator(
         started_at=started_at,
         completed_at=completed_at,
         entries=tuple(sorted(parsed, key=lambda entry: entry.ordinal)),
+        probes_issued=probes_issued,
+        provider_calls=provider_calls,
     )
 
 
@@ -559,8 +661,13 @@ class ProductionLocatorReader:
                 operation=ReadOperation.BIND, failure=ReadFailure.INVALID_CONFIGURATION
             )
         self._client = client
+        # Bound at the accepted production payload ceiling (ADR-0053 §13.2): a
+        # locator may name an object up to 32 MiB, and the reader refuses larger
+        # before any byte is requested.
         self._reader = LicensedObjectReader(
-            client=_GetOnlyView(client), licensed_bucket=licensed_bucket
+            client=_GetOnlyView(client),
+            licensed_bucket=licensed_bucket,
+            read_ceiling=PAYLOAD_CEILING_BYTES,
         )
         self._bucket = licensed_bucket
 
@@ -620,6 +727,7 @@ __all__ = [
     "MAX_LOCATOR_BYTES",
     "PRODUCTION_MODES",
     "REQUEST_FIELDS",
+    "SUPERSEDED_LOCATOR_SCHEMA_VERSIONS",
     "Completeness",
     "GetOnlyS3Client",
     "PayloadDisposition",

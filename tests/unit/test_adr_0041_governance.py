@@ -83,9 +83,10 @@ def test_the_adr_separates_documented_from_assumed_and_cites_the_register() -> N
 
 
 def test_the_implementation_matches_the_document() -> None:
-    assert datasets.CROSS_SECTION_PARAMETER_ALLOWLIST == datasets.QUERY_PARAMETER_ALLOWLIST - {
-        "ticker"
-    }
+    # ADR-0053 §11.3 (implemented): the tickers ``table`` predicate joins the production form.
+    assert datasets.CROSS_SECTION_PARAMETER_ALLOWLIST == (
+        datasets.QUERY_PARAMETER_ALLOWLIST - {"ticker"}
+    ) | {"table"}
     assert datasets.QUERY_PARAMETER_ALLOWLIST == frozenset(
         {"api_key", "format", "ticker", "from", "to", "limit", "skip"}
     )

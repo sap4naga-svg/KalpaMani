@@ -402,7 +402,7 @@ def silver_layer(cal: SessionCalendar | None = None) -> SilverLayer:
         actions=dataset(SharadarDataset.ACTIONS.value, actions),
         schemas_version="synthetic-schemas-v1",
         pagination=PaginationSummary(
-            policy_version="synthetic", groups_admitted={}, groups_empty={}
+            policy_version="synthetic", groups_admitted={}, groups_empty={}, groups_probed={}
         ),
     )
 

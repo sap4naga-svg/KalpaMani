@@ -11,20 +11,22 @@ from __future__ import annotations
 import ast
 import dataclasses
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 
 from fixtures.production_build import (
-    ACTIONS_HEADER,
     RUN_1,
     RUN_1_AT,
     RUN_2,
     RUN_2_AT,
+    STOCKS_HEADER,
     FakeS3Store,
     csv,
     responses_for_run,
+    stocks_rows,
 )
 from fixtures.production_entry import (
     ACQ,
@@ -354,7 +356,7 @@ class TestAcquisitionComposition:
         assert receipt.outcome is TaskOutcome.COMPLETED and receipt.exit_code == 0
         assert receipt.runner is RunnerOutcome.RELEASED
         secrets, transport, puts = harness.data_plane_calls()
-        assert (secrets, transport, puts) == (1, 16, 50)
+        assert (secrets, transport, puts) == (1, 7, 23)
         assert receipt.counts.secret_retrievals == secrets
         assert receipt.counts.provider_requests == transport
         assert receipt.counts.s3_operations == puts
@@ -383,9 +385,9 @@ class TestAcquisitionComposition:
                 "describe_network_interfaces": 0,
                 "stop_task": 0,
                 "identity_calls": 1,
-                "s3_operations": 50,
+                "s3_operations": 23,
                 "secret_retrievals": 1,
-                "provider_requests": 16,
+                "provider_requests": 7,
             }.items()
         )
         assert lines[3:] == (*expected_counts, lines[-1])
@@ -479,7 +481,7 @@ class TestAcquisitionComposition:
     def test_actual_transport_invocations_are_counted_and_local_refusals_are_not(self) -> None:
         harness = AcquisitionHarness(spent=CONFIGURED)
         receipt = harness.run()
-        assert receipt.counts.provider_requests == harness.transport.call_count == 16
+        assert receipt.counts.provider_requests == harness.transport.call_count == 7
         # The same adapter, reused across a second harness on a fresh store, keeps
         # counting from its own invocations rather than from the plan.
         second = AcquisitionHarness(run_id=RUN_2, run=2, at=RUN_2_AT, spent=CONFIGURED)
@@ -487,7 +489,7 @@ class TestAcquisitionComposition:
         receipt = second.run(transport=second.constructions.factory("transport", harness.transport))
         assert receipt.outcome is TaskOutcome.COMPLETED
         # Run 2's plan is larger; the count is this run's own invocations, not the total.
-        assert receipt.counts.provider_requests == harness.transport.call_count - 16 == 32
+        assert receipt.counts.provider_requests == harness.transport.call_count - 7 == 15
 
     def test_a_provider_failure_halts_with_observed_counts(self) -> None:
         harness = AcquisitionHarness(spent=CONFIGURED)
@@ -736,7 +738,7 @@ class TestBuildComposition:
         assert receipt.outcome is TaskOutcome.COMPLETED and receipt.exit_code == 0
         assert receipt.runner is RunnerOutcome.RELEASED
         gets, puts = harness.data_plane_calls()
-        assert (gets, puts) == (33, 8) and receipt.counts.s3_operations == gets + puts
+        assert (gets, puts) == (15, 8) and receipt.counts.s3_operations == gets + puts
         assert receipt.counts.secret_retrievals == 0 and receipt.counts.provider_requests == 0
         assert receipt.counts.identity_calls == harness.sts.calls == 1
         assert harness.constructions.built == ["ssm", "sts", "s3"]
@@ -799,22 +801,38 @@ class TestBuildComposition:
     def test_the_full_synthetic_path_keeps_the_pagination_refusal_and_zero_build_writes(
         self,
     ) -> None:
-        """Acquisition entry -> COMPLETE locator -> build entry, an unsupported delivery."""
+        """Acquisition entry -> a data-bearing probe halts -> build entry refuses the PARTIAL
+        locator with zero writes (pagination v2: truncation is caught at acquisition)."""
         responses = responses_for_run(1)
-        responses[("actions", "2026-08-01/2026-09-14", 10000)] = csv(
-            ACTIONS_HEADER,
-            [("2026-08-20", "dividend", "ZY00001", "Synthetic", "0.01", "", "")],
-        )
+        base = stocks_rows(date(2026, 9, 1), run=1)
+        filler: list[tuple[str, ...]] = [
+            (
+                f"ZY{i:05d}",
+                "2026-09-01",
+                "9.90",
+                "10.20",
+                "9.70",
+                "10.00",
+                "1000",
+                "10.00",
+                "10.00",
+                "2026-09-04",
+            )
+            for i in range(10_000 - len(base))
+        ]
+        responses[("stocks", "2026-09-01/2026-09-01", 0)] = csv(STOCKS_HEADER, [*base, *filler])
+        responses[("stocks", "2026-09-01/2026-09-01", 10000)] = csv(STOCKS_HEADER, filler[:1])
         source = AcquisitionHarness(responses=responses, spent=CONFIGURED)
         acquisition = source.run()
-        assert acquisition.outcome is TaskOutcome.COMPLETED
+        assert acquisition.outcome is TaskOutcome.ACQUISITION_HALTED and acquisition.exit_code == 22
+        assert acquisition.counts.provider_requests == source.transport.call_count == 4
         document = json.loads(source.store.objects[f"bronze/sharadar/_indexes/{RUN_1}.json"])
-        assert document["completeness"] == "COMPLETE"
+        assert document["completeness"] == "PARTIAL" and document["provider_calls"] == 4
         harness = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
         receipt = harness.run()
-        assert receipt.outcome is TaskOutcome.REFUSED_NORMALIZATION and receipt.exit_code == 31
+        assert receipt.outcome is TaskOutcome.REFUSED_INPUTS and receipt.exit_code == 30
         gets, puts = harness.data_plane_calls()
-        assert puts == 0 and gets == 33 and receipt.counts.s3_operations == 33
+        assert puts == 0 and gets == 1 and receipt.counts.s3_operations == 1
         assert source.store.keys_under("silver/") == []
         assert source.store.keys_under("gold/") == []
         assert source.store.keys_under("manifests/") == []

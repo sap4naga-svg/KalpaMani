@@ -66,6 +66,14 @@ MAX_PARSE_BYTES: Final = 4 * 1024 * 1024
 #: row-limit maximum. A page above it is not a page this package asked for.
 MAX_ROWS_PER_PAGE: Final = 10_000
 
+#: The production ceilings (ADR-0053 §13.2): a complete provider body is admitted up to
+#: 32 MiB and refused whole above it -- never truncated -- and a page is bounded by its
+#: dataset's governed limit. These are the **hard caps** a caller may lower and never
+#: raise; the qualification defaults above stay pinned for the accepted qualification
+#: callers, which pass no ceiling of their own.
+PARSE_BYTES_CEILING: Final = 32 * 1024 * 1024
+PARSE_ROWS_CEILING: Final = 100_000
+
 #: Longest single field this parser accepts, and the CSV module's own field limit
 #: is left alone: this is checked per value, after parsing, so an enormous field is
 #: refused as evidence rather than by an interpreter setting.
@@ -225,8 +233,20 @@ def schema_digest_of(header: tuple[str, ...]) -> str:
     return sha256_hex(canonical_bytes(list(header)))
 
 
-def parse_payload(payload: bytes, *, dataset: SharadarDataset) -> ParsedPage:
+def parse_payload(
+    payload: bytes,
+    *,
+    dataset: SharadarDataset,
+    max_bytes: int = MAX_PARSE_BYTES,
+    max_rows: int = MAX_ROWS_PER_PAGE,
+) -> ParsedPage:
     """Parse one retained CSV payload for one dataset.
+
+    ``max_bytes`` and ``max_rows`` default to the qualification ceilings and may be
+    raised only up to :data:`PARSE_BYTES_CEILING` and :data:`PARSE_ROWS_CEILING` (the
+    production ceilings of ADR-0053 §13.2); a ceiling outside ``1..cap`` is a caller
+    defect. The byte ceiling is checked on the **whole** body before anything is
+    decoded: an oversized body is refused, never partially parsed.
 
     Raises:
         ParseError: for a payload that is not exact bytes, over the ceiling, not
@@ -237,9 +257,13 @@ def parse_payload(payload: bytes, *, dataset: SharadarDataset) -> ParsedPage:
     """
     if type(dataset) is not SharadarDataset:
         raise _refuse(ParseDefect.DATASET_UNKNOWN) from None
+    if type(max_bytes) is not int or not 1 <= max_bytes <= PARSE_BYTES_CEILING:
+        raise TypeError("max_bytes must be an int within the parse byte ceiling")
+    if type(max_rows) is not int or not 1 <= max_rows <= PARSE_ROWS_CEILING:
+        raise TypeError("max_rows must be an int within the parse row ceiling")
     if type(payload) is not bytes:
         raise _refuse(ParseDefect.PAYLOAD_MALFORMED) from None
-    if len(payload) > MAX_PARSE_BYTES:
+    if len(payload) > max_bytes:
         raise _refuse(ParseDefect.PAYLOAD_TOO_LARGE) from None
     if payload.startswith(b"\xef\xbb\xbf"):
         # Refused rather than stripped. Stripping would change the observed header,
@@ -276,7 +300,7 @@ def parse_payload(payload: bytes, *, dataset: SharadarDataset) -> ParsedPage:
         raise _refuse(ParseDefect.REQUIRED_FIELD_MISSING) from None
 
     body = records[1:]
-    if len(body) > MAX_ROWS_PER_PAGE:
+    if len(body) > max_rows:
         raise _refuse(ParseDefect.ROW_COUNT_EXCEEDED) from None
 
     rows: list[tuple[str | None, ...]] = []
@@ -364,6 +388,8 @@ __all__ = [
     "MAX_FIELD_LENGTH",
     "MAX_PARSE_BYTES",
     "MAX_ROWS_PER_PAGE",
+    "PARSE_BYTES_CEILING",
+    "PARSE_ROWS_CEILING",
     "REQUIRED_FIELDS",
     "PagePair",
     "ParseDefect",

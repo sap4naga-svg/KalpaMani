@@ -60,6 +60,10 @@ LOCATOR_KEY_PREFIX: Final = f"{_LICENSED_PREFIX}/qualification/sharadar/locators
 #: this; the margin exists because a claim, a record and a payload are read through
 #: one surface and only one of them is bounded by the transport.
 MAX_READ_BYTES: Final = 8 * 1024 * 1024
+#: The hard cap on any reader's per-object ceiling: the production payload ceiling of
+#: ADR-0053 §13.2. A reader is bound to :data:`MAX_READ_BYTES` unless it declares a
+#: higher ceiling at construction, and may never exceed this cap.
+MAX_READ_BYTES_CEILING: Final = 32 * 1024 * 1024
 
 #: How many bytes are pulled from the response stream per read call.
 _CHUNK_BYTES: Final = 256 * 1024
@@ -295,19 +299,38 @@ class LicensedObjectReader:
     refusal: a run that failed halfway still has to be able to report what it did.
     """
 
-    __slots__ = ("_bucket", "_client", "get_object_count", "head_object_count", "put_object_count")
+    __slots__ = (
+        "_bucket",
+        "_client",
+        "_read_ceiling",
+        "get_object_count",
+        "head_object_count",
+        "put_object_count",
+    )
 
-    def __init__(self, *, client: AssessmentS3Client, licensed_bucket: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: AssessmentS3Client,
+        licensed_bucket: str,
+        read_ceiling: int = MAX_READ_BYTES,
+    ) -> None:
         """Bind an injected client to one licensed bucket.
 
+        ``read_ceiling`` is this reader's per-object ceiling: the qualification
+        ceiling by default, raisable only up to :data:`MAX_READ_BYTES_CEILING`.
+
         Raises:
-            LicensedReadError: ``BIND: INVALID_CONFIGURATION`` for a bucket value or
-                a client this reader cannot use. **The refusal never echoes the
-                value** -- a bucket name is a private identifier, so it may not
+            LicensedReadError: ``BIND: INVALID_CONFIGURATION`` for a bucket value, a
+                ceiling or a client this reader cannot use. **The refusal never echoes
+                the value** -- a bucket name is a private identifier, so it may not
                 appear in an error any more than in a log.
         """
         if type(licensed_bucket) is not str or not 3 <= len(licensed_bucket) <= 63:
             raise _refuse(ReadOperation.BIND, ReadFailure.INVALID_CONFIGURATION) from None
+        if type(read_ceiling) is not int or not 0 < read_ceiling <= MAX_READ_BYTES_CEILING:
+            raise _refuse(ReadOperation.BIND, ReadFailure.INVALID_CONFIGURATION) from None
+        self._read_ceiling = read_ceiling
         for method in ("get_object", "put_object", "head_object"):
             if not callable(getattr(client, method, None)):
                 raise _refuse(ReadOperation.BIND, ReadFailure.INVALID_CONFIGURATION) from None
@@ -378,7 +401,7 @@ class LicensedObjectReader:
         """
         if type(reference) is not ExactObjectReference:
             raise _refuse(ReadOperation.GET, ReadFailure.INVALID_KEY) from None
-        if reference.expected_bytes > MAX_READ_BYTES:
+        if reference.expected_bytes > self._read_ceiling:
             # Refused before the request, not after the bytes arrive.
             raise _refuse(ReadOperation.GET, ReadFailure.TOO_LARGE) from None
         location = physical_key(reference.object_key())
@@ -389,7 +412,7 @@ class LicensedObjectReader:
         except Exception as exception:
             raise _classified(exception, ReadOperation.GET) from None
 
-        payload = _bounded_body(response, ceiling=min(MAX_READ_BYTES, reference.expected_bytes))
+        payload = _bounded_body(response, ceiling=min(self._read_ceiling, reference.expected_bytes))
         if len(payload) != reference.expected_bytes:
             raise _refuse(ReadOperation.GET, ReadFailure.INTEGRITY_MISMATCH) from None
         if sha256_hex(payload) != reference.expected_sha256:
@@ -470,6 +493,7 @@ class LicensedObjectReader:
 __all__ = [
     "LOCATOR_KEY_PREFIX",
     "MAX_READ_BYTES",
+    "MAX_READ_BYTES_CEILING",
     "AssessmentS3Client",
     "ExactObjectReference",
     "LicensedObjectReader",

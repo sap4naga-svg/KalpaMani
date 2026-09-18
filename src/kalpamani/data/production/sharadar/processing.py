@@ -28,12 +28,27 @@ The reservation is never deleted -- the actor cannot -- so a reserved identity
 stays spent when later processing fails. This is the durable guard the
 preliminary spent-identity check is not.
 
+**Pagination v2: one data coordinate per group, a probe only for an exactly-full page**
+(ADR-0053 §11.2, §13.3). Every planned coordinate is one data request at offset 0 and
+its dataset's governed limit ``L``. The response body is held to the 32 MiB ceiling as
+a whole -- refused, never truncated -- and then parsed by the accepted parser to count
+its rows and compute its schema digest. Fewer than ``L`` rows is complete without a
+probe (``SHORT_PAGE_COMPLETE``); exactly ``L`` rows requires one completion probe at
+offset ``L`` that must parse, prove zero rows and carry the same schema digest
+(``PROBE_PASSED``); more than ``L`` is malformed. A data-bearing, refused, malformed or
+schema-mismatched probe halts the run **before the group's writes** -- no write follows
+a failed probe, and no ``COMPLETE`` locator can. The probe's body is never a Bronze
+payload; its evidence is retained in the group's record and locator entry. Provider
+requests are counted as issued, probes included, and held to the plan's worst-case
+ceiling ``2N``; writes are ``1 + 3N + 1`` on planned data coordinates only.
+
 **Write-only, conditional, exactly accounted** (ADR-0019, ADR-0036 §2.2, ADR-0037).
-Per completed request: one conditional ``PutObject`` for the claim, one for the
-payload, one for the acquisition record -- claim first, so a reused identity meets
-an occupied name before any bytes land; record last, so a record can never name a
-payload that does not exist. Nothing is read, listed, deleted or copied; nothing is
-retried; a run is never resumed.
+Per completed coordinate: one conditional ``PutObject`` for the claim, one for the
+payload, one for the acquisition record (v2: the accepted retrieval record wrapped with
+the coordinate's pagination evidence) -- claim first, so a reused identity meets an
+occupied name before any bytes land; record last, so a record can never name a payload
+that does not exist. Nothing is read, listed, deleted or copied; nothing is retried; a
+run is never resumed.
 
 **Dispositions are explicit, and only one kind of 412 is success.** The payload
 namespace is content-addressed, so two requests returning identical bytes hit one
@@ -75,8 +90,17 @@ from kalpamani.data.ingest.publication import (
 )
 from kalpamani.data.ingest.sharadar.client import Pacer
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
-from kalpamani.data.ingest.sharadar.datasets import PROVIDER
+from kalpamani.data.ingest.sharadar.datasets import PROVIDER, SharadarDataset
 from kalpamani.data.ingest.sharadar.secrets import SecretsClient, sharadar_credential_from_secret
+from kalpamani.data.production.sharadar.completion import (
+    COMPLETION_CONTRACT_ID,
+    CompletionOutcome,
+    PaginationEvidence,
+    ParserOutcome,
+    ProbeEvidence,
+    ProbeOutcome,
+    request_shape_digest,
+)
 from kalpamani.data.production.sharadar.identities import SpentIdentityRegistry
 from kalpamani.data.production.sharadar.inputs import AcquisitionInput, LedgerRow
 from kalpamani.data.production.sharadar.keys import (
@@ -113,14 +137,27 @@ from kalpamani.data.qualify.sharadar.operations import (
     LocatorPublicationStatus,
     publish_locator,
 )
+from kalpamani.data.qualify.sharadar.parser import ParseDefect, ParseError, parse_payload
 from kalpamani.data.qualify.sharadar.publication import (
     LicensedWriteOnlyPublisher,
     NameOccupiedError,
 )
 
-#: The schema version every production acquisition record carries. A constant of
-#: the plan, not of a payload: the acquisition path parses nothing.
+#: The source-schema version every production retrieval record carries: the vendor's
+#: CSV form, unchanged by pagination v2. A constant of the plan, not of a payload.
 SOURCE_SCHEMA_VERSION: Final = "sharadar-csv-production-v1"
+
+#: The production acquisition record contract (pagination v2): the accepted retrieval
+#: record (closed by the neutral allowlist) wrapped with the coordinate's request shape
+#: and its completion evidence. The v1 record -- the bare retrieval record -- is a
+#: superseded contract the build refuses rather than reinterprets.
+RECORD_CONTRACT_ID: Final = "kalpamani-production-acquisition-record/v2"
+RECORD_FIELDS: Final[frozenset[str]] = frozenset(
+    {"contract_id", "retrieval", "request", "pagination"}
+)
+RECORD_REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
+    {"window", "predicate", "page_offset", "page_limit", "request_shape_sha256"}
+)
 
 #: The run reservation contract. Closed fields; no free text.
 RESERVATION_CONTRACT_ID: Final = "kalpamani-production-run-reservation/v1"
@@ -163,6 +200,13 @@ class ProcessingHalt(StrEnum):
     PROVIDER_FAILURE = "PROVIDER_FAILURE"
     RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
     RUN_BYTES_EXCEEDED = "RUN_BYTES_EXCEEDED"
+    DATA_PAGE_MALFORMED = "DATA_PAGE_MALFORMED"
+    PAGE_OVER_LIMIT = "PAGE_OVER_LIMIT"
+    PROBE_DATA_BEARING = "PROBE_DATA_BEARING"
+    PROBE_REFUSED = "PROBE_REFUSED"
+    PROBE_MALFORMED = "PROBE_MALFORMED"
+    PROBE_SCHEMA_MISMATCH = "PROBE_SCHEMA_MISMATCH"
+    PROVIDER_CALLS_EXCEEDED = "PROVIDER_CALLS_EXCEEDED"
     DEADLINE_EXHAUSTED = "DEADLINE_EXHAUSTED"
     PUBLICATION_CONFLICT = "PUBLICATION_CONFLICT"
     PUBLICATION_REFUSED = "PUBLICATION_REFUSED"
@@ -242,6 +286,7 @@ class CompletedRequest:
     record_sha256: str
     record_bytes: int
     record_key: str
+    pagination: PaginationEvidence
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -259,6 +304,8 @@ class AcquisitionReport:
     reservation: PayloadDisposition | None
     completed_requests: int
     planned_requests: int
+    probes_issued: int
+    max_provider_calls: int
     payloads_written: int
     payloads_already_present: int
     publication_state_unknown: bool
@@ -273,6 +320,12 @@ class AcquisitionReport:
             raise TypeError("halt must be an exact ProcessingHalt member or None")
         if self.completed_requests > self.planned_requests:
             raise ValueError("completed requests cannot exceed planned requests")
+        if self.probes_issued > self.planned_requests:
+            raise ValueError("at most one probe per planned data coordinate")
+        if self.max_provider_calls != 2 * self.planned_requests:
+            raise ValueError("the worst-case provider-call ceiling is one probe per coordinate")
+        if self.counts.provider_requests > self.max_provider_calls:
+            raise ValueError("provider requests cannot exceed the compiled ceiling")
         if self.reservation is not None and self.reservation is not PayloadDisposition.WRITTEN:
             raise ValueError("a reservation is either written by this run or absent")
         if self.reservation is None and (self.completed_requests or self.locator is not None):
@@ -351,11 +404,50 @@ def _conditional_write(
     return PayloadDisposition.WRITTEN
 
 
+def build_acquisition_record(
+    *,
+    request: ProductionRequest,
+    retrieval: RetrievalMetadata,
+    payload_sha256: str,
+    payload_bytes: int,
+    pagination: PaginationEvidence,
+) -> dict[str, Any]:
+    """The v2 acquisition record: the accepted retrieval record, the request shape, the evidence.
+
+    The inner retrieval record is held to the neutral allowlist exactly as before; the
+    wrapper adds nothing free-form -- a closed request shape and the closed completion
+    evidence document -- under a contract identifier the build matches exactly.
+    """
+    record = acquisition_record(
+        retrieval=retrieval, content_sha256=payload_sha256, byte_count=payload_bytes
+    )
+    require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+    return {
+        "contract_id": RECORD_CONTRACT_ID,
+        "retrieval": record,
+        "request": {
+            "window": request.window,
+            "predicate": dict(request.predicate),
+            "page_offset": request.page_offset,
+            "page_limit": request.page_limit,
+            "request_shape_sha256": request_shape_digest(
+                dataset=request.dataset,
+                window=request.window,
+                predicate=request.predicate,
+                page_offset=request.page_offset,
+                page_limit=request.page_limit,
+            ),
+        },
+        "pagination": pagination.document(),
+    }
+
+
 def _publish_request(
     *,
     publisher: LicensedWriteOnlyPublisher,
     request: ProductionRequest,
     payload: bytes,
+    pagination: PaginationEvidence,
     run_id: str,
     mode: AcquisitionMode,
     retrieved_at: datetime,
@@ -366,8 +458,13 @@ def _publish_request(
     claim = acquisition_claim(retrieval=retrieval, content_sha256=digest)
     require_recordable(claim, allowed=CLAIM_FIELDS)
     claim_bytes = canonical_bytes(claim)
-    record = acquisition_record(retrieval=retrieval, content_sha256=digest, byte_count=len(payload))
-    require_recordable(record, allowed=ACQUISITION_RECORD_FIELDS)
+    record = build_acquisition_record(
+        request=request,
+        retrieval=retrieval,
+        payload_sha256=digest,
+        payload_bytes=len(payload),
+        pagination=pagination,
+    )
     record_bytes = canonical_bytes(record)
 
     claim_key = production_claim_key(
@@ -395,7 +492,131 @@ def _publish_request(
         record_sha256=record_key.content_sha256,
         record_bytes=len(record_bytes),
         record_key=record_key.logical_key,
+        pagination=pagination,
     )
+
+
+_PARSE_HALTS: Final[dict[ParseDefect, ProcessingHalt]] = {
+    ParseDefect.ROW_COUNT_EXCEEDED: ProcessingHalt.PAGE_OVER_LIMIT,
+    ParseDefect.PAYLOAD_TOO_LARGE: ProcessingHalt.RESPONSE_TOO_LARGE,
+}
+
+
+def _parse_bounded(
+    payload: bytes, *, request: ProductionRequest, ceiling: int, malformed: ProcessingHalt
+) -> Any:
+    """The accepted parser over one body, bounded by the plan's ceiling and the coordinate's limit.
+
+    A body over the byte ceiling is refused **whole** before any decoding; a body with
+    more rows than the governed limit is ``PAGE_OVER_LIMIT``; anything else the parser
+    refuses is ``malformed`` -- the data page's or the probe's own halt.
+    """
+    try:
+        return parse_payload(
+            payload,
+            dataset=SharadarDataset(request.dataset),
+            max_bytes=ceiling,
+            max_rows=request.page_limit,
+        )
+    except ParseError as error:
+        raise _HaltError(_PARSE_HALTS.get(error.defect, malformed)) from None
+
+
+def _acquire_group(
+    *,
+    request: ProductionRequest,
+    provider: _CountingProvider,
+    pacer: Pacer,
+    credential: SharadarCredential,
+    plan: CompiledPlan,
+    run_bytes: int,
+) -> tuple[bytes, PaginationEvidence, int]:
+    """One data coordinate under the v2 state machine: the payload, its evidence, the bytes charged.
+
+    Fetches the data page, holds it to the whole-body ceiling and parses it; issues the
+    completion probe only for an exactly-full page and holds the probe to the same
+    ceilings; every failure is a halt raised **before** the group's writes.
+    """
+    ceiling = plan.max_response_bytes
+    try:
+        pacer.wait()
+        payload = provider.fetch(request, credential=credential)
+    except DeadlineExhaustedError:
+        raise _HaltError(ProcessingHalt.DEADLINE_EXHAUSTED) from None
+    except Exception:
+        raise _HaltError(ProcessingHalt.PROVIDER_FAILURE) from None
+    if type(payload) is not bytes:
+        raise _HaltError(ProcessingHalt.PROVIDER_FAILURE)
+    if len(payload) > ceiling:
+        raise _HaltError(ProcessingHalt.RESPONSE_TOO_LARGE)
+    run_bytes += len(payload)
+    if run_bytes > plan.max_run_bytes:
+        raise _HaltError(ProcessingHalt.RUN_BYTES_EXCEEDED)
+    parsed = _parse_bounded(
+        payload, request=request, ceiling=ceiling, malformed=ProcessingHalt.DATA_PAGE_MALFORMED
+    )
+    rows = parsed.row_count
+    if rows < request.page_limit:
+        evidence = PaginationEvidence(
+            governed_limit=request.page_limit,
+            row_count=rows,
+            schema_digest=parsed.schema_digest,
+            parser_outcome=ParserOutcome.PARSED,
+            completion=CompletionOutcome.SHORT_PAGE_COMPLETE,
+            probe=None,
+        )
+        return payload, evidence, run_bytes
+    # Exactly full: one completion probe, the same shape at offset L, required.
+    probe_request = request.probe()
+    try:
+        pacer.wait()
+        probe_body = provider.fetch(probe_request, credential=credential)
+    except DeadlineExhaustedError:
+        raise _HaltError(ProcessingHalt.DEADLINE_EXHAUSTED) from None
+    except Exception:
+        raise _HaltError(ProcessingHalt.PROBE_REFUSED) from None
+    if type(probe_body) is not bytes:
+        raise _HaltError(ProcessingHalt.PROBE_REFUSED)
+    if len(probe_body) > ceiling:
+        raise _HaltError(ProcessingHalt.RESPONSE_TOO_LARGE)
+    run_bytes += len(probe_body)
+    if run_bytes > plan.max_run_bytes:
+        raise _HaltError(ProcessingHalt.RUN_BYTES_EXCEEDED)
+    probe_parsed = _parse_bounded(
+        probe_body,
+        request=probe_request,
+        ceiling=ceiling,
+        malformed=ProcessingHalt.PROBE_MALFORMED,
+    )
+    if probe_parsed.row_count > 0:
+        raise _HaltError(ProcessingHalt.PROBE_DATA_BEARING)
+    if probe_parsed.schema_digest != parsed.schema_digest:
+        raise _HaltError(ProcessingHalt.PROBE_SCHEMA_MISMATCH)
+    evidence = PaginationEvidence(
+        governed_limit=request.page_limit,
+        row_count=rows,
+        schema_digest=parsed.schema_digest,
+        parser_outcome=ParserOutcome.PARSED,
+        completion=CompletionOutcome.PROBE_PASSED,
+        probe=ProbeEvidence(
+            request_shape_sha256=request_shape_digest(
+                dataset=probe_request.dataset,
+                window=probe_request.window,
+                predicate=probe_request.predicate,
+                page_offset=probe_request.page_offset,
+                page_limit=probe_request.page_limit,
+            ),
+            page_offset=probe_request.page_offset,
+            page_limit=probe_request.page_limit,
+            response_sha256=sha256_hex(probe_body),
+            byte_count=len(probe_body),
+            row_count=0,
+            schema_digest=probe_parsed.schema_digest,
+            parser_outcome=ParserOutcome.PARSED,
+            outcome=ProbeOutcome.PROBE_PASSED,
+        ),
+    )
+    return payload, evidence, run_bytes
 
 
 def build_run_locator_document(
@@ -406,9 +627,16 @@ def build_run_locator_document(
     started_at: datetime,
     completed_at: datetime,
     publication_state_unknown: bool,
+    provider_calls: int,
 ) -> dict[str, Any]:
-    """The closed run-locator document for this run, COMPLETE or PARTIAL as the facts are."""
+    """The closed v2 run-locator document for this run, COMPLETE or PARTIAL as the facts are.
+
+    ``provider_calls`` is the observed provider request count, probes included; the
+    document also carries the plan's worst-case ceiling and the probes actually issued,
+    so a reader can hold the run to both bounds without recomputing anything.
+    """
     complete = len(completed) == plan.request_count and not publication_state_unknown
+    probes = sum(1 for item in completed if item.pagination.probe_issued)
     return {
         "schema_version": LOCATOR_SCHEMA_VERSION,
         "run_id": admitted.run_identity,
@@ -421,6 +649,12 @@ def build_run_locator_document(
         "publication_state_unknown": publication_state_unknown,
         "planned_requests": plan.request_count,
         "completed_requests": len(completed),
+        "pagination_contract": COMPLETION_CONTRACT_ID,
+        "probe_policy": plan.probe_policy,
+        "probes_issued": probes,
+        "provider_calls": provider_calls,
+        "max_provider_calls": plan.max_provider_calls,
+        "expected_writes": plan.expected_writes,
         "entries": [
             {
                 "ordinal": item.request.ordinal,
@@ -434,9 +668,11 @@ def build_run_locator_document(
                 "record_bytes": item.record_bytes,
                 "request": {
                     "window": item.request.window,
+                    "predicate": dict(item.request.predicate),
                     "page_offset": item.request.page_offset,
                     "page_limit": item.request.page_limit,
                 },
+                "pagination": item.pagination.document(),
             }
             for item in completed
         ],
@@ -489,6 +725,8 @@ def run_production_acquisition(
             reservation=None,
             completed_requests=0,
             planned_requests=0,
+            probes_issued=0,
+            max_provider_calls=0,
             payloads_written=0,
             payloads_already_present=0,
             publication_state_unknown=False,
@@ -570,6 +808,8 @@ def run_production_acquisition(
             reservation=None,
             completed_requests=0,
             planned_requests=plan.request_count,
+            probes_issued=0,
+            max_provider_calls=plan.max_provider_calls,
             payloads_written=0,
             payloads_already_present=0,
             publication_state_unknown=stopped.state_unknown,
@@ -590,6 +830,8 @@ def run_production_acquisition(
             reservation=PayloadDisposition.WRITTEN,
             completed_requests=0,
             planned_requests=plan.request_count,
+            probes_issued=0,
+            max_provider_calls=plan.max_provider_calls,
             payloads_written=0,
             payloads_already_present=0,
             publication_state_unknown=False,
@@ -603,25 +845,24 @@ def run_production_acquisition(
     run_bytes = 0
     try:
         for request in plan.requests:
-            try:
-                pacer.wait()
-                payload = provider.fetch(request, credential=credential)
-            except DeadlineExhaustedError:
-                raise _HaltError(ProcessingHalt.DEADLINE_EXHAUSTED) from None
-            except Exception:
-                raise _HaltError(ProcessingHalt.PROVIDER_FAILURE) from None
-            if type(payload) is not bytes:
-                raise _HaltError(ProcessingHalt.PROVIDER_FAILURE)
-            if len(payload) > plan.max_response_bytes:
-                raise _HaltError(ProcessingHalt.RESPONSE_TOO_LARGE)
-            run_bytes += len(payload)
-            if run_bytes > plan.max_run_bytes:
-                raise _HaltError(ProcessingHalt.RUN_BYTES_EXCEEDED)
+            # The worst-case ceiling, held before a coordinate is started: a data request
+            # and its possible probe must both fit under the compiled maximum.
+            if provider.request_count + 2 > plan.max_provider_calls:
+                raise _HaltError(ProcessingHalt.PROVIDER_CALLS_EXCEEDED)
+            payload, evidence, run_bytes = _acquire_group(
+                request=request,
+                provider=provider,
+                pacer=pacer,
+                credential=credential,
+                plan=plan,
+                run_bytes=run_bytes,
+            )
             completed.append(
                 _publish_request(
                     publisher=publisher,
                     request=request,
                     payload=payload,
+                    pagination=evidence,
                     run_id=admitted.run_identity,
                     mode=plan.acquisition_mode,
                     retrieved_at=processing.clock(),
@@ -649,6 +890,7 @@ def run_production_acquisition(
         started_at=started_at,
         completed_at=completed_at,
         publication_state_unknown=state_unknown,
+        provider_calls=provider.request_count,
     )
     if document["completeness"] == Completeness.COMPLETE.value:
         try:
@@ -700,6 +942,8 @@ def run_production_acquisition(
         reservation=PayloadDisposition.WRITTEN,
         completed_requests=len(entries),
         planned_requests=plan.request_count,
+        probes_issued=sum(1 for item in entries if item.pagination.probe_issued),
+        max_provider_calls=plan.max_provider_calls,
         payloads_written=sum(
             1 for item in entries if item.payload_disposition is PayloadDisposition.WRITTEN
         ),
@@ -715,6 +959,9 @@ def run_production_acquisition(
 
 
 __all__ = [
+    "RECORD_CONTRACT_ID",
+    "RECORD_FIELDS",
+    "RECORD_REQUEST_FIELDS",
     "RESERVATION_CONTRACT_ID",
     "RESERVATION_SCHEMA_VERSION",
     "SOURCE_SCHEMA_VERSION",
@@ -724,6 +971,7 @@ __all__ = [
     "ProcessingAdapters",
     "ProcessingHalt",
     "ProductionProvider",
+    "build_acquisition_record",
     "build_run_locator_document",
     "run_production_acquisition",
 ]

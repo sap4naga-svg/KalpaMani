@@ -144,7 +144,7 @@ class TestTheTaskSequence:
         assert report.admitted_input is not None
         if actor is ACQ:
             assert report.plan is not None and report.plan.digest == PLAN_DIGEST
-            assert report.plan.request_count == 6
+            assert report.plan.request_count == 2
         else:
             assert report.plan is None
         counts = report.counts

@@ -24,11 +24,25 @@ instant beside the earlier one. Two different contents for one key inside one
 acquisition run are a structural conflict, and blocking. Acquisitions are consumed in
 retrieval order, so revision sequences are deterministic for a given input set.
 
-**Pagination is admitted per group before anything is consolidated.** Every
-(run, dataset, window) group of parsed pages must be the one supported shape -- a first
-page below its limit and header-only later pages -- measured on raw row counts; a full
-first page, a data-bearing later page, an empty page before data, or a page over its
-limit refuses the input (:mod:`~kalpamani.data.production.sharadar.pagination`).
+**Pagination is admitted per group before anything is consolidated** (pagination v2,
+ADR-0053 §11.2, §13.3). Every (run, dataset, window, predicate) group of parsed pages
+must be exactly one data page at offset zero whose raw row count and schema digest are
+the ones its record and locator entry recorded, complete by a short page or by a passed
+completion probe; a second page, a full page without a passed probe, a page over its
+governed limit, or evidence that disagrees with the parsed page refuses the input
+(:mod:`~kalpamani.data.production.sharadar.pagination`).
+
+**The tickers group is the ``table=stocks`` group, and ``permaticker`` is its identity**
+(ADR-0053 §11.3). A tickers page acquired without exactly that predicate is refused, and
+a row whose delivered ``table`` value is not the predicate's contradicts the request and
+refuses the input; within the group a repeated ``permaticker`` with differing content
+is the structural conflict it always was.
+
+**Every actions row is one event under ``sharadar-actions-event-identity/v1``** (ADR-0053
+§12). The Silver identity of an actions row is the resolved ``security_id`` plus the
+canonical full-row event identity of every governed field; two rows sharing ticker,
+date and action stay distinct when any other field differs; an exact duplicate row
+within one run and a digest collision are refused, never silently deduplicated.
 
 **A completed acquisition is completion of its request plan, not proof of market
 coverage.** The rows normalized here are the rows the vendor delivered to those
@@ -46,7 +60,17 @@ from enum import StrEnum
 from typing import Any, Final
 
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
-from kalpamani.data.ingest.sharadar.datasets import PROVIDER, SharadarDataset
+from kalpamani.data.ingest.sharadar.datasets import (
+    PROVIDER,
+    TICKERS_TABLE_PARAMETER,
+    SharadarDataset,
+)
+from kalpamani.data.production.sharadar.actions_identity import (
+    ACTIONS_IDENTITY_CONTRACT_ID,
+    ActionsIdentityDefect,
+    ActionsIdentityRefusalError,
+    EventAdmission,
+)
 from kalpamani.data.production.sharadar.build_inputs import AcquiredPage, VerifiedBuildInputs
 from kalpamani.data.production.sharadar.pagination import (
     PaginationDefect,
@@ -54,6 +78,7 @@ from kalpamani.data.production.sharadar.pagination import (
     PaginationSummary,
     admit_pagination,
 )
+from kalpamani.data.production.sharadar.plan import PAYLOAD_CEILING_BYTES, TICKERS_PREDICATE
 from kalpamani.data.production.sharadar.schema_observation import (
     OBSERVED_DATASETS,
     DatasetObservation,
@@ -62,7 +87,10 @@ from kalpamani.data.production.sharadar.schema_observation import (
 from kalpamani.data.qualify.sharadar.parser import ParsedPage, ParseError, parse_payload
 
 #: The Silver normalization version. Part of every manifest and of the build ``run_id``.
-SILVER_NORMALIZATION_VERSION: Final = "sharadar-silver-v2"
+#: v3: pagination v2 admission, the tickers predicate group, the actions event identity.
+SILVER_NORMALIZATION_VERSION: Final = "sharadar-silver-v3"
+#: The actions identity contract every Silver actions row is keyed under.
+ACTIONS_IDENTITY_VERSION: Final = ACTIONS_IDENTITY_CONTRACT_ID
 
 #: The identity namespace. A ``security_id`` is ``sharadar:<permaticker>`` and nothing else.
 SECURITY_ID_PREFIX: Final = PROVIDER + ":"
@@ -105,10 +133,17 @@ class SilverDefect(StrEnum):
     PAGINATION_UNSUPPORTED = "PAGINATION_UNSUPPORTED"
     PAGINATION_INCONSISTENT = "PAGINATION_INCONSISTENT"
     PAGE_OVER_LIMIT = "PAGE_OVER_LIMIT"
+    COMPLETION_UNPROVEN = "COMPLETION_UNPROVEN"
     ROW_CONFLICT_IN_RUN = "ROW_CONFLICT_IN_RUN"
     IDENTITY_SNAPSHOT_MISSING = "IDENTITY_SNAPSHOT_MISSING"
     ROW_KEY_MALFORMED = "ROW_KEY_MALFORMED"
     DATASET_UNKNOWN = "DATASET_UNKNOWN"
+    TICKERS_PREDICATE_MISSING = "TICKERS_PREDICATE_MISSING"
+    TICKERS_TABLE_CONTRADICTED = "TICKERS_TABLE_CONTRADICTED"
+    ACTIONS_SCHEMA_NOT_GOVERNED = "ACTIONS_SCHEMA_NOT_GOVERNED"
+    ACTIONS_ROW_MALFORMED = "ACTIONS_ROW_MALFORMED"
+    ACTIONS_DUPLICATE_EVENT = "ACTIONS_DUPLICATE_EVENT"
+    ACTIONS_IDENTITY_COLLISION = "ACTIONS_IDENTITY_COLLISION"
 
 
 class SilverError(Exception):
@@ -325,7 +360,14 @@ def _parse_only(page: AcquiredPage) -> ParsedPage:
     except ValueError:
         raise _refuse(SilverDefect.DATASET_UNKNOWN) from None
     try:
-        return parse_payload(page.payload, dataset=dataset)
+        # The production ceilings (ADR-0053 §13.2): the whole body under 32 MiB, the
+        # page under its own governed limit. A body over either is refused, never cut.
+        return parse_payload(
+            page.payload,
+            dataset=dataset,
+            max_bytes=PAYLOAD_CEILING_BYTES,
+            max_rows=page.page_limit,
+        )
     except ParseError:
         raise _refuse(SilverDefect.PAYLOAD_UNPARSEABLE) from None
 
@@ -377,11 +419,23 @@ _PAGINATION_DEFECTS: Final[dict[PaginationDefect, SilverDefect]] = {
     PaginationDefect.PAGINATION_INCONSISTENT: SilverDefect.PAGINATION_INCONSISTENT,
     PaginationDefect.DELIVERY_TRUNCATED: SilverDefect.DELIVERY_TRUNCATED,
     PaginationDefect.PAGINATION_UNSUPPORTED: SilverDefect.PAGINATION_UNSUPPORTED,
+    PaginationDefect.COMPLETION_UNPROVEN: SilverDefect.COMPLETION_UNPROVEN,
+}
+
+#: The actions identity module's closed members, mapped one to one onto this module's.
+#: Total; a test asserts it.
+_ACTIONS_DEFECTS: Final[dict[ActionsIdentityDefect, SilverDefect]] = {
+    ActionsIdentityDefect.ACTIONS_SCHEMA_NOT_GOVERNED: SilverDefect.ACTIONS_SCHEMA_NOT_GOVERNED,
+    ActionsIdentityDefect.ACTIONS_REQUIRED_FIELD_NULL: SilverDefect.ACTIONS_ROW_MALFORMED,
+    ActionsIdentityDefect.ACTIONS_DATE_MALFORMED: SilverDefect.ACTIONS_ROW_MALFORMED,
+    ActionsIdentityDefect.ACTIONS_VALUE_NOT_DECIMAL: SilverDefect.ACTIONS_ROW_MALFORMED,
+    ActionsIdentityDefect.ACTIONS_DUPLICATE_EVENT: SilverDefect.ACTIONS_DUPLICATE_EVENT,
+    ActionsIdentityDefect.ACTIONS_IDENTITY_COLLISION: SilverDefect.ACTIONS_IDENTITY_COLLISION,
 }
 
 
 def _admit_pages(pages: list[tuple[AcquiredPage, ParsedPage]]) -> PaginationSummary:
-    """The pagination gate: every (run, dataset, window) group in the supported shape.
+    """The pagination gate: every (run, dataset, window, predicate) group in the v2 shape.
 
     Run after integrity, provenance and parsing, and **before** symbol mapping, revision
     consolidation and any deduplication, on raw parsed row counts. A refused group
@@ -485,6 +539,7 @@ def _snapshot_mapping(
     """Per run: symbol -> the set of ``permaticker`` values the run's snapshot delivered."""
     mapping: dict[str, dict[str, set[str]]] = {}
     for page, parsed in tickers_pages:
+        _require_tickers_predicate(page)
         per_run = mapping.setdefault(page.run_id, {})
         for row in parsed.rows:
             fields = _fields(parsed, row)
@@ -495,10 +550,18 @@ def _snapshot_mapping(
     return mapping
 
 
+def _require_tickers_predicate(page: AcquiredPage) -> str:
+    """The accepted table value a tickers page was acquired under, or a refusal."""
+    if tuple(sorted(page.predicate)) != tuple(sorted(TICKERS_PREDICATE)):
+        raise _refuse(SilverDefect.TICKERS_PREDICATE_MISSING)
+    return dict(page.predicate)[TICKERS_TABLE_PARAMETER]
+
+
 def _normalize_tickers(pages: list[tuple[AcquiredPage, ParsedPage]]) -> SilverDataset:
     versions = _Versions()
     digests: set[str] = set()
     for page, parsed in sorted(pages, key=lambda item: _order_key(item[0])):
+        table = _require_tickers_predicate(page)
         digests.add(parsed.schema_digest)
         for row in parsed.rows:
             fields = _fields(parsed, row)
@@ -506,6 +569,10 @@ def _normalize_tickers(pages: list[tuple[AcquiredPage, ParsedPage]]) -> SilverDa
             symbol = fields.get("ticker")
             if permaticker is None or symbol is None:
                 raise _refuse(SilverDefect.ROW_KEY_MALFORMED)
+            # A delivered ``table`` value that is not the request's predicate is the
+            # provider contradicting the filter it was asked for.
+            if TICKERS_TABLE_PARAMETER in fields and fields[TICKERS_TABLE_PARAMETER] != table:
+                raise _refuse(SilverDefect.TICKERS_TABLE_CONTRADICTED)
             security_id = security_id_for(permaticker)
             versions.observe(
                 dataset=SharadarDataset.TICKERS.value,
@@ -545,17 +612,19 @@ def _redelivery_gaps(
 ) -> dict[tuple[str, ...], tuple[tuple[str, datetime], ...]]:
     """Per key, the later runs whose request windows covered its date and did not deliver it.
 
-    **Recorded, never read as a deletion.** The vendor's keyed tables carry no event
-    identity, so a key absent from a later covering delivery may be a correction to a
-    key field (the same event under a new key), a removal, or a delivery gap; nothing
-    accepted distinguishes them. The gap is carried on the key's revisions so a
-    consumer can represent the limitation conservatively.
+    **Recorded, never read as a deletion.** The vendor delivers no identity that survives
+    a change of content: a stocks bar is keyed by its session date and an actions event
+    by its canonical full row, so a key absent from a later covering delivery may be a
+    correction (the same underlying fact under a new key), a removal, or a delivery gap;
+    nothing accepted distinguishes them. The gap is carried on the key's revisions so a
+    consumer can represent the limitation conservatively. The key's date is read from
+    the row's own ``date`` field, which every keyed dataset carries.
     """
     gaps: dict[tuple[str, ...], tuple[tuple[str, datetime], ...]] = {}
     for row_key, revisions in versions.versions.items():
         try:
-            key_date = date.fromisoformat(row_key[1])
-        except (IndexError, ValueError):
+            key_date = date.fromisoformat(str(revisions[0].fields["date"]))
+        except (KeyError, ValueError):
             continue
         first_observed = min(v.system_first_seen_time for v in revisions)
         missing = sorted(
@@ -570,6 +639,21 @@ def _redelivery_gaps(
     return gaps
 
 
+def _event_identity(
+    admissions: dict[str, EventAdmission],
+    *,
+    page: AcquiredPage,
+    parsed: ParsedPage,
+    fields: dict[str, str | None],
+) -> str:
+    """The canonical full-row identity of one actions row, admitted within its run."""
+    admission = admissions.setdefault(page.run_id, EventAdmission())
+    try:
+        return admission.admit(fields, schema_digest=parsed.schema_digest).identity
+    except ActionsIdentityRefusalError as error:
+        raise _refuse(_ACTIONS_DEFECTS[error.defect]) from None
+
+
 def _normalize_keyed(
     dataset: SharadarDataset,
     pages: list[tuple[AcquiredPage, ParsedPage]],
@@ -577,6 +661,12 @@ def _normalize_keyed(
     mapping: dict[str, dict[str, set[str]]],
     key_columns: tuple[str, ...],
 ) -> SilverDataset:
+    """``stocks`` keyed by session date; ``actions`` keyed by the canonical event identity.
+
+    For ``actions`` the row key is ``(security_id, event_identity)``: every governed field
+    participates, exact duplicates within a run are refused before mapping, and the
+    ``key_columns`` name only the fields that must be present for the row to be an event.
+    """
     versions = _Versions()
     digests: set[str] = set()
     unmapped: set[tuple[str, str]] = set()
@@ -585,6 +675,8 @@ def _normalize_keyed(
     coverage: dict[str, list[tuple[date, date]]] = {}
     delivered: dict[str, set[tuple[str, ...]]] = {}
     run_seen_at: dict[str, datetime] = {}
+    admissions: dict[str, EventAdmission] = {}
+    events = dataset is SharadarDataset.ACTIONS
     for page, parsed in sorted(pages, key=lambda item: _order_key(item[0])):
         digests.add(parsed.schema_digest)
         if page.run_id not in mapping:
@@ -602,13 +694,24 @@ def _normalize_keyed(
             symbol = fields.get("ticker")
             if symbol is None or any(fields.get(column) is None for column in key_columns):
                 raise _refuse(SilverDefect.ROW_KEY_MALFORMED)
+            # The event identity is admitted for every delivered row, mapped or not: an
+            # exact duplicate of an unmapped event is still a duplicate the vendor sent.
+            identity = (
+                _event_identity(admissions, page=page, parsed=parsed, fields=fields)
+                if events
+                else None
+            )
             permatickers = snapshot.get(symbol, set())
             if len(permatickers) != 1:
                 (unmapped if not permatickers else ambiguous).add((page.run_id, symbol))
                 excluded += 1
                 continue
             security_id = security_id_for(next(iter(permatickers)))
-            row_key = (security_id, *[str(fields[column]) for column in key_columns])
+            row_key = (
+                (security_id, identity)
+                if identity is not None
+                else (security_id, *[str(fields[column]) for column in key_columns])
+            )
             delivered[page.run_id].add(row_key)
             versions.observe(
                 dataset=dataset.value,
@@ -691,6 +794,7 @@ def normalize(inputs: VerifiedBuildInputs, *, schemas: AcceptedSchemas) -> Silve
 
 __all__ = [
     "ACTIONS_COLUMNS",
+    "ACTIONS_IDENTITY_VERSION",
     "SECURITY_ID_PREFIX",
     "SILVER_NORMALIZATION_VERSION",
     "STOCKS_COLUMNS",

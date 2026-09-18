@@ -232,7 +232,7 @@ def test_the_adr_records_the_adapter_slice_and_the_module_exists() -> None:
     from kalpamani.data.exploratory import adapter
 
     assert adapter.REQUIRED_HISTORY_SESSIONS == 252
-    assert adapter.MANIFEST_CONTRACT == "kalpamani-production-build-manifest/v1"
+    assert adapter.MANIFEST_CONTRACT == "kalpamani-production-build-manifest/v2"
     assert "NOT_A_SILVER_ARTIFACT" in [d.value for d in adapter.AdapterDefect]
 
 

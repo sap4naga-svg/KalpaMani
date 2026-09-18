@@ -22,6 +22,16 @@ from typing import Any, Final
 from kalpamani.data.contracts.canonical import canonical_bytes, sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.production.sharadar.bindings import BINDING_SCHEMA_VERSION
+from kalpamani.data.production.sharadar.completion import (
+    COMPLETION_CONTRACT_ID,
+    PROBE_POLICY,
+    CompletionOutcome,
+    PaginationEvidence,
+    ParserOutcome,
+    ProbeEvidence,
+    ProbeOutcome,
+    request_shape_digest,
+)
 from kalpamani.data.production.sharadar.compute import CompiledLaunch
 from kalpamani.data.production.sharadar.inputs import (
     ACQUISITION_INPUT_SCHEMA_VERSION,
@@ -36,7 +46,11 @@ from kalpamani.data.production.sharadar.keys import (
 )
 from kalpamani.data.production.sharadar.locator import LOCATOR_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.metadata import CompiledTask
-from kalpamani.data.production.sharadar.plan import plan_digest_for
+from kalpamani.data.production.sharadar.plan import (
+    PAGE_LIMITS,
+    TICKERS_PREDICATE,
+    plan_digest_for,
+)
 from kalpamani.data.production.sharadar.vocabulary import ProductionActor, constants_for
 
 # ---------------------------------------------------------------------------
@@ -165,13 +179,14 @@ def binding_document(actor: ProductionActor, **overrides: Any) -> dict[str, Any]
 
 
 def slice_document(**overrides: Any) -> dict[str, Any]:
-    """A valid synthetic slice: one ``actions`` year window (2 pages) and the ``tickers``
-    snapshot (4 pages) -- six compiled requests, a 4 MiB ceiling, BACKFILL."""
+    """A valid synthetic slice: one ``actions`` year window and the ``table=stocks``
+    ``tickers`` snapshot -- two compiled data coordinates (pagination v2), a 4 MiB
+    ceiling, BACKFILL."""
     document: dict[str, Any] = {
         "acquisition_mode": "BACKFILL",
         "datasets": ["actions", "tickers"],
         "windows": {"actions": "2025-01-01/2025-12-31", "tickers": "SNAPSHOT"},
-        "request_count": 6,
+        "request_count": 2,
         "max_response_bytes": 4 * 1024 * 1024,
     }
     document.update(overrides)
@@ -257,6 +272,63 @@ RECORDS: Final[tuple[bytes, ...]] = (
 )
 
 
+#: A synthetic schema digest for locator-only scenarios (no payload is parsed there).
+SCHEMA_DIGEST: Final = "ab" * 32
+PROBE_RESPONSE_DIGEST: Final = "cd" * 32
+
+
+def short_page_evidence(
+    *, limit: int, rows: int = 3, schema_digest: str = SCHEMA_DIGEST
+) -> PaginationEvidence:
+    """The evidence of a short page: complete without a probe."""
+    return PaginationEvidence(
+        governed_limit=limit,
+        row_count=rows,
+        schema_digest=schema_digest,
+        parser_outcome=ParserOutcome.PARSED,
+        completion=CompletionOutcome.SHORT_PAGE_COMPLETE,
+        probe=None,
+    )
+
+
+def probed_evidence(
+    *,
+    dataset: str,
+    window: str,
+    predicate: tuple[tuple[str, str], ...],
+    limit: int,
+    schema_digest: str = SCHEMA_DIGEST,
+    probe_rows: int = 0,
+    probe_schema_digest: str | None = None,
+    outcome: ProbeOutcome = ProbeOutcome.PROBE_PASSED,
+) -> PaginationEvidence:
+    """The evidence of an exactly-full page with an issued probe (passed by default)."""
+    return PaginationEvidence(
+        governed_limit=limit,
+        row_count=limit,
+        schema_digest=schema_digest,
+        parser_outcome=ParserOutcome.PARSED,
+        completion=CompletionOutcome.PROBE_PASSED,
+        probe=ProbeEvidence(
+            request_shape_sha256=request_shape_digest(
+                dataset=dataset,
+                window=window,
+                predicate=predicate,
+                page_offset=limit,
+                page_limit=limit,
+            ),
+            page_offset=limit,
+            page_limit=limit,
+            response_sha256=PROBE_RESPONSE_DIGEST,
+            byte_count=64,
+            row_count=probe_rows,
+            schema_digest=schema_digest if probe_schema_digest is None else probe_schema_digest,
+            parser_outcome=ParserOutcome.PARSED,
+            outcome=outcome,
+        ),
+    )
+
+
 def locator_entry(
     ordinal: int,
     dataset: str,
@@ -266,8 +338,12 @@ def locator_entry(
     *,
     page_offset: int = 0,
     disposition: str = "WRITTEN",
+    pagination: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One valid locator entry, with keys built by the real production builders."""
+    """One valid v2 locator entry, with keys built by the real production builders.
+
+    ``pagination`` defaults to a short page's evidence document at the dataset's limit.
+    """
     payload_key = production_payload_key(dataset=dataset, payload=payload)
     record_key = production_acquisition_key(
         dataset=dataset,
@@ -277,6 +353,8 @@ def locator_entry(
         record=record,
     )
     window = "SNAPSHOT" if dataset == "tickers" else "2025-01-01/2025-12-31"
+    predicate = dict(TICKERS_PREDICATE) if dataset == "tickers" else {}
+    limit = PAGE_LIMITS[dataset]
     return {
         "ordinal": ordinal,
         "dataset": dataset,
@@ -287,19 +365,23 @@ def locator_entry(
         "record_key": record_key.logical_key,
         "record_sha256": record_key.content_sha256,
         "record_bytes": len(record),
-        "request": {"window": window, "page_offset": page_offset, "page_limit": 10000},
+        "request": {
+            "window": window,
+            "predicate": predicate,
+            "page_offset": page_offset,
+            "page_limit": limit,
+        },
+        "pagination": (
+            short_page_evidence(limit=limit).document() if pagination is None else pagination
+        ),
     }
 
 
 def locator_document(run_id: str = RUN_ID, **overrides: Any) -> dict[str, Any]:
-    """A complete, valid synthetic run locator over the six compiled requests."""
+    """A complete, valid synthetic v2 run locator over the two compiled data coordinates."""
     entries = [
         locator_entry(0, "actions", PAYLOADS[0], RECORDS[0], run_id),
-        locator_entry(1, "actions", PAYLOADS[1], RECORDS[1], run_id, page_offset=10000),
-        locator_entry(2, "tickers", PAYLOADS[0], RECORDS[0], run_id),
-        locator_entry(3, "tickers", PAYLOADS[1], RECORDS[1], run_id, page_offset=10000),
-        locator_entry(4, "tickers", PAYLOADS[0], RECORDS[0], run_id, page_offset=20000),
-        locator_entry(5, "tickers", PAYLOADS[1], RECORDS[1], run_id, page_offset=30000),
+        locator_entry(1, "tickers", PAYLOADS[1], RECORDS[1], run_id),
     ]
     document: dict[str, Any] = {
         "schema_version": LOCATOR_SCHEMA_VERSION,
@@ -311,8 +393,14 @@ def locator_document(run_id: str = RUN_ID, **overrides: Any) -> dict[str, Any]:
         "completed_at": (NOW - timedelta(days=2, hours=-1)).isoformat(),
         "completeness": "COMPLETE",
         "publication_state_unknown": False,
-        "planned_requests": 6,
-        "completed_requests": 6,
+        "planned_requests": 2,
+        "completed_requests": 2,
+        "pagination_contract": COMPLETION_CONTRACT_ID,
+        "probe_policy": PROBE_POLICY,
+        "probes_issued": 0,
+        "provider_calls": 2,
+        "max_provider_calls": 4,
+        "expected_writes": 8,
         "entries": entries,
     }
     document.update(overrides)
