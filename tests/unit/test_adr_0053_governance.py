@@ -165,7 +165,10 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
         assert MERGE_COMMIT in rows[0] and APPROVED_HEAD in rows[0], name
         assert "not buildable" in rows[0] and "nothing is qualified" in rows[0], name
         assert "ADR-0053 pagination v2 (governance):" in text, name
-        assert "D-19 PENDING" in text, name
+        assert (
+            "D-19 attempt 1 PROVIDER_REFUSED" in text
+            and "D-20 second qualification PENDING" in text
+        ), name
         assert "runtime pagination-v2 implementation ABSENT" in text, name
 
 
@@ -183,3 +186,54 @@ def test_the_audit_guard_refuses_a_proposed_row_that_claims_a_merge(
     defects = audit._proposed_adr_row_defects(bad)
     assert any("claims an in-force merge" in d for d in defects)
     assert any("has 0 register rows" in d for d in defects)
+
+
+DECISION_2: Final = (
+    "I accept amending ADR-0053 so that a successfully parsed data response containing fewer "
+    "than the governed limit L is complete-shaped without a completion probe."
+)
+
+
+def test_section_11_records_the_second_decision_the_first_attempt_and_the_stocks_predicate() -> (
+    None
+):
+    assert "## 11. Amendment (2026-09-18)" in ADR_TEXT
+    section = _plain(ADR_TEXT.split("## 11. Amendment (2026-09-18)", 1)[1])
+    assert DECISION_2 in section
+    for phrase in (
+        "PROVIDER_REFUSED stands, unchanged",
+        "did not qualify L = 100000",
+        "did not measure peak RSS",
+        "a second qualification is required",
+        "the actions groups remain unqualified",
+        "complete-shaped without a completion probe",
+        "exactly one completion probe at offset L",
+        "more than L rows is malformed",
+        "Multiple data-bearing pages remain prohibited",
+        "offset-based assembly remains prohibited",
+        "Every tickers request carries an accepted explicit table predicate",
+        "permaticker remains the identity within each table-specific logical group",
+        "never silently combined",
+        'exactly { "stocks" }',
+        "Decision rule 1 applies: exactly one table",
+        "PSR-SHD-134",
+        "owner-input D-20",
+    ):
+        assert phrase in section, phrase
+    # every amended decision carries the dated section-11 note, appended after its earlier notes
+    for name in AMENDED:
+        text = (DECISIONS / name).read_text(encoding="utf-8")
+        assert text.count("Amended 2026-09-18 by ADR-0053 §11") == 1, name
+    register = (REPO_ROOT / "docs" / "phase3" / "provider-source-register.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| `PSR-SHD-134` |" in register and "https://sharadar.com/docs/tickers" in register
+    owner_inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| D-20 |" in owner_inputs and "PROVIDER_REFUSED" in owner_inputs
+    assert "attempt 1 (02:32Z)" in owner_inputs and "NOT qualified" in owner_inputs
+    readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    assert "### 17.1 The first D-19 attempt and the ADR-0053" in readiness
