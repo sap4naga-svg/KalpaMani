@@ -111,17 +111,24 @@ def _accepted_run_response() -> dict[str, Any]:
     }
 
 
+def _unattached_pending() -> dict[str, Any]:
+    """A PENDING description whose interface is still attaching (no id, no subnet yet)."""
+    return task_entry(
+        ACQ,
+        status="PENDING",
+        attachment_status="ATTACHING",
+        interface_id=None,
+        subnet_id=None,
+    )
+
+
 #: The description sequence the two 2026-09-18 launches saw before the failed poll: two
 #: pre-attachment polls, one ATTACHED poll with the image digest still unresolved (the
 #: window before ECS has pulled the image), then the image-wait poll that failed.
 def _run14_descriptions() -> list[dict[str, Any]]:
     return [
-        task_entry(
-            ACQ, status="PENDING", attachment_status="ATTACHING", interface_id=None, subnet_id=None
-        ),
-        task_entry(
-            ACQ, status="PENDING", attachment_status="ATTACHING", interface_id=None, subnet_id=None
-        ),
+        _unattached_pending(),
+        _unattached_pending(),
         task_entry(ACQ, status="PENDING", attachment_status="ATTACHED", image_digest=None),
         task_entry(ACQ, status="RUNNING", attachment_status="ATTACHED"),
         task_entry(ACQ, status="STOPPED", attachment_status="ATTACHED", exit_code=0),
@@ -364,9 +371,7 @@ class TestBoundedRePolling:
 
     def test_the_ceiling_is_never_extended(self) -> None:
         # The attachment never reports ATTACHED; the poll just inside the ceiling fails.
-        pending = task_entry(
-            ACQ, status="PENDING", attachment_status="ATTACHING", interface_id=None, subnet_id=None
-        )
+        pending = _unattached_pending()
         s = Scenario([pending] * 60)
         polls_inside = int(pl.PLACEMENT_CEILING_SECONDS / pl.PLACEMENT_POLL_INTERVAL_SECONDS)
         s.ecs.script = [*([None] * polls_inside), "ServerException"]
