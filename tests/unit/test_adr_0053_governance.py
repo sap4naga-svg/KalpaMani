@@ -1,4 +1,4 @@
-"""ADR-0053: proposed, the owner's decision verbatim, the v2 contract stated, nothing qualified.
+"""ADR-0053: accepted on the merge of PR #129, the owner's decision verbatim, nothing qualified.
 
 The dated amendments of ADR-0009, ADR-0041, ADR-0042, ADR-0035, ADR-0040 and ADR-0043, the
 owner-input rows, the readiness section, the register rows and the audit's proposed-ADR guard.
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Final
 
 import phase3_docs_audit as audit
+import pytest
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DECISIONS: Final = REPO_ROOT / "docs" / "decisions"
@@ -20,6 +21,8 @@ PROPOSED: Final = (
     "PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is"
 )
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
+MERGE_COMMIT: Final = "3e8c9cb5c13141c0353d4bb62c3e65c498badf1b"
+APPROVED_HEAD: Final = "cef2db911e346630e3d04306c292ffaa389c7429"
 OWNER_DECISION: Final = (
     "I accept the R1 + R2 pagination-correction route: governed single-data-page acquisition with "
     "a completion probe, explicit refusal of multi-page data, raised bounded payload/parser "
@@ -48,8 +51,11 @@ ADR_PLAIN: Final = _plain(ADR_TEXT)
 
 def test_the_adr_exists_is_proposed_and_authorizes_nothing() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0053-*.md"))] == [ADR.name]
-    assert PROPOSED in ADR_TEXT
+    assert PROPOSED in ADR_TEXT  # the historical clause stays
     assert "ACCEPTED / IN FORCE as governance and contract only" in ADR_PLAIN
+    assert "ADR-0053 is therefore ACCEPTED / IN FORCE exactly as the clause above" in ADR_PLAIN
+    assert MERGE_COMMIT in ADR_TEXT and APPROVED_HEAD in ADR_TEXT
+    assert "Acceptance changed nothing that runs and qualified nothing" in ADR_PLAIN
     assert "Acceptance authorizes nothing that runs" in ADR_PLAIN
     for phrase in (
         "no provider qualification request, no implementation, no image build",
@@ -126,6 +132,7 @@ def test_every_amended_adr_carries_a_dated_section_naming_adr_0053() -> None:
         assert "ADR-0053" in tail and "SUPERSEDED under ADR-0053" in plain, name
         assert "Superseded rule" in plain, name
         assert "Nothing in this amendment is implemented, qualified or deployed" in plain, name
+        assert "Since accepted: ADR-0053 is ACCEPTED / IN FORCE on the merge of PR #129" in plain
         # The historical text above is untouched: the heading appears once, at the end.
         assert text.count(heading) == 1 and text.rstrip().endswith(tail.rstrip()), name
 
@@ -145,8 +152,8 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
         encoding="utf-8"
     )
     assert "| 4.6 |" in checklist and "ADR-0053" in checklist
-    assert "ADR-0053" in audit.PROPOSED_ADR_STATUS
-    assert "ADR-0053" not in dict(audit.MERGED_ADR_STATUS)
+    assert "ADR-0053" not in audit.PROPOSED_ADR_STATUS
+    assert dict(audit.MERGED_ADR_STATUS)["ADR-0053"] == "PR #129 merged"
     documents = {
         name: (REPO_ROOT / name).read_text(encoding="utf-8") for name in ("CLAUDE.md", "README.md")
     }
@@ -154,11 +161,19 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
     for name, text in documents.items():
         rows = [line for line in text.splitlines() if "[ADR-0053](docs/decisions/" in line]
         assert len(rows) == 1, name
-        assert "PROPOSED — NOT IN FORCE" in rows[0] and "not buildable" in rows[0], name
+        assert "ACCEPTED / IN FORCE" in rows[0] and "PR #129 merged" in rows[0], name
+        assert MERGE_COMMIT in rows[0] and APPROVED_HEAD in rows[0], name
+        assert "not buildable" in rows[0] and "nothing is qualified" in rows[0], name
         assert "ADR-0053 pagination v2 (governance):" in text, name
+        assert "D-19 PENDING" in text, name
+        assert "runtime pagination-v2 implementation ABSENT" in text, name
 
 
-def test_the_audit_guard_refuses_a_proposed_row_that_claims_a_merge() -> None:
+def test_the_audit_guard_refuses_a_proposed_row_that_claims_a_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The guard is exercised over a proposed entry even now that the registry is empty.
+    monkeypatch.setattr(audit, "PROPOSED_ADR_STATUS", ("ADR-0053",))
     bad = {
         "CLAUDE.md": (
             "| **[ADR-0053](docs/decisions/x.md) — t** | **ACCEPTED / IN FORCE** — PR #999 merged |"

@@ -1093,7 +1093,7 @@ only through its own preparation record, and a launch made outside it, however w
 in the matrix (the 2026-09-17 acquisition bootstrap launch, `verify-acq-20260917T005249Z-76b22185`, is such a
 launch: receipt-verified in the ledger, not attributed, preserved as is).
 
-## 17. The pagination-v2 governance cycle (2026-09-18) — ADR-0053 PROPOSED; run 1 historical, not buildable; run 2 superseded; S10c blocked
+## 17. The pagination-v2 governance cycle (2026-09-18) — ADR-0053 ACCEPTED on the merge of PR #129 (governance and contract only); run 1 historical, not buildable; run 2 superseded; S10c blocked
 
 **What the first production acquisition established.** O-5 run 1 (`run-20260917T221453Z-af316f8b`, 2026-09-17) `COMPLETED`
 exit 0 and receipt-verified (96 provider requests, 1 secret retrieval, 290 conditional writes); its locator is admitted by the
@@ -1106,8 +1106,8 @@ are complete-shaped. Under ADR-0042 the run-1 input is **not buildable**.
 
 **The owner's decision (recorded verbatim in ADR-0053 §0).** Route R1 + R2: governed single-data-page acquisition with a
 completion probe, explicit refusal of multi-page data, raised bounded payload/parser ceilings, full O-5 recompilation and the
-whole-run replacement of run 1; run 1 remains historical evidence; run 2 and S10c remain on hold. **ADR-0053 is PROPOSED and
-carries no authority while its pull request is open; on merge it is governance and contract only.** It amends ADR-0009, ADR-0041,
+whole-run replacement of run 1; run 1 remains historical evidence; run 2 and S10c remain on hold. **ADR-0053 was PROPOSED and
+carried no authority while its pull request was open — true then, not rewritten; PR #129 merged 2026-09-18T02:01:09Z (merge commit `3e8c9cb5…`, approved head `cef2db91…`, merge tree identical to the reviewed head tree), so it is ACCEPTED / IN FORCE as governance and contract only — nothing qualified, nothing implemented, nothing deployed; D-19 pending.** It amends ADR-0009, ADR-0041,
 ADR-0042, ADR-0035, ADR-0040 and ADR-0043 by dated sections that preserve the accepted text.
 
 **What changes when ADR-0053 is in force, and what it does not.** Each group or window becomes one data request at limit `L`
