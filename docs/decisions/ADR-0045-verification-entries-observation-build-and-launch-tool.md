@@ -641,3 +641,26 @@ never to the acquisition bootstrap, never to a negative. The launch tool's admis
 verification launch with a `verify-` identity), the launcher's sequence, the `HeldTask` the hook receives
 and the verdict's binding checks are unchanged; `R2-BLD-ISOLATION` is taken on the corroboration launch's
 record. Nothing in §12 other than the named cell is amended.
+
+---
+
+## 14. Amendment (2026-09-18) — the store reads supported v1 reservations as evidence, never as authority (ADR-0054)
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
+task image, no compiled configuration, no task definition, no Terraform, no IAM and no registration.**
+Proposed by [ADR-0054](ADR-0054-historical-v1-reservations-and-registration-historical-rebinding.md) on 2026-09-18, and effective with it; the text above is preserved as accepted and is not rewritten.
+
+§6's store gains one evidence-only read beside its strict one. `parse_reservation`, `LaunchStore.reservation` and
+`reservations()` admit exactly what they admitted before; every execution path of the launch tool — recover,
+isolation verdict, execute, complete-row and `prepare_launch`'s unreconciled check — still reads reservations only
+through the strict `reservation()`, held by a source-inspection test. `parse_reservation_for_evidence` /
+`evidence_reservation(s)` admit, in addition, a reservation whose acquisition workload was compiled under the
+superseded `kalpamani-production-acquisition-plan/v1` contract (ADR-0053): strict parse first; on `FIELD_MALFORMED`
+only, the closed envelope and the one superseded workload rule — the slice under the accepted slice parser, a plan
+digest that is a digest and is **never recompiled**, actor acquisition — with the envelope's identity, actor, kind
+and digest required to agree with the specification's. The result is a distinct `HistoricalReservation` carrying
+the stored file's SHA-256; a document the strict parser admits is refused `WORKLOAD_CURRENT`; unknown schemas,
+corrupted bytes, digest mismatches, build workloads and every other v1 shape stay `RESERVATION_MALFORMED`; a
+historical reservation without a ledger row is `RESERVATION_ORPHANED`. No identity or filename is special-cased,
+original bytes are never rewritten, and a historical reservation is never reservable, executable, recoverable,
+collectable or admissible — §7's rule reads it `HISTORICAL`, checked rather than remembered.

@@ -866,8 +866,11 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
 #: synchronization.
 PROPOSED_ADR_STATUS: Final[tuple[str, ...]] = (
     # ADR-0053 was listed here from its proposal (2026-09-18) until PR #129 merged the same
-    # day; it moved to MERGED_ADR_STATUS in the activation synchronization. Empty until the
-    # next proposed decision.
+    # day; it moved to MERGED_ADR_STATUS in the activation synchronization.
+    # ADR-0054 proposed 2026-09-18: historical v1 reservations readable as evidence only, and
+    # the registration-historical rebinding exception to ADR-0052 s.2.3; moves to
+    # MERGED_ADR_STATUS in its activation synchronization.
+    "ADR-0054",
 )
 
 #: The words a proposed ADR's register row must carry.
