@@ -72,7 +72,12 @@ from kalpamani.data.production.sharadar.launch_records import (
     OwnerLedger,
     compile_launch,
 )
-from kalpamani.data.production.sharadar.launch_store import RecordBinding, Reservation, bind_record
+from kalpamani.data.production.sharadar.launch_store import (
+    HistoricalReservation,
+    RecordBinding,
+    Reservation,
+    bind_record,
+)
 from kalpamani.data.production.sharadar.permission_cells import (
     PermissionEvidence,
     SubcellState,
@@ -476,22 +481,108 @@ def definition(cell_id: str) -> CellDefinition:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SupersededBinding:
+    """The digest-bound link from a rebound cell to the binding it superseded (ADR-0054).
+
+    Every value names preserved evidence: the prior identity and its specification
+    digest (the reservation, launch record and ledger row still carry them), the digest
+    of the prior reservation file exactly as stored, the digest of the previous cells
+    document (preserved beside the ledger as an owner-only superseded copy), the SHA-256
+    of the registration in force when the cell was rebound, and the instant. The link
+    records that the prior evidence was ``HISTORICAL`` under that registration; it never
+    carries a status of its own, so nothing here can be read as a pass.
+    """
+
+    identity: str
+    specification_digest: str
+    reservation_sha256: str
+    cells_document_sha256: str
+    registration_sha256: str
+    superseded_at: datetime
+
+    def document(self) -> dict[str, Any]:
+        """The closed block."""
+        return {
+            "identity": self.identity,
+            "specification_digest": self.specification_digest,
+            "reservation_sha256": self.reservation_sha256,
+            "cells_document_sha256": self.cells_document_sha256,
+            "registration_sha256": self.registration_sha256,
+            "prior_evidence": "HISTORICAL",
+            "superseded_at": self.superseded_at.isoformat(),
+        }
+
+
+_SUPERSEDED_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "identity",
+        "specification_digest",
+        "reservation_sha256",
+        "cells_document_sha256",
+        "registration_sha256",
+        "prior_evidence",
+        "superseded_at",
+    }
+)
+
+
+def _superseded(block: object, *, identity: str) -> SupersededBinding:
+    """A supersession link, closed; it names another identity than the binding's own."""
+    if type(block) is not dict or set(block) != _SUPERSEDED_FIELDS:
+        raise CellsDocumentError("malformed")
+    prior = exact_str(block["identity"])
+    digest = hex_digest(block["specification_digest"])
+    reservation = hex_digest(block["reservation_sha256"])
+    cells = hex_digest(block["cells_document_sha256"])
+    registration = hex_digest(block["registration_sha256"])
+    superseded_at = instant(block["superseded_at"])
+    if (
+        prior is None
+        or not prior.startswith(VERIFICATION_IDENTITY_PREFIX)
+        or prior == identity
+        or digest is None
+        or reservation is None
+        or cells is None
+        or registration is None
+        or superseded_at is None
+        or block["prior_evidence"] != "HISTORICAL"
+    ):
+        raise CellsDocumentError("malformed")
+    return SupersededBinding(
+        identity=prior,
+        specification_digest=digest,
+        reservation_sha256=reservation,
+        cells_document_sha256=cells,
+        registration_sha256=registration,
+        superseded_at=superseded_at,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PreparedCell:
-    """What preparation recorded for one launch cell: its identity and its specification."""
+    """What preparation recorded for one launch cell: its identity and its specification.
+
+    ``supersedes`` is present only on a binding that replaced a registration-historical
+    one (ADR-0054) and names the preserved evidence it superseded.
+    """
 
     cell_id: str
     identity: str
     specification_digest: str
     prepared_at: datetime
+    supersedes: SupersededBinding | None = None
 
     def document(self) -> dict[str, Any]:
         """The closed block."""
-        return {
+        block: dict[str, Any] = {
             "cell_id": self.cell_id,
             "identity": self.identity,
             "specification_digest": self.specification_digest,
             "prepared_at": self.prepared_at.isoformat(),
         }
+        if self.supersedes is not None:
+            block["supersedes"] = self.supersedes.document()
+        return block
 
 
 class CellsDocumentError(ValueError):
@@ -528,7 +619,8 @@ def parse_cells_document(raw: object) -> dict[str, PreparedCell]:
     for cell_id, block in cells.items():
         if (
             type(block) is not dict
-            or set(block) != {"cell_id", "identity", "specification_digest", "prepared_at"}
+            or set(block) - {"supersedes"}
+            != {"cell_id", "identity", "specification_digest", "prepared_at"}
             or block["cell_id"] != cell_id
             or cell_id not in CELL_BY_ID
             or CELL_BY_ID[cell_id].kind not in _PREPARABLE_KINDS
@@ -546,8 +638,15 @@ def parse_cells_document(raw: object) -> dict[str, PreparedCell]:
         ):
             raise CellsDocumentError("malformed")
         identities.add(identity)
+        supersedes = (
+            _superseded(block["supersedes"], identity=identity) if "supersedes" in block else None
+        )
         prepared[cell_id] = PreparedCell(
-            cell_id=cell_id, identity=identity, specification_digest=digest, prepared_at=prepared_at
+            cell_id=cell_id,
+            identity=identity,
+            specification_digest=digest,
+            prepared_at=prepared_at,
+            supersedes=supersedes,
         )
     return prepared
 
@@ -747,6 +846,10 @@ class RecordedEvidence:
     unreadable_negative_evidence: int = 0
     #: the R-4 .. R-9 permission records, attempts and cleanups, with the current binding.
     permission: PermissionEvidence = field(default_factory=PermissionEvidence)
+    #: the historical (superseded-workload) reservations, per prepared identity: evidence
+    #: of a launch under a registration no longer in force, never a current chain
+    #: (ADR-0054). Disjoint from ``reservations``.
+    historical_reservations: dict[str, HistoricalReservation] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -895,12 +998,84 @@ def _unbound(cell: CellDefinition, prepared: PreparedCell, reason: str) -> CellS
     )
 
 
+def _historical_chain(
+    cell: CellDefinition, evidence: RecordedEvidence, prepared: PreparedCell
+) -> CellState | None:
+    """The state of a cell bound to a historical (superseded-workload) reservation, or ``None``.
+
+    ADR-0054: the chain is held to the same binding rules as a current one -- the
+    reservation names the prepared specification, actor, kind and entry; the launch
+    record binds to it under the accepted rule with a verified placement -- and then
+    reads ``HISTORICAL`` whatever it would otherwise have read: a superseded workload
+    is never applicable to the registration now in force, and never a current pass. A
+    chain that does not bind is ``UNBOUND``, as for a current reservation.
+    """
+    assert cell.actor is not None and cell.entry is not None
+    identity, digest = prepared.identity, prepared.specification_digest
+    historical = evidence.historical_reservations.get(identity)
+    if historical is None or identity in evidence.reservations:
+        return None
+    if (
+        historical.specification_digest != digest
+        or historical.identity != identity
+        or historical.actor is not cell.actor
+        or historical.kind is not LaunchKind.VERIFICATION
+        or historical.specification.entry is not cell.entry
+    ):
+        return _unbound(
+            cell, prepared, "the historical reservation is not for the prepared specification"
+        )
+    record = evidence.launch_records.get(identity)
+    if record is None:
+        return _unbound(
+            cell, prepared, "no launch record for this identity in the records directory"
+        )
+    binding = bind_record(
+        Reservation(
+            identity=historical.identity,
+            actor=historical.actor,
+            kind=historical.kind,
+            specification=historical.specification,
+            reserved_at=historical.reserved_at,
+        ),
+        record,
+    )
+    if binding is not RecordBinding.BOUND:
+        return _unbound(
+            cell, prepared, f"the launch record does not bind to the reservation: {binding.value}"
+        )
+    if record.network_interface_id is None:
+        return _unbound(cell, prepared, "the launch record carries no verified placement")
+    expected_mode = ReleaseMode.NORMAL if cell.release_mode is None else cell.release_mode
+    if historical.specification.release_mode is not expected_mode:
+        return _unbound(
+            cell,
+            prepared,
+            "the reservation's release mode is not this cell's "
+            f"({historical.specification.release_mode.value})",
+        )
+    return CellState(
+        cell_id=cell.cell_id,
+        status=CellStatus.HISTORICAL,
+        reason=(
+            "bound evidence whose workload was compiled under the superseded contract "
+            f"{historical.workload_contract_id}; recorded under a registration no longer in "
+            "force; re-verification is required (ADR-0045 s.7, ADR-0054)"
+        ),
+        identity=identity,
+        specification_digest=digest,
+    )
+
+
 def _bound_success(
     cell: CellDefinition, evidence: RecordedEvidence, prepared: PreparedCell
 ) -> CellState:
     """A receipt-verified row passes only when its whole evidence chain binds and applies."""
     assert cell.actor is not None and cell.entry is not None
     identity, digest = prepared.identity, prepared.specification_digest
+    historical = _historical_chain(cell, evidence, prepared)
+    if historical is not None:
+        return historical
     reservation = evidence.reservations.get(identity)
     if reservation is None:
         return _unbound(cell, prepared, "no reservation beside the ledger for this identity")
@@ -1076,6 +1251,9 @@ def _negative_state(
             specification_digest=digest,
         )
     # REFUSED, receipt-verified: bind the chain, then hold it to the expected refusal.
+    historical = _historical_chain(cell, evidence, prepared)
+    if historical is not None:
+        return historical
     reservation = evidence.reservations.get(identity)
     if reservation is None:
         return _unbound(cell, prepared, "no reservation beside the ledger for this identity")
@@ -1416,6 +1594,7 @@ __all__ = [
     "NegativeLaunchEvidence",
     "PreparedCell",
     "RecordedEvidence",
+    "SupersededBinding",
     "aggregate",
     "cells_document",
     "definition",

@@ -165,6 +165,9 @@ class LaunchRecordDefect(StrEnum):
     AUTHORIZATION_EXPIRED = "AUTHORIZATION_EXPIRED"
     ACTOR_MISMATCH = "ACTOR_MISMATCH"
     CONFIGURATION_MISMATCH = "CONFIGURATION_MISMATCH"
+    #: A specification offered to the historical parser that the current parser admits:
+    #: current evidence is never read as historical (ADR-0054).
+    WORKLOAD_CURRENT = "WORKLOAD_CURRENT"
 
 
 class LaunchRecordError(Exception):
@@ -1219,6 +1222,72 @@ def _probe_workload(workload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: The superseded acquisition plan contract a historical workload was compiled under
+#: (ADR-0053 s.13, ADR-0054): the only v1 shape the historical parser admits.
+SUPERSEDED_WORKLOAD_CONTRACT_ID: Final = "kalpamani-production-acquisition-plan/v1"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HistoricalSpecification:
+    """A specification whose acquisition workload was compiled under a superseded plan contract.
+
+    **Evidence, never authority** (ADR-0054). It is exactly the document the reservation
+    stored, parsed under the same grammar as a current specification for every block
+    except the acquisition workload, which is validated as the closed v1 shape -- the
+    slice through the accepted slice parser, a plan digest that is a digest -- and is
+    **never recompiled, reinterpreted or upgraded**: the v1 plan compiler is gone, so no
+    tool can re-derive it, and no tool may treat it as the workload of a launch it could
+    make. The wrapped :class:`LaunchSpecification` reproduces the stored digest and lets
+    the accepted binding rules (record to reservation, target to registration) read the
+    preserved evidence; the wrapper type is what keeps it out of every execution path.
+    """
+
+    specification: LaunchSpecification
+    workload_contract_id: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing."""
+        raise TypeError("HistoricalSpecification may not be subclassed")
+
+    @property
+    def digest(self) -> str:
+        """The stored specification's digest -- the value the historical authorization named."""
+        return self.specification.digest
+
+    def __repr__(self) -> str:
+        """Kind and contract only."""
+        return (
+            f"HistoricalSpecification(kind={self.specification.kind.value!r}, "
+            f"workload_contract_id={self.workload_contract_id!r})"
+        )
+
+
+def parse_historical_specification(raw: object) -> HistoricalSpecification:
+    """A specification whose workload the current contract no longer compiles, or refuse.
+
+    Admitted only when the current parser refuses the document **and** the v1 rule
+    admits it: the acquisition slice parses under the accepted slice parser, the plan
+    digest is a digest, the workload is exactly ``{slice, plan_digest}`` in canonical
+    form, and every other block is the current grammar's. A document the current parser
+    admits is refused ``WORKLOAD_CURRENT``: nothing current is ever read as historical. A
+    build workload has no superseded shape, so a build specification is never historical
+    by this route (a build document either parses currently or is malformed).
+    """
+    try:
+        parse_specification(raw)
+    except LaunchRecordError as current_refusal:
+        if current_refusal.defect is not LaunchRecordDefect.FIELD_MALFORMED:
+            raise
+    else:
+        raise _refuse(LaunchRecordDefect.WORKLOAD_CURRENT)
+    specification = _parse_specification(raw, superseded_workload=True)
+    if specification.actor is not ProductionActor.ACQUISITION:
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    return HistoricalSpecification(
+        specification=specification, workload_contract_id=SUPERSEDED_WORKLOAD_CONTRACT_ID
+    )
+
+
 def parse_specification(raw: object) -> LaunchSpecification:
     """A launch specification document, every block to its grammar, or refuse.
 
@@ -1229,6 +1298,11 @@ def parse_specification(raw: object) -> LaunchSpecification:
     document that parses is exactly one :func:`build_specification` could have produced,
     so its digest is the digest an authorization named.
     """
+    return _parse_specification(raw, superseded_workload=False)
+
+
+def _parse_specification(raw: object, *, superseded_workload: bool) -> LaunchSpecification:
+    """The one specification grammar; ``superseded_workload`` selects the v1 workload rule."""
     # Embedded in a reservation the document arrives already decoded (the reservation's
     # own decoding refused duplicate keys); on its own it arrives as bytes.
     document = (
@@ -1276,11 +1350,21 @@ def parse_specification(raw: object) -> LaunchSpecification:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
         try:
             covered = parse_slice(workload["slice"])
-            expected = plan_digest_for(
-                covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode)
-            )
         except Exception:
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
+        if superseded_workload:
+            # ADR-0054: the v1 workload is the closed shape the historical launch stored --
+            # a plan digest that is a digest, never recompiled and never the current one.
+            expected = hex_digest(workload["plan_digest"])
+            if expected is None:
+                raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+        else:
+            try:
+                expected = plan_digest_for(
+                    covered, acquisition_mode=AcquisitionMode(covered.acquisition_mode)
+                )
+            except Exception:
+                raise _refuse(LaunchRecordDefect.FIELD_MALFORMED) from None
         if workload["plan_digest"] != expected or workload["slice"] != covered.canonical():
             raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
         canonical_workload = {"slice": covered.canonical(), "plan_digest": expected}
@@ -2116,10 +2200,12 @@ __all__ = [
     "PROBE_STARTED_BY_PREFIX",
     "RECORD_SCHEMA_VERSION",
     "SPECIFICATION_CONTRACT_ID",
+    "SUPERSEDED_WORKLOAD_CONTRACT_ID",
     "TASK_DEFINITION_INTENTIONAL_DIFFERENCES",
     "TASK_DEFINITION_SHARED_FIELDS",
     "VERIFICATION_IDENTITY_PREFIX",
     "EquivalenceVerdict",
+    "HistoricalSpecification",
     "LaunchAuthorizationRecord",
     "LaunchInputs",
     "LaunchKind",
@@ -2146,6 +2232,7 @@ __all__ = [
     "materialize_acquisition_input",
     "materialize_build_input",
     "parse_authorization",
+    "parse_historical_specification",
     "parse_launch_inputs",
     "parse_launch_record",
     "parse_owner_ledger",

@@ -157,3 +157,26 @@ backtest. Preparing the cell (offline, no client) and executing it are each thei
 authorization (D-15 and the single-launch S9 authorization for its fresh identity); the D-16 transcription
 is the owner's; the verdict command runs only after it. **G2 stays OPEN, CONTROL stays DEFERRED, Phase 3
 stays NOT COMPLETE, live trading stays HARD-DISABLED.**
+
+## 6. Amendment (2026-09-18) — registration-historical rebinding (ADR-0054)
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
+task image, no compiled configuration, no task definition, no Terraform, no IAM and no registration.**
+Proposed by [ADR-0054](ADR-0054-historical-v1-reservations-and-registration-historical-rebinding.md) on 2026-09-18, and effective with it; the text above is preserved as accepted and is not rewritten.
+
+§2.3 stands: a launched binding is never rebound over current evidence, and a `PASSED`, `PREPARED`, `LAUNCHED`,
+`INTERRUPTED`, `FAILED`, `REFUSED`, `INCONCLUSIVE`, `UNBOUND` or merely `BLOCKED` cell keeps its binding whatever
+identity is offered. ADR-0054 §2.2 adds **exactly one exception**: a cell whose bound identity was launched
+(reservation beside the ledger and a ledger row) and whose bound chain the accepted runner derives `HISTORICAL`
+solely because the registration in force no longer names its target and placement (ADR-0045 §7) may receive a
+fresh `verify-` identity and specification — proven before any write (the bound reservation integrity-valid and
+matching the binding, the launch record bound to it, the derived state `HISTORICAL` for that identity and digest,
+the registration difference re-checked, the replacement identity fresh everywhere, the launch tool's admission
+passed), with the previous cells document preserved byte for byte as an owner-only superseded copy and the new
+binding carrying a digest-bound `supersedes` link to the prior identity, its digest, its reservation file, the
+preserved document and the registration in force. The prior binding, reservation, launch record, receipt and
+row are never deleted or rewritten, and the prior evidence stays `HISTORICAL` — never a current `PASSED`. A
+same-registration rebinding, an unlaunched binding and a spent or reused identity stay refused; the new
+`refused_rebinding` sentence names an integrity or registration failure of the proof, and every other refusal
+keeps its code. Why: the pagination-v2 registration (`3cf07d01…`) moved every R-1 cell to `HISTORICAL`, and
+§2.3 as written could re-verify them only by a catalogue change per deployment or by destroying evidence.

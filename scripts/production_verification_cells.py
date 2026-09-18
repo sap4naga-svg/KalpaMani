@@ -15,7 +15,11 @@ matrix        (default) derive every cell's status from the recorded state -- th
               launched, nothing written
 prepare       --prepare-cell <id> --identity verify-…: the launch tool's offline preparation
               for this cell (specification written, digest printed); the cell's identity and
-              digest recorded beside the ledger under the ledger lock; no client
+              digest recorded beside the ledger under the ledger lock; no client. A cell
+              that already holds a binding is rebound only when that binding's launched
+              evidence reads HISTORICAL under the registration now in force (ADR-0054):
+              the previous cells document is preserved beside the ledger, the new binding
+              names what it superseded, and every prior record stays untouched
 execute       --execute-cell <id> + the flag + --authorization: the cell must be PREPARED,
               every prerequisite PASSED, the authorization must name the prepared digest;
               then exactly the launch tool's authorized branch for that one identity --
@@ -72,10 +76,13 @@ for _entry in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
 
 from kalpamani.data.contracts.canonical import canonical_bytes  # noqa: E402
 from kalpamani.data.production.sharadar import verification_cells as vc  # noqa: E402
+from kalpamani.data.production.sharadar.launch_store import Reservation  # noqa: E402
 from kalpamani.data.production.sharadar.release import ReleaseMode  # noqa: E402
 
 AUTHORIZATION_FLAG: Final = "--i-am-the-owner-authorizing-one-cell-launch"
 CELLS_SUFFIX: Final = ".cells.json"
+#: A preserved previous cells document: ``<ledger>.cells.superseded-<sha16>-<stamp>.json``.
+CELLS_SUPERSEDED_INFIX: Final = ".cells.superseded-"
 
 REFUSED_FLAGS: Final[dict[str, str]] = {
     "--all": "cells are prepared and executed one at a time, each under its own authorization",
@@ -100,9 +107,14 @@ EXIT_REFUSED_LEDGER_LOCKED: Final = 13
 EXIT_RECOVERED: Final = 0
 EXIT_ALREADY_RECORDED: Final = 0
 EXIT_REFUSED_EVIDENCE_CONFLICT: Final = 14
+EXIT_REFUSED_REBINDING: Final = 15
 
 SENTENCES: Final[dict[str, str]] = {
     "refused_arguments": "cells refused: the arguments were not admitted",
+    "refused_rebinding": (
+        "cells refused: the cell's historical binding cannot be superseded -- its evidence "
+        "chain, integrity or registration difference is not established"
+    ),
     "refused_records": "cells refused: an owner record was not admitted",
     "refused_cell_state": "cells refused: the cell is not in the state this mode needs",
     "refused_prerequisite": "cells refused: a prerequisite cell has not passed",
@@ -356,7 +368,13 @@ def permission_evidence(store: Any, context: Any) -> Any:
     # reservation attributes is counted as unattributable, never adopted.
     try:
         ledger, _ledger_digest = store.read_ledger()
-        reservations = [r for r in store.reservations() if r.kind is LaunchKind.PERMISSION_PROBE]
+        # ADR-0054: the evidence read, so a historical reservation beside the ledger does
+        # not refuse the permission scan; a historical one is never a probe reservation.
+        reservations = [
+            r
+            for r in store.evidence_reservations()
+            if type(r) is Reservation and r.kind is LaunchKind.PERMISSION_PROBE
+        ]
     except (StoreError, LaunchRecordError, OSError):
         malformed += 1
         ledger, reservations = None, []
@@ -464,13 +482,32 @@ def recorded_evidence(
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
     prepared = read_prepared(store)
     reservations: dict[str, Any] = {}
+    historical_reservations: dict[str, Any] = {}
     for cell in prepared.values():
         try:
-            reservation = store.reservation(cell.identity)
+            reservation = store.evidence_reservation(cell.identity)
         except StoreError:
             raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
-        if reservation is not None:
+        if reservation is None:
+            continue
+        if type(reservation) is Reservation:
             reservations[cell.identity] = reservation
+            continue
+        # ADR-0054: a historical reservation is admitted as evidence only when the ledger
+        # corroborates it -- a row for the identity, of its actor and kind, carrying its
+        # stored workload -- and only when its target is not the one now registered; an
+        # orphan or a current-registration v1 record is refused, never classified.
+        row = ledger.row(cell.identity)
+        workload = reservation.specification.workload
+        if (
+            row is None
+            or row.actor is not reservation.actor
+            or row.kind is not reservation.kind
+            or (None if row.slice is None else row.slice.canonical()) != workload.get("slice")
+            or row.plan_digest != workload.get("plan_digest")
+        ):
+            raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+        historical_reservations[cell.identity] = reservation
     launch_records: dict[str, Any] = {}
     duplicated: set[str] = set()
     unreadable_launch_records = 0
@@ -494,6 +531,11 @@ def recorded_evidence(
         inputs = lr.parse_launch_inputs(arguments.launch_inputs.read_bytes())
     except (OSError, lr.LaunchRecordError):
         raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    for reservation in historical_reservations.values():
+        if _applies_to_registration(inputs, reservation):
+            # A superseded workload bound to the target now registered is a contradiction
+            # (a v1 record under the current registration), not history: refused.
+            raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS)
     r3_record = None
     r3_binding = None
     if arguments.r3_record is not None:
@@ -531,6 +573,7 @@ def recorded_evidence(
         malformed_verdicts=malformed_verdicts,
         unreadable_verdicts=unreadable_verdicts,
         reservations=reservations,
+        historical_reservations=historical_reservations,
         launch_records=launch_records,
         unreadable_launch_records=unreadable_launch_records,
         inputs=inputs,
@@ -540,6 +583,22 @@ def recorded_evidence(
         malformed_negative_evidence=malformed_negative,
         unreadable_negative_evidence=unreadable_negative,
         permission=permission,
+    )
+
+
+def _applies_to_registration(inputs: Any, reservation: Any) -> bool:
+    """Whether a reservation's specification is the registered target and placement now."""
+    from kalpamani.data.production.sharadar import launch_records as lr
+
+    specification = reservation.specification
+    try:
+        current_compiled, current_target = lr.compile_launch(
+            inputs, actor=specification.actor, kind=specification.kind
+        )
+    except (lr.LaunchRecordError, TypeError, ValueError):
+        return False
+    return bool(
+        current_target == specification.target and current_compiled == specification.compiled
     )
 
 
@@ -687,25 +746,198 @@ def _identity_launched(store: Any, identity: str) -> bool:
     return ledger.row(identity) is not None
 
 
+def _identity_fresh(
+    store: Any, ledger: Any, identity: str, existing: dict[str, vc.PreparedCell]
+) -> bool:
+    """Whether ``identity`` is absent from every place a consumed identity leaves a trace.
+
+    The ledger, the reservations beside it, every binding in the cells document (present
+    or superseded), every launch record and specification record, and every consumed
+    authorization marker are checked; a spent or reused identity is never rebound.
+    """
+    from kalpamani.data.production.sharadar import launch_records as lr
+
+    if ledger.row(identity) is not None or store.evidence_reservation(identity) is not None:
+        return False
+    for bound in existing.values():
+        if bound.identity == identity or (
+            bound.supersedes is not None and bound.supersedes.identity == identity
+        ):
+            return False
+    records_dir: Path = store._records_dir
+    if records_dir.is_dir():
+        for path in sorted(records_dir.glob("launch-record-*.json")):
+            try:
+                if lr.parse_launch_record(path.read_bytes()).identity == identity:
+                    return False
+            except (OSError, lr.LaunchRecordError):
+                continue
+        for path in sorted(records_dir.glob("launch-specification-*.json")):
+            try:
+                if lr.parse_specification(path.read_bytes()).identity == identity:
+                    return False
+            except (OSError, lr.LaunchRecordError):
+                try:
+                    if (
+                        lr.parse_historical_specification(path.read_bytes()).specification.identity
+                        == identity
+                    ):
+                        return False
+                except (OSError, lr.LaunchRecordError):
+                    continue
+    consumed = store.ledger_path.with_name(store.ledger_path.name + ".consumed")
+    if consumed.is_dir() and any(identity in path.name for path in consumed.iterdir()):
+        return False
+    return True
+
+
+def _registration_historical(
+    arguments: argparse.Namespace,
+    store: Any,
+    cell: vc.CellDefinition,
+    bound: vc.PreparedCell,
+    *,
+    r3_binding_source: Callable[[], Any] | None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None,
+) -> tuple[Any, str]:
+    """The evidence a bound, launched cell may be superseded over, or refuse (ADR-0054).
+
+    Proven, every step before anything is written: the bound identity was launched (a
+    reservation beside the ledger and a ledger row); its reservation -- current or
+    historical -- is integrity-valid and its launch record binds to it; the accepted
+    runner derives the cell ``HISTORICAL`` from that evidence; and the registration in
+    force does not name the bound specification's target and placement (the rule the
+    derivation applied, checked again here). Anything else -- a PASSED, PREPARED,
+    LAUNCHED, INTERRUPTED, FAILED, REFUSED, UNBOUND or BLOCKED cell, an unlaunched or
+    malformed binding, a bound specification the registration still names -- refuses.
+    Returns the bound reservation and the SHA-256 of its stored file.
+    """
+    from kalpamani.data.production.sharadar.launch_store import HistoricalReservation, StoreError
+
+    try:
+        ledger, _digest = store.read_ledger()
+        reservation = store.evidence_reservation(bound.identity)
+    except StoreError:
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    if reservation is None or ledger.row(bound.identity) is None:
+        raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+    if (
+        reservation.identity != bound.identity
+        or reservation.specification_digest != bound.specification_digest
+    ):
+        raise CellsRefusalError("refused_rebinding", EXIT_REFUSED_REBINDING)
+    evidence = recorded_evidence(
+        arguments,
+        store,
+        r3_binding_source=r3_binding_source,
+        permission_context_source=permission_context_source,
+    )
+    states = vc.derive_states(evidence, read_prepared(store))
+    state = states.get(cell.cell_id)
+    if state is None or state.status is not vc.CellStatus.HISTORICAL:
+        # A launched binding whose evidence is current -- PASSED, or anything but
+        # HISTORICAL -- is never rebound (ADR-0052 s.2.3): the cell is not in the state.
+        raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+    if state.identity != bound.identity or state.specification_digest != bound.specification_digest:
+        raise CellsRefusalError("refused_rebinding", EXIT_REFUSED_REBINDING)
+    if evidence.launch_records.get(bound.identity) is None:
+        raise CellsRefusalError("refused_rebinding", EXIT_REFUSED_REBINDING)
+    if evidence.inputs is None or _applies_to_registration(evidence.inputs, reservation):
+        raise CellsRefusalError("refused_rebinding", EXIT_REFUSED_REBINDING)
+    if type(reservation) is HistoricalReservation:
+        stored_sha256: str = reservation.stored_sha256
+    else:
+        from kalpamani.data.contracts.canonical import sha256_hex
+
+        try:
+            stored_sha256 = sha256_hex(store.reservation_path(bound.identity).read_bytes())
+        except OSError:
+            raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return reservation, stored_sha256
+
+
+def _preserve_cells_document(store: Any, *, now: datetime) -> tuple[Path, str]:
+    """Copy the current cells document beside the ledger, owner-only, before it is replaced."""
+    from kalpamani.data.contracts.canonical import sha256_hex
+
+    path = cells_path(store)
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    digest = sha256_hex(raw)
+    stamp = now.strftime("%Y%m%dT%H%M%SZ")
+    target = path.with_name(
+        f"{store.ledger_path.name}{CELLS_SUPERSEDED_INFIX}{digest[:16]}-{stamp}.json"
+    )
+    if target.exists():
+        # The same document was preserved under this stamp already: byte-identical or refuse.
+        if target.read_bytes() != raw:
+            raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+        return target, digest
+    descriptor = os.open(
+        str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600
+    )
+    try:
+        os.write(descriptor, raw)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    _owner_only(target)
+    return target, digest
+
+
+def _owner_only(path: Path) -> None:
+    """Restrict ``path`` to the owner on Windows (inheritance removed); a no-op elsewhere."""
+    if os.name != "nt":  # pragma: no cover - the workstation is Windows
+        return
+    import subprocess
+
+    user = os.environ.get("USERNAME")
+    if not user:
+        return
+    subprocess.run(  # noqa: S603 - a fixed argv, no shell; the path is the store's own
+        ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],  # noqa: S607
+        capture_output=True,
+        check=False,
+    )
+
+
 def prepare_cell(
-    arguments: argparse.Namespace, launch: Any, store: Any, *, now: datetime, root_source: Any
+    arguments: argparse.Namespace,
+    launch: Any,
+    store: Any,
+    *,
+    now: datetime,
+    root_source: Any,
+    r3_binding_source: Callable[[], Any] | None = None,
+    permission_context_source: Callable[[argparse.Namespace], Any] | None = None,
 ) -> vc.PreparedCell:
-    """The launch tool's offline preparation for one runtime cell, recorded beside the ledger."""
+    """The launch tool's offline preparation for one runtime cell, recorded beside the ledger.
+
+    Every refusal is decided before the specification is written: the cell and identity
+    grammar, the launch tool's own preparation (which compiles the target and placement
+    from the registration in force and builds the specification), the one-identity-one-
+    cell rule, the freshness of the offered identity and -- for a cell that already holds
+    a binding -- the registration-historical rule of ADR-0054. Only then is the
+    specification written and the binding replaced, the previous cells document having
+    been preserved first.
+    """
+    from kalpamani.data.contracts.canonical import sha256_hex
+    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
+
     cell = _cell(arguments.prepare_cell, _LAUNCH_KINDS)
     identity = arguments.identity
     if identity is None or not identity.startswith("verify-"):
         raise CellsRefusalError("refused_arguments", EXIT_REFUSED_ARGUMENTS)
     launch_arguments = launch.parse_arguments(_launch_argv(arguments, cell, identity))
     prepared = launch.prepare_launch(launch_arguments, now=now, root_source=root_source)
-    launch.write_specification(launch_arguments, prepared, now=now)
     record = vc.PreparedCell(
         cell_id=cell.cell_id,
         identity=identity,
         specification_digest=prepared.specification.digest,
         prepared_at=now,
     )
-    from kalpamani.data.production.sharadar.launch_store import StoreDefect, StoreError
-
     try:
         with store.locked(now=lambda: now):
             existing = read_prepared(store)
@@ -713,13 +945,61 @@ def prepare_cell(
             for other_id, other in existing.items():
                 if other.identity == identity and other_id != cell.cell_id:
                     raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
-            # A cell whose bound identity was launched -- reserved beside the ledger or
-            # rowed in it -- is never rebound: its evidence stays what it is (ADR-0052).
-            bound = existing.get(cell.cell_id)
-            if bound is not None and _identity_launched(store, bound.identity):
+            ledger, _digest = store.read_ledger()
+            if not _identity_fresh(store, ledger, identity, existing):
                 raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+            bound = existing.get(cell.cell_id)
+            if bound is not None:
+                # A cell whose bound identity was launched -- reserved beside the ledger or
+                # rowed in it -- is never rebound over current evidence: its evidence stays
+                # what it is (ADR-0052). ADR-0054 admits exactly one exception, proven
+                # before anything is written: the launched binding reads HISTORICAL because
+                # the registration in force no longer names its target. An unlaunched
+                # (PREPARED) binding is not replaced either: it is the cell's current state.
+                if not _identity_launched(store, bound.identity):
+                    raise CellsRefusalError("refused_cell_state", EXIT_REFUSED_CELL_STATE)
+                _reservation, reservation_sha256 = _registration_historical(
+                    arguments,
+                    store,
+                    cell,
+                    bound,
+                    r3_binding_source=r3_binding_source,
+                    permission_context_source=permission_context_source,
+                )
+                try:
+                    registration_sha256 = sha256_hex(arguments.launch_inputs.read_bytes())
+                except OSError:
+                    raise CellsRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+                _preserved, cells_sha256 = _preserve_cells_document(store, now=now)
+                record = vc.PreparedCell(
+                    cell_id=cell.cell_id,
+                    identity=identity,
+                    specification_digest=prepared.specification.digest,
+                    prepared_at=now,
+                    supersedes=vc.SupersededBinding(
+                        identity=bound.identity,
+                        specification_digest=bound.specification_digest,
+                        reservation_sha256=reservation_sha256,
+                        cells_document_sha256=cells_sha256,
+                        registration_sha256=registration_sha256,
+                        superseded_at=now,
+                    ),
+                )
+            # Every refusal above happened before this line: the specification is written
+            # only for a binding that will be recorded, and the binding follows at once.
+            written = launch.write_specification(launch_arguments, prepared, now=now)
             existing[cell.cell_id] = record
-            write_prepared(store, existing)
+            try:
+                write_prepared(store, existing)
+            except CellsRefusalError:
+                # Recoverable ordering: the previous cells document (preserved above when
+                # a binding was replaced) stays authoritative; the specification just
+                # written binds nothing and is removed so no stray record remains.
+                try:
+                    written.unlink()
+                except OSError:
+                    pass
+                raise
     except StoreError as error:
         if error.defect is StoreDefect.LEDGER_LOCKED:
             raise CellsRefusalError("refused_ledger_locked", EXIT_REFUSED_LEDGER_LOCKED) from None
@@ -963,8 +1243,22 @@ def main(
             print(launch.SENTENCES[refusal.key])
             return int(refusal.exit_code)
         if arguments.prepare_cell is not None:
-            record = prepare_cell(arguments, launch, store, now=clock(), root_source=root_source)
-            print(f"cell={record.cell_id} specification_digest={record.specification_digest}")
+            record = prepare_cell(
+                arguments,
+                launch,
+                store,
+                now=clock(),
+                root_source=root_source,
+                r3_binding_source=binding_source,
+                permission_context_source=permission_context_source,
+            )
+            supersedes = (
+                "" if record.supersedes is None else f" supersedes={record.supersedes.identity}"
+            )
+            digest_line = (
+                f"cell={record.cell_id} specification_digest={record.specification_digest}"
+            )
+            print(digest_line + supersedes)
             print(SENTENCES["prepared"])
             return EXIT_PREPARED
         evidence = recorded_evidence(

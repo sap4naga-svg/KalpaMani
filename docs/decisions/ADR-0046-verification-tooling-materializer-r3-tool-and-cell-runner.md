@@ -332,3 +332,28 @@ workstation-only change); a second analysis attempt must not rebind a PASSED cel
 launch. Held by `test_production_verification_cells.py` (the catalogue, the hook's single cell, the whole
 lifecycle on fakes with the rebinding and reuse refusals) and by this document's governance test.
 
+
+
+## 8. Amendment (2026-09-18) — `HISTORICAL` from a historical reservation's chain, and the registration-historical rebinding rule (ADR-0054)
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
+task image, no compiled configuration, no task definition, no Terraform, no IAM and no registration.**
+Proposed by [ADR-0054](ADR-0054-historical-v1-reservations-and-registration-historical-rebinding.md) on 2026-09-18, and effective with it; the text above is preserved as accepted and is not rewritten.
+
+§2's derivation reads reservations through the store's evidence read (ADR-0045 §14): a v1 reservation is
+corroborated against its ledger row (actor, kind, canonical slice, plan digest — a disagreement is
+`refused_records`), refused `refused_records` if the registration in force still names its target and placement,
+and otherwise bound to its launch record under the **same** accepted rule (digest, identity, actor, kind, entry,
+workload, target, verified placement, release mode) — then derived `HISTORICAL` with a reason naming the
+superseded contract and ADR-0045 §7, never `PASSED`; a chain that does not bind is `UNBOUND`. `--prepare-cell`
+gains ADR-0054 §2.2's rule: §7's refusal of a launched binding stands, except for a binding the derivation reads
+`HISTORICAL` because the registration moved, proven step by step before any write (launched; reservation and
+launch record integrity-valid and bound; derived `HISTORICAL` for that identity and digest; registration
+difference re-checked; replacement `verify-` identity fresh in the ledger, reservations, bindings and superseded
+links, launch and specification records and consumed markers; the launch tool's admission passed), with the
+previous cells document preserved owner-only beside the ledger (`<ledger>.cells.superseded-<sha16>-<stamp>.json`)
+and the new binding carrying a closed, digest-bound `supersedes` link. The order is preserve → write the
+specification → write the cells document, a failure of the last unlinking the specification, so a refused or
+interrupted preparation leaves no stray record. `refused_rebinding` (exit 15) is the one new sentence. The rule is
+generic across the runtime-launch catalogue, `R2-BLD-CORROBORATION` included when its prerequisites permit, and
+historical evidence never becomes a current `PASSED`.
