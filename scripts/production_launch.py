@@ -927,6 +927,8 @@ def execute_launch(
         task_started=report.task_started,
         exit_codes=list(report.task_exit_codes),
         recorded_at=recorded_at,
+        diagnostics=[entry.document() for entry in report.diagnostics],
+        stop_outcome=report.stop_outcome.value,
     )
     # Records first, the ledger last, all under the lock; every name is exclusive. A
     # failure anywhere here leaves the reservation, which is what makes the identity

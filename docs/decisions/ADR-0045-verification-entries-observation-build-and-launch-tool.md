@@ -666,3 +666,82 @@ corrupted bytes, digest mismatches, build workloads and every other v1 shape sta
 historical reservation without a ledger row is `RESERVATION_ORPHANED`. No identity or filename is special-cased,
 original bytes are never rewritten, and a historical reservation is never reservable, executable, recoverable,
 collectable or admissible — §7's rule reads it `HISTORICAL`, checked rather than remembered.
+
+---
+
+## 15. Amendment (2026-09-18) — bounded read-only re-polling, sanitized poll evidence, and the post-start stop invariant
+
+**Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
+task image, no compiled configuration, no task definition, no Terraform, no IAM and no registration.**
+It amends §6's launch tool in three respects and leaves launch identity, image verification, placement
+verification, the release barrier, the operation-count bounds, identity consumption, reservation semantics,
+the parameter lifecycle, the receipt contracts, every deadline ceiling and the fail-closed rule exactly as
+they were. The text above is preserved as accepted and is not rewritten.
+
+**What it corrects.** On 2026-09-18 two independent production launches of one logical O-5 run (two fresh
+identities, one unchanged plan) were refused `REFUSED_PLACEMENT_UNVERIFIED` with the same signature: `RunTask`
+accepted, the attachment reached `ATTACHED`, placement verified through one `DescribeNetworkInterfaces` with no
+incident, and then the **fourth `DescribeTasks` — the first poll of the image-digest wait — raised a
+`ComputeError`**, 21.6–21.7 s after acceptance, well inside the 120 s placement ceiling; the same path had
+completed 13 of 13 times under identical configuration. The retained evidence (`kalpamani-launch-evidence/v1`:
+outcome, counts, incident, cleanup failures, exit codes) **does not establish the exception class or service
+code** of either failure, and this record does not infer one. On that path the launcher issued no `StopTask`, and
+the task — already accepted by ECS — started against an input the launcher had deleted and failed closed at its
+own input stage (`REFUSED_INPUT`, exit 12). Both attempts stay halted pre-release launches with zero provider,
+secret, S3, reservation and locator activity; neither is reinterpreted by this amendment.
+
+**A. Sanitized poll evidence.** A `ComputeError` raised from a backend exception now carries two bounded,
+sanitized diagnostics beside its closed operation and category: the exception's **class name**
+(`EXCEPTION_CLASS_RE`, `[A-Za-z_][A-Za-z0-9_]{0,63}`) and the **validated service error code**
+(`SERVICE_CODE_RE`, `[A-Za-z][A-Za-z0-9.]{0,63}`); a value outside its grammar is dropped, never truncated or
+repaired, and nothing is invented. Every failed read-only poll of a launch is retained in the evidence document as a
+`PollDiagnostic` — phase (`PLACEMENT`, `IMAGE`, `OBSERVATION`), operation, category, the two diagnostics, the
+attempt number inside the phase, the elapsed milliseconds since the phase began, the retry classification and the
+disposition — and nothing else: **no exception message, request parameter, task ARN, interface, account, endpoint,
+credential, raw response or free text has a field to arrive through**, and the document builder refuses an entry
+outside the closed field set before the document exists. The evidence document is
+`kalpamani-launch-evidence/v2` (`diagnostics`, `stop_outcome` added; every v1 field unchanged); v1 documents
+written before this amendment are preserved as written and are never re-read by the tool
+(`SUPERSEDED_EVIDENCE_CONTRACT_IDS`). The isolation verdict, the launch record, the receipt and the ledger are
+unchanged.
+
+**B. Bounded read-only re-polling.** A `DescribeTasks` that fails inside the placement, image-digest or
+observation loop is classified from its closed category and sanitized class — `THROTTLED`, `TRANSIENT`,
+`TRANSPORT` (a connection the SDK could not open, keep or read within its accepted timeouts), `UNKNOWN`, or
+`TERMINAL` (denied, not found, invalid request, invalid response, invalid configuration) — and:
+
+- a throttled, transient or transport failure is repeated after the phase's accepted interval at most
+  `MAX_CONSECUTIVE_POLL_FAILURES = 3` times in a row; an unknown failure at most `MAX_UNKNOWN_POLL_FAILURES = 1`,
+  recorded as `UNKNOWN`; a valid response resets the streak;
+- every repeat (`RE_POLLED`) is the **read-only poll alone**, only while another interval still fits inside the phase's
+  **unchanged** ceiling measured from the phase's own start (placement and image 120 s, observation 3,600 s):
+  the ceiling is never extended and no second `RunTask` exists on any path;
+- placement and image verification succeed **only on a later valid `DescribeTasks` response**; an exception is
+  never read as a state; a terminal class (`REFUSED_CLASS`), the bound (`REFUSED_BOUND`) and the ceiling
+  (`REFUSED_DEADLINE`) refuse exactly as before — `REFUSED_PLACEMENT_UNVERIFIED` or `OBSERVATION_FAILED`;
+- the SDK client configuration (one attempt in total, finite timeouts), the provider and task-side retry rules
+  and every other operation's policy are unchanged; the held-task readiness loop (§12) is unchanged.
+
+**C. The post-start stop invariant.** Once `RunTask` has accepted a task, every terminal refusal before the task's
+own terminal state — and an exception nothing classified — (1) writes no release, or leaves the written release to
+the prescribed cleanup, (2) issues **one** bounded, best-effort `StopTask` on **this task only**, unless the last
+valid description already reported it terminal, (3) records `stop_outcome` (`STOPPED`, `STOP_FAILED`,
+`ALREADY_TERMINAL`; `NOT_APPLICABLE` exactly when no task was accepted), (4) runs the prescribed parameter cleanup,
+(5) preserves the primary refusal separately from the stop and the cleanup, (6) never reports success because a
+stop or a cleanup succeeded, and (7) never hides a failed stop, which is a `STOP_TASK` cleanup failure beside the
+refusal. The placement-mismatch and stale-release stops are unchanged and count as that one stop. One observable
+consequence is stated rather than left implicit: `OBSERVATION_TIMEOUT` — the launcher's 3,600 s observation
+ceiling — now stops the task instead of leaving it running under a release the cleanup then deletes; the
+acquisition task's own 1,800 s deadline sits inside that ceiling, while a build that legitimately needs the whole
+of its own 3,600 s deadline after its barrier could be stopped by it — the ceilings are unchanged here (lowerable,
+never raisable) and that consequence is recorded for the owner.
+
+**Deployment impact: none.** The launcher module is imported by the owner-side launch tool, the permission-cell
+tool and the reachability hook, and by no task entry; no compiled configuration or image contract binds its
+behaviour; `kalpamani-launch-evidence/v2` is a workstation record. No image is rebuilt or published, no task
+definition, Terraform, IAM or registration changes, and the registered images, configurations and revisions are
+exactly as deployed. Held by focused regression tests over the launcher's fakes — the two recorded 2026-09-18
+signatures reproduced as fail-before / pass-after fixtures without altering the historical evidence — and by
+mutation controls that remove the bound, extend the deadline, suppress the stop, retry `RunTask`, read an
+exception as state, store the message or mask a cleanup failure, each caught.
+

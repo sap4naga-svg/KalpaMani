@@ -608,7 +608,11 @@ class TestPartialFailures:
         ]
         report = scenario.run()
         assert report.outcome is LaunchOutcome.OBSERVATION_TIMEOUT
-        assert report.counts.stop_task == 0  # a slow task is not a misplaced task
+        # ADR-0045 s.15: a terminal refusal after RunTask accepted the task stops it --
+        # once, best effort, this task only -- with the refusal preserved beside the stop.
+        assert report.counts.stop_task == 1 and report.stop_outcome.value == "STOPPED"
+        (stop,) = scenario.ecs.names("stop_task")
+        assert stop["task"] == TASK_ARN and stop["reason"] == pl.STOP_REASON_REFUSED
         assert (
             scenario.clock.seconds <= pl.OBSERVE_CEILING_SECONDS + pl.OBSERVE_POLL_INTERVAL_SECONDS
         )

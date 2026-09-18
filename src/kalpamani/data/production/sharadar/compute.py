@@ -65,22 +65,77 @@ class ComputeFailure(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+#: The two bounded, sanitized diagnostic fields a refusal may carry beside its closed
+#: category (ADR-0045 s.15): the backend exception's **class name** and its **validated
+#: service error code**. Each is held to a strict grammar; a value that does not match is
+#: dropped, never truncated or repaired. A message, a request parameter, an ARN, an
+#: endpoint or a raw response has no field to arrive through.
+EXCEPTION_CLASS_RE: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+SERVICE_CODE_RE: Final = re.compile(r"[A-Za-z][A-Za-z0-9.]{0,63}")
+
+
 class ComputeError(Exception):
-    """A refusal built from two closed vocabulary members and nothing else."""
+    """A refusal built from two closed vocabulary members and two bounded diagnostics.
 
-    __slots__ = ("failure", "operation")
+    ``exception_class`` and ``service_code`` are the sanitized identity of the backend
+    exception that produced the refusal -- present only when the refusal was raised from
+    one, and each only when it matches its grammar. They are the whole of what the
+    launch evidence may retain about a failed control-plane call.
+    """
 
-    def __init__(self, *, operation: ComputeOperation, failure: ComputeFailure) -> None:
-        """Carry an operation and a failure category."""
+    __slots__ = ("exception_class", "failure", "operation", "service_code")
+
+    def __init__(
+        self,
+        *,
+        operation: ComputeOperation,
+        failure: ComputeFailure,
+        exception_class: str | None = None,
+        service_code: str | None = None,
+    ) -> None:
+        """Carry an operation, a failure category and the two bounded diagnostics."""
         if type(operation) is not ComputeOperation or type(failure) is not ComputeFailure:
             raise TypeError("operation and failure must be exact members")
+        if exception_class is not None and (
+            type(exception_class) is not str or not EXCEPTION_CLASS_RE.fullmatch(exception_class)
+        ):
+            raise TypeError("exception_class must match its grammar or be None")
+        if service_code is not None and (
+            type(service_code) is not str or not SERVICE_CODE_RE.fullmatch(service_code)
+        ):
+            raise TypeError("service_code must match its grammar or be None")
         self.operation = operation
         self.failure = failure
+        self.exception_class = exception_class
+        self.service_code = service_code
         super().__init__(f"compute {operation.value}: {failure.value}")
 
 
-def _refuse(operation: ComputeOperation, failure: ComputeFailure) -> ComputeError:
-    return ComputeError(operation=operation, failure=failure)
+def sanitized_exception_class(exception: BaseException) -> str | None:
+    """The exception's class name, if it matches the grammar; otherwise ``None``."""
+    name = type(exception).__name__
+    return name if EXCEPTION_CLASS_RE.fullmatch(name) else None
+
+
+def sanitized_service_code(exception: BaseException) -> str | None:
+    """The validated ``response["Error"]["Code"]``, or ``None`` when absent or malformed."""
+    code = _error_code(exception)
+    return code if code and SERVICE_CODE_RE.fullmatch(code) else None
+
+
+def _refuse(
+    operation: ComputeOperation,
+    failure: ComputeFailure,
+    exception: BaseException | None = None,
+) -> ComputeError:
+    if exception is None:
+        return ComputeError(operation=operation, failure=failure)
+    return ComputeError(
+        operation=operation,
+        failure=failure,
+        exception_class=sanitized_exception_class(exception),
+        service_code=sanitized_service_code(exception),
+    )
 
 
 #: The permission session's ``startedBy`` tag grammar (permission_cells.started_by_of).
@@ -452,7 +507,9 @@ class EcsTaskAdapter:
         try:
             response = self._ecs.run_task(**run_task_request(self._compiled))
         except Exception as exception:
-            raise _refuse(ComputeOperation.RUN_TASK, classify_compute_failure(exception)) from None
+            raise _refuse(
+                ComputeOperation.RUN_TASK, classify_compute_failure(exception), exception
+            ) from None
         if not isinstance(response, Mapping):
             raise _refuse(ComputeOperation.RUN_TASK, ComputeFailure.INVALID_RESPONSE)
         failures = response.get("failures")
@@ -478,7 +535,7 @@ class EcsTaskAdapter:
             )
         except Exception as exception:
             raise _refuse(
-                ComputeOperation.DESCRIBE_TASKS, classify_compute_failure(exception)
+                ComputeOperation.DESCRIBE_TASKS, classify_compute_failure(exception), exception
             ) from None
         tasks = response.get("tasks") if isinstance(response, Mapping) else None
         if not isinstance(tasks, list) or len(tasks) != 1:
@@ -494,7 +551,9 @@ class EcsTaskAdapter:
         try:
             self._ecs.stop_task(cluster=self._compiled.cluster_arn, task=task_arn, reason=reason)
         except Exception as exception:
-            raise _refuse(ComputeOperation.STOP_TASK, classify_compute_failure(exception)) from None
+            raise _refuse(
+                ComputeOperation.STOP_TASK, classify_compute_failure(exception), exception
+            ) from None
 
 
 class Ec2InterfaceAdapter:
@@ -522,7 +581,7 @@ class Ec2InterfaceAdapter:
                 NetworkInterfaceIds=[network_interface_id]
             )
         except Exception as exception:
-            raise _refuse(operation, classify_compute_failure(exception)) from None
+            raise _refuse(operation, classify_compute_failure(exception), exception) from None
         interfaces = response.get("NetworkInterfaces") if isinstance(response, Mapping) else None
         if not isinstance(interfaces, list) or len(interfaces) != 1:
             raise _refuse(operation, ComputeFailure.INVALID_RESPONSE)
@@ -554,11 +613,13 @@ class Ec2InterfaceAdapter:
 
 __all__ = [
     "CLUSTER_ARN_RE",
+    "EXCEPTION_CLASS_RE",
     "KMS_KEY_ARN_RE",
     "LAUNCH_TYPE",
     "PLATFORM_VERSION_RE",
     "ROLE_ARN_RE",
     "SECURITY_GROUP_ID_RE",
+    "SERVICE_CODE_RE",
     "CompiledLaunch",
     "ComputeError",
     "ComputeFailure",
@@ -572,4 +633,6 @@ __all__ = [
     "TaskDescription",
     "classify_compute_failure",
     "run_task_request",
+    "sanitized_exception_class",
+    "sanitized_service_code",
 ]
