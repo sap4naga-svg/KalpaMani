@@ -519,7 +519,12 @@ HTTP 200, **3,405,618 bytes, 46,295 rows**, 83 coarse repeats, **0 / 0 / 0**. Me
 | exactly-full-page probe | required once |
 | data-bearing or refused required probe | fail closed |
 
-### 13.3 The conditional-probe evidence model
+### 13.3 The conditional-probe evidence model (supersedes §2.6's probe-as-payload retention and §2.12's two-requests-per-group plan shape)
+
+The probe is **still retained and hashed** (§2.6's purpose is kept); what changes is **where**: as evidence inside the group's acquisition record and
+locator entry, not as a Bronze payload object with a claim and a record of its own. The plan carries **one data coordinate per group** plus a
+conditional-probe authorization, not two compiled requests. §11.2 rule 1 stands: the acquisition actor parses the **data** response with the accepted
+parser, bounded by the ceilings of §13.2, to count rows and compute the schema digest; that parse produces no build artifact.
 
 1. **Each planned group has one data coordinate** (dataset, window or predicate, offset 0, limit `L`).
 2. **A completion probe is a bounded verification operation attached to that data coordinate — not a second buildable data page.**
