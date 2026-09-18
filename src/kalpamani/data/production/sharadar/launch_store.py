@@ -60,6 +60,22 @@ the owner has moved its files, by hand and unchanged, beside the ledger -- the t
 neither reads, moves, migrates nor deletes them, and it scans no directory it was not
 handed. A reservation written under the first revision's schema is refused as
 malformed rather than read: it carried no specification.
+
+**Historical reservations (ADR-0054).** A reservation whose acquisition workload was
+compiled under the superseded v1 plan contract no longer parses as a current
+reservation: the current parser recompiles the plan digest and the v1 digest is never
+the v2 one. Such a reservation is **evidence of a launch that happened**, and the
+store reads it as one -- through :func:`parse_reservation_for_evidence`, which tries the
+strict parser first and only then the explicit historical parser -- as a
+:class:`HistoricalReservation`, a distinct type no execution path accepts. The strict
+reads (:meth:`LaunchStore.reservation`, :meth:`LaunchStore.reservations`) are unchanged
+and still refuse it, so recovery, the verdict and the execute path cannot consume it;
+the evidence reads (:meth:`LaunchStore.evidence_reservation`,
+:meth:`LaunchStore.evidence_reservations`) return it for classification. The stored bytes
+are never rewritten. A historical reservation with no ledger row is an **orphan** and a
+hard refusal (``RESERVATION_ORPHANED``): a superseded workload cannot be recovered, so
+the interrupted-work path that a current reservation without a row takes does not
+exist for it.
 """
 
 from __future__ import annotations
@@ -81,11 +97,13 @@ from kalpamani.data.production.sharadar.keys import RUN_ID_RE
 from kalpamani.data.production.sharadar.launch_records import (
     MAX_RECORD_BYTES,
     RECORD_SCHEMA_VERSION,
+    HistoricalSpecification,
     LaunchKind,
     LaunchRecord,
     LaunchRecordError,
     LaunchSpecification,
     OwnerLedger,
+    parse_historical_specification,
     parse_owner_ledger,
     parse_specification,
 )
@@ -129,6 +147,9 @@ class StoreDefect(StrEnum):
     LEDGER_UNREADABLE = "LEDGER_UNREADABLE"
     RESERVATION_EXISTS = "RESERVATION_EXISTS"
     RESERVATION_MALFORMED = "RESERVATION_MALFORMED"
+    #: A historical (superseded-workload) reservation with no ledger row: evidence of
+    #: nothing recoverable, refused rather than classified (ADR-0054).
+    RESERVATION_ORPHANED = "RESERVATION_ORPHANED"
     RESERVATION_MISSING = "RESERVATION_MISSING"
     WRITE_FAILED = "WRITE_FAILED"
     NAME_EXHAUSTED = "NAME_EXHAUSTED"
@@ -319,6 +340,138 @@ def parse_reservation(raw: object) -> Reservation:
     )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HistoricalReservation:
+    """A consumed identity whose stored workload the current contract no longer compiles.
+
+    **Read for evidence, never for authority** (ADR-0054): it carries the historical
+    specification exactly as stored, the digest the reservation named and the digest of
+    the stored bytes, so the cell runner can bind the preserved launch record and ledger
+    row to it and classify the result ``HISTORICAL``. It is a distinct type: nothing that
+    reserves, recovers, executes or decides a verdict accepts it.
+    """
+
+    identity: str
+    actor: ProductionActor
+    kind: LaunchKind
+    historical: HistoricalSpecification
+    reserved_at: datetime
+    #: SHA-256 of the reservation file exactly as stored -- the evidence the supersession
+    #: link names.
+    stored_sha256: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing."""
+        raise TypeError("HistoricalReservation may not be subclassed")
+
+    def __post_init__(self) -> None:
+        """The reservation names the specification's own identity, actor and kind."""
+        specification = self.historical.specification
+        if (
+            specification.identity != self.identity
+            or specification.actor is not self.actor
+            or specification.kind is not self.kind
+        ):
+            raise ValueError("a reservation names its specification's identity, actor and kind")
+
+    @property
+    def specification(self) -> LaunchSpecification:
+        """The stored specification, for the binding rules; never a launch's input."""
+        return self.historical.specification
+
+    @property
+    def specification_digest(self) -> str:
+        """The digest the historical authorization named."""
+        return self.historical.digest
+
+    @property
+    def workload_contract_id(self) -> str:
+        """The superseded contract the workload was compiled under."""
+        return self.historical.workload_contract_id
+
+    def __repr__(self) -> str:
+        """Kind and contract only."""
+        return (
+            f"HistoricalReservation(kind={self.kind.value!r}, "
+            f"workload_contract_id={self.workload_contract_id!r})"
+        )
+
+
+def _reservation_envelope(raw: object) -> tuple[dict[str, Any], str, str, str, str, datetime]:
+    """The closed reservation envelope: every field but the specification, validated."""
+    try:
+        document = decode_document(raw, max_bytes=MAX_RECORD_BYTES)
+    except Exception:
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
+    if type(document) is not dict or set(document) != _RESERVATION_FIELDS:
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+    if (
+        document["schema_version"] != RECORD_SCHEMA_VERSION
+        or document["contract_id"] != RESERVATION_CONTRACT_ID
+    ):
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+    identity = exact_str(document["identity"])
+    actor = exact_str(document["actor"])
+    kind = exact_str(document["kind"])
+    digest = exact_str(document["specification_digest"])
+    reserved_at = instant(document["reserved_at"])
+    if (
+        identity is None
+        or not RUN_ID_RE.match(identity)
+        or actor not in {m.value for m in ProductionActor}
+        or kind not in {m.value for m in LaunchKind}
+        or digest is None
+        or len(digest) != 64
+        or set(digest) - _HEX_64
+        or reserved_at is None
+    ):
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+    return document, identity, actor, kind, digest, reserved_at
+
+
+def parse_reservation_for_evidence(raw: bytes) -> Reservation | HistoricalReservation:
+    """A current reservation, or a historical one, or refuse (ADR-0054).
+
+    The strict parser first: what it admits is current and returned unchanged. Only a
+    document the strict parser refuses as malformed is offered to the historical parser,
+    whose envelope is the same closed one and whose specification must parse under the
+    superseded-workload rule with the stored digest, identity, actor and kind agreeing.
+    Everything else -- an unknown contract, a corrupted document, a mismatched digest, a
+    shape neither parser admits -- stays ``RESERVATION_MALFORMED``.
+    """
+    if type(raw) is not bytes:
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+    try:
+        return parse_reservation(raw)
+    except StoreError as error:
+        if error.defect is not StoreDefect.RESERVATION_MALFORMED:
+            raise
+    document, identity, actor, kind, digest, reserved_at = _reservation_envelope(raw)
+    try:
+        historical = parse_historical_specification(document["specification"])
+    except LaunchRecordError:
+        # Including WORKLOAD_CURRENT: the strict parser refused a current-shaped
+        # specification for another reason (digest, identity, actor, kind), which is
+        # malformed, not historical.
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
+    specification = historical.specification
+    if (
+        specification.digest != digest
+        or specification.identity != identity
+        or specification.actor.value != actor
+        or specification.kind.value != kind
+    ):
+        raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+    return HistoricalReservation(
+        identity=identity,
+        actor=ProductionActor(actor),
+        kind=LaunchKind(kind),
+        historical=historical,
+        reserved_at=reserved_at,
+        stored_sha256=sha256_hex(raw),
+    )
+
+
 def _create_exclusive(path: Path, payload: bytes) -> None:
     """Create ``path`` with its whole payload, or fail without touching an existing file."""
     descriptor = os.open(
@@ -466,7 +619,11 @@ class LaunchStore:
             raise _refuse(StoreDefect.WRITE_FAILED) from None
 
     def reservation(self, identity: str) -> Reservation | None:
-        """The reservation for ``identity``, ``None`` if there is none; malformed refuses."""
+        """The reservation for ``identity``, ``None`` if there is none; malformed refuses.
+
+        The strict read: a historical reservation refuses here too, so no execution,
+        recovery or verdict path can consume one (ADR-0054).
+        """
         path = self.reservation_path(identity)
         if not path.exists():
             return None
@@ -475,6 +632,21 @@ class LaunchStore:
         except OSError:
             raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
         return parse_reservation(raw)
+
+    def evidence_reservation(self, identity: str) -> Reservation | HistoricalReservation | None:
+        """The reservation for ``identity`` read for evidence: current, historical, or none.
+
+        Malformed refuses exactly as the strict read does; only a superseded-workload
+        reservation reads differently, as a :class:`HistoricalReservation`.
+        """
+        path = self.reservation_path(identity)
+        if not path.exists():
+            return None
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
+        return parse_reservation_for_evidence(raw)
 
     # -- consumed authorizations -----------------------------------------------------------
 
@@ -581,24 +753,54 @@ class LaunchStore:
         return found
 
     def reservations(self) -> list[Reservation]:
-        """Every reservation beside the ledger, by identity; a malformed one refuses."""
+        """Every reservation beside the ledger, by identity; a malformed one refuses.
+
+        The strict scan: a historical reservation refuses here (ADR-0054); callers that
+        read evidence use :meth:`evidence_reservations`.
+        """
+        found: list[Reservation] = []
+        for reservation in self.evidence_reservations():
+            if type(reservation) is not Reservation:
+                raise _refuse(StoreDefect.RESERVATION_MALFORMED)
+            found.append(reservation)
+        return found
+
+    def evidence_reservations(self) -> list[Reservation | HistoricalReservation]:
+        """Every reservation beside the ledger, current or historical, by identity.
+
+        A malformed one refuses; a file whose name is not its identity refuses. The
+        stored bytes are read and never rewritten.
+        """
         if not self._reservations.is_dir():
             return []
-        found: list[Reservation] = []
+        found: list[Reservation | HistoricalReservation] = []
         for path in sorted(self._reservations.glob("*.json")):
             try:
                 raw = path.read_bytes()
             except OSError:
                 raise _refuse(StoreDefect.RESERVATION_MALFORMED) from None
-            reservation = parse_reservation(raw)
+            reservation = parse_reservation_for_evidence(raw)
             if reservation.identity != path.stem:
                 raise _refuse(StoreDefect.RESERVATION_MALFORMED)
             found.append(reservation)
         return found
 
     def unreconciled(self, ledger: OwnerLedger) -> list[str]:
-        """Identities reserved but absent from the ledger: interrupted work, sorted."""
-        return [r.identity for r in self.reservations() if ledger.row(r.identity) is None]
+        """Identities reserved but absent from the ledger: interrupted work, sorted.
+
+        A current reservation without a row is interrupted work, listed for recovery. A
+        historical reservation without a row is an orphan: its workload cannot be
+        recovered under the current contract, so it refuses (``RESERVATION_ORPHANED``)
+        rather than being listed or ignored (ADR-0054).
+        """
+        pending: list[str] = []
+        for reservation in self.evidence_reservations():
+            if ledger.row(reservation.identity) is not None:
+                continue
+            if type(reservation) is HistoricalReservation:
+                raise _refuse(StoreDefect.RESERVATION_ORPHANED)
+            pending.append(reservation.identity)
+        return pending
 
     # -- records -----------------------------------------------------------------------------
 
@@ -632,6 +834,7 @@ __all__ = [
     "MAX_NAME_ATTEMPTS",
     "RESERVATIONS_SUFFIX",
     "RESERVATION_CONTRACT_ID",
+    "HistoricalReservation",
     "LaunchStore",
     "RecordBinding",
     "Reservation",
@@ -639,4 +842,5 @@ __all__ = [
     "StoreError",
     "bind_record",
     "parse_reservation",
+    "parse_reservation_for_evidence",
 ]
