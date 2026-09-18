@@ -155,3 +155,9 @@ Consequences:
 - **Publish manifests to CONTROL.** CONTROL is deferred by its own decision.
 
 G2 OPEN; CONTROL DEFERRED; Phase 3 NOT COMPLETE; live trading HARD-DISABLED.
+
+## 5. Amendment (2026-09-18) — the manifest's pagination record under v2 (ADR-0053)
+
+**Proposed by [ADR-0053](ADR-0053-pagination-v2-single-data-page-and-completion-probe.md) on 2026-09-18; effective only on the independently reviewed merge of the pull request introducing ADR-0053, and carrying no authority while that pull request is open.** The text above is preserved as accepted and is not rewritten; the rule it states is marked **SUPERSEDED under ADR-0053** exactly where ADR-0053 §6 says so, and nowhere else. The evidence: on acquisition run 1 (2026-09-17) every compiled tickers and actions page was full at the 10,000-row limit (the responses continue beyond the compiled ceilings), and 2,147 byte-identical rows were served on two different tickers offsets seconds apart — offset order is not stable enough for deterministic assembly. **Nothing in this amendment is implemented, qualified or deployed by ADR-0053's merge**; every numeric limit and ceiling stays a candidate until ADR-0053 §3's qualification cycle has run and been accepted.
+
+**Superseded rule (historical):** the manifest's pagination record is ADR-0042's (`sharadar-pagination-admission-v1`: admitted and empty group counts per dataset, `does_not_establish`). **Rule under ADR-0053:** policy version `sharadar-pagination-admission-v2`; per group the limit `L`, the data-page row count, the probe result (parsed, zero rows), schema equality, `rows_total == data_rows`, and the probe payload's digest recorded as delivery-completeness evidence; probe pages contribute no rows to any Silver or Gold artifact and no bytes to their digests. Everything else in §2 — content-addressed Silver and Gold, the name-addressed manifest published last, the derived `run_id`, the 3,600 s deadline — is unchanged.

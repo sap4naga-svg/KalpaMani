@@ -1,0 +1,170 @@
+"""ADR-0053: proposed, the owner's decision verbatim, the v2 contract stated, nothing qualified.
+
+The dated amendments of ADR-0009, ADR-0041, ADR-0042, ADR-0035, ADR-0040 and ADR-0043, the
+owner-input rows, the readiness section, the register rows and the audit's proposed-ADR guard.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Final
+
+import phase3_docs_audit as audit
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+DECISIONS: Final = REPO_ROOT / "docs" / "decisions"
+ADR: Final = DECISIONS / "ADR-0053-pagination-v2-single-data-page-and-completion-probe.md"
+ADR_TEXT: Final = ADR.read_text(encoding="utf-8")
+PROPOSED: Final = (
+    "PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is"
+)
+TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
+OWNER_DECISION: Final = (
+    "I accept the R1 + R2 pagination-correction route: governed single-data-page acquisition with "
+    "a completion probe, explicit refusal of multi-page data, raised bounded payload/parser "
+    "ceilings, full O-5 recompilation, and whole-run replacement of acquisition run 1. Existing "
+    "run 1 remains historical evidence; run 2 and S10c remain on hold."
+)
+AMENDED: Final = {
+    "ADR-0009-sharadar-provider-realistic-implementation.md": "## 10. Amendment (2026-09-18)",
+    "ADR-0041-production-provider-request-form.md": "## 7. Amendment (2026-09-18)",
+    "ADR-0042-build-side-pagination-admission.md": "## 6. Amendment (2026-09-18)",
+    "ADR-0035-initial-breakout-long-research-dataset-ingestion-design.md": (
+        "## 9. Amendment (2026-09-18)"
+    ),
+    "ADR-0040-research-build-output-objects-and-manifest.md": "## 5. Amendment (2026-09-18)",
+    "ADR-0043-production-task-entrypoint-composition.md": "## 7. Amendment (2026-09-18)",
+}
+
+
+def _plain(text: str) -> str:
+    joined = " ".join(line.removeprefix("> ") for line in text.splitlines())
+    return " ".join(joined.split()).replace("**", "").replace("`", "")
+
+
+ADR_PLAIN: Final = _plain(ADR_TEXT)
+
+
+def test_the_adr_exists_is_proposed_and_authorizes_nothing() -> None:
+    assert [p.name for p in sorted(DECISIONS.glob("ADR-0053-*.md"))] == [ADR.name]
+    assert PROPOSED in ADR_TEXT
+    assert "ACCEPTED / IN FORCE as governance and contract only" in ADR_PLAIN
+    assert "Acceptance authorizes nothing that runs" in ADR_PLAIN
+    for phrase in (
+        "no provider qualification request, no implementation, no image build",
+        "Nothing was run to produce this decision",
+        "none is qualified by this ADR",
+        "The next owner decision after this merge is the bounded provider-qualification",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+    assert TWELVE_DIGITS.search(ADR_TEXT) is None
+    for private in ("arn:aws", "eni-0", "y91xlz15", "licensed/bronze/sharadar/tickers/production"):
+        assert private not in ADR_TEXT, private
+
+
+def test_the_owner_decision_is_recorded_verbatim_with_its_limits() -> None:
+    assert OWNER_DECISION in ADR_PLAIN
+    for limit in (
+        "does not waive completeness, determinism, schema, licensing or evidence requirements",
+        "does not declare run 1 buildable",
+        "preserves the superseded run-2 specification and its unconsumed identity",
+        "keeps runs 2" + chr(0x2013) + "19 and S10c blocked",
+    ):
+        assert limit in ADR_PLAIN, limit
+
+
+def test_the_thirteen_point_contract_is_stated() -> None:
+    for clause in (
+        "Multi-page data is prohibited",
+        "exactly one governed data request at limit L",
+        "exactly one completion probe at offset L",
+        "fewer than, or exactly, L rows",
+        "must parse successfully and contain zero data rows",
+        "does not publish a COMPLETE locator",
+        "retained and hashed",
+        "contributes no rows",
+        "Schema equality is required",
+        "governed primary-key and uniqueness rules",
+        "never silently removed",
+        "followed by an empty completion probe may be admitted as complete",
+        "data-bearing completion probe is refused as truncated",
+        "multiple data-bearing pages for one group or window is refused under v2",
+        "Limit and payload qualification gate",
+        "It is not claimed that limit=100000 is supported",
+        "visibly insufficient",
+        "no replacement (64 MiB or any other value) is invented or finalized here",
+        "offset pagination does not return as the fallback",
+        "2,147",
+    ):
+        assert clause in ADR_PLAIN, clause
+
+
+def test_the_consequences_and_the_corrected_deployment_impact_are_stated() -> None:
+    for phrase in (
+        "run 1 is replaced as a whole",
+        "Stocks are not copied into, or patched onto, the old run",
+        "approximately 94 requests",
+        "1 + 3 " + chr(0xD7) + " 94 + 1 = 284",
+        "remains superseded and preserved",
+        "That claim is withdrawn",
+        "binds the release commit, the exact tree and the generated timestamp",
+        "Generate four new release-bound configuration digests",
+        "Rederive the precise Terraform add / change / destroy count from the declaration",
+        "It is not stated here that R-3 or the permission-probe evidence remains current",
+        "G1, G4, G5, PEAD, short-side and M0 readiness are unchanged",
+    ):
+        assert phrase in ADR_PLAIN, phrase
+
+
+def test_every_amended_adr_carries_a_dated_section_naming_adr_0053() -> None:
+    for name, heading in AMENDED.items():
+        text = (DECISIONS / name).read_text(encoding="utf-8")
+        assert heading in text, name
+        tail = text.split(heading, 1)[1]
+        plain = _plain(tail)
+        assert "ADR-0053" in tail and "SUPERSEDED under ADR-0053" in plain, name
+        assert "Superseded rule" in plain, name
+        assert "Nothing in this amendment is implemented, qualified or deployed" in plain, name
+        # The historical text above is untouched: the heading appears once, at the end.
+        assert text.count(heading) == 1 and text.rstrip().endswith(tail.rstrip()), name
+
+
+def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronized() -> None:
+    owner_inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
+        encoding="utf-8"
+    )
+    assert OWNER_DECISION in _plain(owner_inputs)
+    assert "| D-18 |" in owner_inputs and "| D-19 |" in owner_inputs
+    readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## 17. The pagination-v2 governance cycle (2026-09-18)" in readiness
+    assert "not buildable" in readiness and "899f2e11" in readiness
+    checklist = (REPO_ROOT / "docs" / "operations" / "production-owner-checklist.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| 4.6 |" in checklist and "ADR-0053" in checklist
+    assert "ADR-0053" in audit.PROPOSED_ADR_STATUS
+    assert "ADR-0053" not in dict(audit.MERGED_ADR_STATUS)
+    documents = {
+        name: (REPO_ROOT / name).read_text(encoding="utf-8") for name in ("CLAUDE.md", "README.md")
+    }
+    assert audit._proposed_adr_row_defects(documents) == []
+    for name, text in documents.items():
+        rows = [line for line in text.splitlines() if "[ADR-0053](docs/decisions/" in line]
+        assert len(rows) == 1, name
+        assert "PROPOSED — NOT IN FORCE" in rows[0] and "not buildable" in rows[0], name
+        assert "ADR-0053 pagination v2 (governance):" in text, name
+
+
+def test_the_audit_guard_refuses_a_proposed_row_that_claims_a_merge() -> None:
+    bad = {
+        "CLAUDE.md": (
+            "| **[ADR-0053](docs/decisions/x.md) — t** | **ACCEPTED / IN FORCE** — PR #999 merged |"
+        ),
+        "README.md": "",
+    }
+    defects = audit._proposed_adr_row_defects(bad)
+    assert any("claims an in-force merge" in d for d in defects)
+    assert any("has 0 register rows" in d for d in defects)
