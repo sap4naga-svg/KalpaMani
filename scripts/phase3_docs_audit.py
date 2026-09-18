@@ -854,6 +854,22 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     ("ADR-0052", "PR #126 merged"),
 )
 
+#: ADRs that are PROPOSED -- on ``main`` as documents, with register rows, and with no
+#: authority. Explicit for the same reason :data:`MERGED_ADR_STATUS` is: a row that
+#: describes a proposed decision as in force, or names a merge that has not happened,
+#: is a claim nothing governs. An entry leaves this tuple only when the decision's
+#: pull request merges and its ``MERGED_ADR_STATUS`` entry is written in the same
+#: synchronization.
+PROPOSED_ADR_STATUS: Final[tuple[str, ...]] = (
+    # ADR-0053 proposed 2026-09-18: pagination v2 -- one governed data request plus one
+    # completion probe per group, multi-page data refused on evidence, every limit and
+    # ceiling a candidate until a separately authorized qualification cycle.
+    "ADR-0053",
+)
+
+#: The words a proposed ADR's register row must carry.
+PROPOSED_ROW_MARK: Final = "PROPOSED — NOT IN FORCE"
+
 #: How a current-status row states that its ADR is in force and names the pull
 #: request that made it so.
 #:
@@ -3822,6 +3838,39 @@ def _duplicate_registry_entries(registry: Iterable[tuple[str, str]]) -> list[str
     for adr, _ in registry:
         counts[adr] = counts.get(adr, 0) + 1
     return sorted(adr for adr, count in counts.items() if count > 1)
+
+
+def _proposed_adr_row_defects(documents: Mapping[str, str]) -> list[str]:
+    """Every proposed ADR whose register rows are missing, claim authority, or name a merge.
+
+    Scoped like the in-force guard: the ADR link must be in the row's first cell. A
+    proposed decision has exactly one row per document, that row says PROPOSED -- NOT
+    IN FORCE, and it neither claims ACCEPTED / IN FORCE nor names a pull request as
+    merged; the merged registry must not list it either.
+    """
+    defects: list[str] = []
+    merged = dict(MERGED_ADR_STATUS)
+    for adr in PROPOSED_ADR_STATUS:
+        if adr in merged:
+            defects.append(f"{adr} is listed as proposed and as merged")
+        for name, text in documents.items():
+            rows = [
+                line
+                for line in text.splitlines()
+                if line.startswith("|")
+                and line.count("|") > 1
+                and (match := ADR_ROW_SUBJECT.search(line.split("|")[1])) is not None
+                and match.group("adr") == adr
+            ]
+            if len(rows) != 1:
+                defects.append(f"{name}: {adr} has {len(rows)} register rows, not one")
+                continue
+            row = rows[0]
+            if PROPOSED_ROW_MARK not in row:
+                defects.append(f"{name}: {adr} row does not say {PROPOSED_ROW_MARK!r}")
+            if IN_FORCE_ROW.search(row) is not None:
+                defects.append(f"{name}: {adr} row claims an in-force merge")
+    return defects
 
 
 def _registry_coverage_defects(documents: Mapping[str, str]) -> list[str]:
@@ -18655,6 +18704,12 @@ def main() -> int:
                 | set(_in_force_adr_claims(status_documents["README.md"]))
             ),
             "two documents naming different pull requests is two answers to one question",
+        )
+        f.check(
+            "every proposed ADR has exactly one register row per document that says "
+            "PROPOSED and claims no merge",
+            not _proposed_adr_row_defects(status_documents),
+            "a proposed decision described as in force is a claim nothing governs",
         )
         f.check(
             "the registry is in ascending ADR order",

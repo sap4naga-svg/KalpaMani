@@ -582,3 +582,9 @@ rather than a paragraph.
 
 Reviewed with the pull request that introduces it. Accepted on merge; until then it carries no
 authority.
+
+## 10. Amendment (2026-09-18) — the production request-form limit ceiling is a qualified constant (ADR-0053)
+
+**Proposed by [ADR-0053](ADR-0053-pagination-v2-single-data-page-and-completion-probe.md) on 2026-09-18; effective only on the independently reviewed merge of the pull request introducing ADR-0053, and carrying no authority while that pull request is open.** The text above is preserved as accepted and is not rewritten; the rule it states is marked **SUPERSEDED under ADR-0053** exactly where ADR-0053 §6 says so, and nowhere else. The evidence: on acquisition run 1 (2026-09-17) every compiled tickers and actions page was full at the 10,000-row limit (the responses continue beyond the compiled ceilings), and 2,147 byte-identical rows were served on two different tickers offsets seconds apart — offset order is not stable enough for deterministic assembly. **Nothing in this amendment is implemented, qualified or deployed by ADR-0053's merge**; every numeric limit and ceiling stays a candidate until ADR-0053 §3's qualification cycle has run and been accepted.
+
+**Superseded rule (historical):** `MAX_PAGE_LIMIT = 10,000` as "the largest page the vendor documents" bounds every request. **Rule under ADR-0053:** the vendor documents `limit` with a default of 10,000 and **no stated maximum** (`PSR-SHD-129`–`131`); the production form's (`CrossSectionRequest`, ADR-0041) per-dataset limit ceiling `L` is a **qualified** constant fixed only by ADR-0053 §3, and a vendor example (`limit=100000`) is not a documented maximum and is not qualification. **The qualification form (`SharadarRequest`) and its 10,000 ceiling are unchanged.** The retired-key, bulk-route, credential and origin-pinning rules of this ADR are untouched.

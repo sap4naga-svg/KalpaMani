@@ -1092,3 +1092,45 @@ executed through `scripts/production_verification_cells.py` (`--prepare-cell` / 
 only through its own preparation record, and a launch made outside it, however well evidenced, reads `UNEXECUTED`
 in the matrix (the 2026-09-17 acquisition bootstrap launch, `verify-acq-20260917T005249Z-76b22185`, is such a
 launch: receipt-verified in the ledger, not attributed, preserved as is).
+
+## 17. The pagination-v2 governance cycle (2026-09-18) — ADR-0053 PROPOSED; run 1 historical, not buildable; run 2 superseded; S10c blocked
+
+**What the first production acquisition established.** O-5 run 1 (`run-20260917T221453Z-af316f8b`, 2026-09-17) `COMPLETED`
+exit 0 and receipt-verified (96 provider requests, 1 secret retrieval, 290 conditional writes); its locator is admitted by the
+accepted validator (65,169 bytes, `24f9c7be…`). Eight of its payload pages were then read under two separately authorized
+read-only diagnoses through the accepted exact reader and parser: **every compiled tickers page (4) and actions page (2 + 2)
+carried exactly 10,000 rows** — the responses continue beyond the compiled ceilings — and **2,147 byte-identical rows were served
+on tickers offsets 20,000 and 30,000** (none duplicated within a page): the vendor's default `lastpricedate.desc` order ties every
+active ticker, so offset assembly is neither complete nor deterministic (`PSR-SHD-131`/`133`, now observed). The 44 stocks windows
+are complete-shaped. Under ADR-0042 the run-1 input is **not buildable**.
+
+**The owner's decision (recorded verbatim in ADR-0053 §0).** Route R1 + R2: governed single-data-page acquisition with a
+completion probe, explicit refusal of multi-page data, raised bounded payload/parser ceilings, full O-5 recompilation and the
+whole-run replacement of run 1; run 1 remains historical evidence; run 2 and S10c remain on hold. **ADR-0053 is PROPOSED and
+carries no authority while its pull request is open; on merge it is governance and contract only.** It amends ADR-0009, ADR-0041,
+ADR-0042, ADR-0035, ADR-0040 and ADR-0043 by dated sections that preserve the accepted text.
+
+**What changes when ADR-0053 is in force, and what it does not.** Each group or window becomes one data request at limit `L`
+plus one completion probe at offset `L` with identical immutable parameters; a data-bearing, malformed or unparseable probe fails
+the acquisition closed (no `COMPLETE` locator); a full data page with an empty probe is complete; multi-page data is refused on
+evidence; the probe is retained and hashed but contributes no rows; schema equality and within-page uniqueness are required; the
+acquisition entry parses the probe only (data responses stay opaque). **No numeric `L` and no byte, row or memory ceiling is fixed
+by the ADR** — the present 16 MiB response ceiling is visibly insufficient for a single tickers response, and no replacement is
+invented; every constant waits on the separately authorized qualification cycle (ADR-0053 §3, owner-input D-19), whose fallback,
+if no safe single-page `L` exists, is a deterministic server-side partition — never offset pagination.
+
+**Deployment impact, corrected.** The compiled-configuration digest binds the release commit, tree and `generated_at`, so a new
+release moves the configuration digest even with unchanged semantic inputs: expect four rebuilt images (acquisition,
+acquisition-verification, build, build-verification), four new release-bound configuration digests, the probe images unchanged
+unless code analysis shows otherwise, four replaced task definitions, both launcher policies re-scoped to the new exact revision
+ARNs, four registration blocks re-issued (`a0155d0a…` historical for those targets), registration-bound permission evidence
+historical, the Terraform add/change/destroy count rederived from the declaration, and the S9/permission cells to repeat rederived
+from the binding rules (likely the six R-1 cells and the R-2 corroboration/isolation path; R-3 and probe evidence not assumed
+current).
+
+**Dispositions.** Run 1: historical acquisition evidence, not buildable, to be replaced whole (≈ 94 requests: 88 stocks + 2
+tickers + 4 actions; write ceiling `1 + 3×94 + 1 = 284` if 94 — final only after qualification and recompilation). Run 2:
+specification `899f2e11…` superseded and preserved, identity `run-20260917T232613Z-28726d37` unconsumed, no D-15. Runs 2–19:
+on hold pending the recompiled O-5 program. S10c: blocked. G1, G4, G5, PEAD, short-side and M0 readiness: unchanged. **Next
+owner decision after the merge: the bounded provider-qualification authorization (D-19).** Estimate at the observed cadence:
+≈ 8 bounded cycles to acquisition resumption, ≈ 10 to the first observation build, ≈ +20–25 to the first M0 backtest.
