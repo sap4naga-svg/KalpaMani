@@ -58,9 +58,11 @@ from kalpamani.data.production.sharadar.gold import (
 )
 from kalpamani.data.production.sharadar.keys import RUN_ID_RE
 from kalpamani.data.production.sharadar.locator import PayloadDisposition
+from kalpamani.data.production.sharadar.pagination import PAGINATION_POLICY_VERSION
 from kalpamani.data.production.sharadar.processing import SOURCE_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import (
+    ACTIONS_IDENTITY_VERSION,
     SILVER_NORMALIZATION_VERSION,
     AcceptedSchemas,
     SilverLayer,
@@ -71,7 +73,10 @@ from kalpamani.data.qualify.sharadar.publication import (
     NameOccupiedError,
 )
 
-MANIFEST_SCHEMA_VERSION: Final = "kalpamani-production-build-manifest/v1"
+#: v2: pagination-v2 admission (groups probed), the accepted actions event identity
+#: contract in place of the v1 unresolved-contract block, and the run identities'
+#: probe and provider-call accounting.
+MANIFEST_SCHEMA_VERSION: Final = "kalpamani-production-build-manifest/v2"
 MAX_MANIFEST_BYTES: Final = 4 * 1024 * 1024
 
 SILVER_NAMESPACE: Final = "silver"
@@ -164,6 +169,8 @@ class BuildConfiguration:
             "action_selection_version": ACTION_SELECTION_VERSION,
             "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
             "source_schema_version": SOURCE_SCHEMA_VERSION,
+            "pagination_policy_version": PAGINATION_POLICY_VERSION,
+            "actions_identity_version": ACTIONS_IDENTITY_VERSION,
         }
 
     @property
@@ -286,6 +293,7 @@ def derive_run_id(
         "bronze_digests": sorted(page.payload_sha256 for page in inputs.pages()),
         "ledger_digest": inputs.ledger_digest,
         "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
+        "actions_identity_version": ACTIONS_IDENTITY_VERSION,
         "adjustment_derivation_version": ADJUSTMENT_DERIVATION_VERSION,
         "action_selection_version": ACTION_SELECTION_VERSION,
         "resolution_policy_version": resolved.policy_version,
@@ -329,6 +337,8 @@ def build_manifest_document(
                     "plan_digest": run.locator.plan_digest,
                     "acquisition_mode": run.locator.acquisition_mode,
                     "entries": len(run.pages),
+                    "probes_issued": run.locator.probes_issued,
+                    "provider_calls": run.locator.provider_calls,
                     "payload_digests": [page.payload_sha256 for page in run.pages],
                     "record_digests": [page.record_sha256 for page in run.pages],
                 }
@@ -354,6 +364,7 @@ def build_manifest_document(
             "action_selection_version": ACTION_SELECTION_VERSION,
             "resolution_policy_version": resolved.policy_version,
             "pagination_policy_version": silver.pagination.policy_version,
+            "actions_identity_version": ACTIONS_IDENTITY_VERSION,
             "calendar_version": configuration.calendar.version,
             "quality_plan_version": gold.quality.plan_version,
             "evidence_version": resolved.evidence_version,
@@ -380,11 +391,13 @@ def build_manifest_document(
         "limitations": [token.value for token in gold.limitations],
         "spinoff_excluded_securities": list(gold.spinoff_excluded_securities),
         "restrictions": [item.document() for item in gold.restrictions],
-        "unresolved_contracts": {
+        "identity_contracts": {
             "action-event-identity": {
-                "statement": "the vendor actions table carries no event identity; a key "
-                "absent from a later covering delivery is recorded as a redelivery gap, "
-                "never read as a deletion or a correction",
+                "contract_id": ACTIONS_IDENTITY_VERSION,
+                "statement": "every actions row is one event under the schema-bound "
+                "canonical full-row identity; an event absent from a later covering "
+                "delivery is recorded as a redelivery gap, never read as a deletion or "
+                "a correction",
                 "action_keys_with_redelivery_gaps": sum(
                     1
                     for row in resolved.actions

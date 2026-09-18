@@ -139,7 +139,7 @@ class Security:
 
     def ticker_row(self, lastupdated: str) -> tuple[str, ...]:
         return (
-            "SEP",
+            "stocks",
             self.permaticker,
             self.symbol,
             f"Synthetic {self.symbol} Corp",
@@ -303,16 +303,20 @@ def slice_with_stocks_window(run: int, window: str) -> dict[str, Any]:
     days = (end - start).days + 1
     doc = dict(slice_for_run(run))
     doc["windows"] = dict(doc["windows"], stocks=window)
-    doc["request_count"] = 2 + days * 2 + 4
+    doc["request_count"] = 1 + days + 1
     return doc
 
 
 def slice_for_run(run: int) -> dict[str, Any]:
-    """Run 1 covers 08-31..09-04 (16 requests); run 2 covers 09-02..09-14 (32 requests)."""
+    """Run 1 covers 08-31..09-04 (7 data coordinates); run 2 covers 09-02..09-14 (15).
+
+    Pagination v2: one data coordinate per group -- one actions year window, one stocks
+    session date each, one ``table=stocks`` tickers snapshot -- and no offset page.
+    """
     if run == 1:
-        stocks_window, count = "2026-08-31/2026-09-04", 2 + 5 * 2 + 4
+        stocks_window, count = "2026-08-31/2026-09-04", 1 + 5 + 1
     else:
-        stocks_window, count = "2026-09-02/2026-09-14", 2 + 13 * 2 + 4
+        stocks_window, count = "2026-09-02/2026-09-14", 1 + 13 + 1
     return {
         "acquisition_mode": "BACKFILL",
         "datasets": ["actions", "stocks", "tickers"],
@@ -336,18 +340,16 @@ def responses_for_run(
     out[("actions", slice_doc["windows"]["actions"], 0)] = csv(
         ACTIONS_HEADER, actions_rows(run=run)
     )
-    out[("actions", slice_doc["windows"]["actions"], 10000)] = csv(ACTIONS_HEADER, [])
     start, end = (date.fromisoformat(part) for part in slice_doc["windows"]["stocks"].split("/"))
     day = start
     while day <= end:
         window = f"{day.isoformat()}/{day.isoformat()}"
         rows = stocks_rows(day, run=run) if day in SESSIONS_2026 else []
         out[("stocks", window, 0)] = csv(STOCKS_HEADER, rows)
-        out[("stocks", window, 10000)] = csv(STOCKS_HEADER, [])
         day += timedelta(days=1)
     out[("tickers", "SNAPSHOT", 0)] = csv(TICKERS_HEADER, tickers_rows(lastupdated=lastupdated))
-    for offset in (10000, 20000, 30000):
-        out[("tickers", "SNAPSHOT", offset)] = csv(TICKERS_HEADER, [])
+    # No probe response is scripted: every synthetic page is short, so a probe request
+    # would be a defect, and the coordinate provider refuses it by raising.
     return out
 
 

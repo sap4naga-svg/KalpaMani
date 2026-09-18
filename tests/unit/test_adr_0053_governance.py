@@ -171,7 +171,9 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
             and "CALCULATED" in text
             and "D-20 round 2 DUPLICATE_PRIMARY_KEY" in text
         ), name
-        assert "runtime pagination-v2 implementation ABSENT" in text, name
+        assert "runtime pagination-v2 implementation MERGED OFFLINE" in text, name
+        assert "18 runs / 855 coordinates / 2,601 writes" in text, name
+        assert "NEVER run" in text, name
 
 
 def test_the_audit_guard_refuses_a_proposed_row_that_claims_a_merge(

@@ -7,8 +7,10 @@ accepted :class:`~kalpamani.data.ingest.sharadar.client.SharadarClient` builds t
 and runs its one fetch loop over an **injected** transport, and the bytes come back
 exactly as received. Every transmitted parameter derives from the compiled request:
 the dataset names the path, the window names ``from``/``to``, the page names ``limit``
-and ``skip``, the format is the plan's CSV, and the credential is revealed only inside
-the accepted URL builder. No other parameter, header, host or destination exists here.
+and ``skip`` (the dataset's governed v2 limit; the probe is the same shape at offset
+``L``), the tickers predicate names ``table``, the format is the plan's CSV, and the
+credential is revealed only inside the accepted URL builder. No other parameter,
+header, host or destination exists here.
 
 **Unsupported combinations are refused before the transport is invoked.** A window on
 the snapshot table, a snapshot on a windowed table, a malformed window, an oversized
@@ -40,11 +42,12 @@ from typing import Any, Final
 from kalpamani.data.ingest.sharadar.client import Pacer, RetryPolicy, SharadarClient
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
 from kalpamani.data.ingest.sharadar.datasets import (
-    MAX_PAGE_LIMIT,
+    PRODUCTION_PAGE_LIMITS,
+    TICKERS_TABLE_PARAMETER,
     WINDOWED_DATASETS,
+    CrossSectionPage,
     CrossSectionRequest,
     DateWindow,
-    Page,
     ResponseFormat,
     SharadarDataset,
 )
@@ -72,6 +75,7 @@ class ProviderRefusal(StrEnum):
     WINDOW_NOT_ALLOWED = "WINDOW_NOT_ALLOWED"
     WINDOW_MALFORMED = "WINDOW_MALFORMED"
     PAGE_MALFORMED = "PAGE_MALFORMED"
+    PREDICATE_MALFORMED = "PREDICATE_MALFORMED"
     REQUEST_MALFORMED = "REQUEST_MALFORMED"
 
 
@@ -110,8 +114,10 @@ def compile_cross_section(request: ProductionRequest) -> CrossSectionRequest:
 
     Deterministic and total over the plan's coordinate grammar: a dataset outside the
     three tables, a window on the snapshot table, ``SNAPSHOT`` on a windowed table, a
-    window that is not two ISO dates in order, or a page outside ``1..MAX_PAGE_LIMIT``
-    with a non-negative offset is refused. Nothing is transmitted by this function.
+    window that is not two ISO dates in order, a page outside ``1..L`` for the dataset's
+    governed limit with a non-negative offset, or a predicate other than exactly the
+    tickers ``table`` pair on the tickers table (and none elsewhere) is refused. Nothing
+    is transmitted by this function.
     """
     if type(request) is not ProductionRequest:
         raise _refuse(ProviderRefusal.REQUEST_MALFORMED)
@@ -130,17 +136,34 @@ def compile_cross_section(request: ProductionRequest) -> CrossSectionRequest:
         window = _window(request.window)
     if (
         type(request.page_limit) is not int
-        or not 1 <= request.page_limit <= MAX_PAGE_LIMIT
+        or not 1 <= request.page_limit <= PRODUCTION_PAGE_LIMITS[dataset.value]
         or type(request.page_offset) is not int
         or request.page_offset < 0
     ):
         raise _refuse(ProviderRefusal.PAGE_MALFORMED)
+    predicate = request.predicate
+    if type(predicate) is not tuple or any(
+        type(pair) is not tuple
+        or len(pair) != 2
+        or type(pair[0]) is not str
+        or type(pair[1]) is not str
+        for pair in predicate
+    ):
+        raise _refuse(ProviderRefusal.PREDICATE_MALFORMED)
+    table: str | None = None
+    if dataset is SharadarDataset.TICKERS:
+        if len(predicate) != 1 or predicate[0][0] != TICKERS_TABLE_PARAMETER:
+            raise _refuse(ProviderRefusal.PREDICATE_MALFORMED)
+        table = predicate[0][1]
+    elif predicate:
+        raise _refuse(ProviderRefusal.PREDICATE_MALFORMED)
     try:
         return CrossSectionRequest(
             dataset=dataset,
             response_format=PRODUCTION_FORMAT,
-            page=Page(limit=request.page_limit, skip=request.page_offset),
+            page=CrossSectionPage(limit=request.page_limit, skip=request.page_offset),
             window=window,
+            table=table,
         )
     except SharadarRequestError:
         raise _refuse(ProviderRefusal.REQUEST_MALFORMED) from None

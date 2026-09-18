@@ -8,6 +8,7 @@ the outcome the contract states.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -61,6 +62,7 @@ from kalpamani.data.production.sharadar import build_inputs as bi
 from kalpamani.data.production.sharadar import build_manifest as bm
 from kalpamani.data.production.sharadar import build_processing as bp
 from kalpamani.data.production.sharadar import gold as gd
+from kalpamani.data.production.sharadar import processing as pp
 from kalpamani.data.production.sharadar import silver as sv
 from kalpamani.data.production.sharadar import universe as uv
 from kalpamani.data.production.sharadar.inputs import BuildInput, parse_build_input
@@ -158,8 +160,8 @@ class TestEndToEnd:
         assert report.artifacts_written == 7 and report.artifacts_already_present == 0
         assert not report.publication_state_unknown
         # Reads: two locators and every object they name; writes: seven artifacts, one manifest.
-        assert report.objects_read == 2 + 2 * (16 + 32)
-        assert scenario.data_plane_calls() == (98, 8)
+        assert report.objects_read == 2 + 2 * (7 + 15)
+        assert scenario.data_plane_calls() == (46, 8)
         _assert_accounting(scenario, report)
         puts = store.puts[-8:]
         assert [key.split("/")[0] for key in puts] == ["silver"] * 3 + ["gold"] * 4 + ["manifests"]
@@ -171,7 +173,18 @@ class TestEndToEnd:
         assert manifest["build_id"] == BUILD_ID and manifest["classification"] == "LICENSED"
         consumed = {d for run in manifest["build_input"]["runs"] for d in run["payload_digests"]}
         assert consumed == bronze_payload_digests
-        assert manifest["build_input"]["objects_read"] == 98
+        assert manifest["build_input"]["objects_read"] == 46
+        assert manifest["schema_version"] == "kalpamani-production-build-manifest/v2"
+        assert [r["probes_issued"] for r in manifest["build_input"]["runs"]] == [0, 0]
+        assert [r["provider_calls"] for r in manifest["build_input"]["runs"]] == [7, 15]
+        assert manifest["pagination"]["policy_version"] == "sharadar-pagination-admission-v2"
+        assert manifest["pagination"]["groups_probed"] == {"actions": 0, "stocks": 0, "tickers": 0}
+        assert manifest["identity_contracts"]["action-event-identity"]["contract_id"] == (
+            "sharadar-actions-event-identity/v1"
+        )
+        assert manifest["transformation"]["actions_identity_version"] == (
+            "sharadar-actions-event-identity/v1"
+        )
         assert manifest["source_versions"]["source_schema_version"] == "sharadar-csv-production-v1"
         assert manifest["source_versions"]["observed_schema_digests"] == {
             "tickers": [schema_digest_of(TICKERS_HEADER)],
@@ -209,7 +222,7 @@ class TestEndToEnd:
         store = populated_store()
         scenario = BuildScenario(store)
         scenario.run()
-        gets = store.gets[-98:]
+        gets = store.gets[-46:]
         locators = {f"bronze/sharadar/_indexes/{run}.json" for run in (RUN_1, RUN_2)}
         named: set[str] = set()
         for locator_key in locators:
@@ -545,7 +558,7 @@ class TestVerifiedInputs:
         report = scenario.run()
         assert report.status is bp.BuildStatus.REFUSED_INPUTS
         assert report.defect == bi.BuildInputDefect.LOCATOR_UNREADABLE.value
-        assert report.objects_read == 1 + 2 * 16 + 1
+        assert report.objects_read == 1 + 2 * 7 + 1
 
     def test_the_acquisition_record_must_agree_with_the_locator_and_the_run(self) -> None:
         store = populated_store(runs=(1,))
@@ -553,10 +566,29 @@ class TestVerifiedInputs:
         row = admitted_input(((RUN_1, 1, RUN_1_AT),)).runs[0]
         locator = reader.read_run_locator(run_id=RUN_1, ledger_row=row)
         entry = locator.entries[0]
-        record = json.loads(reader.read_exact(entry.record))
+        document = json.loads(reader.read_exact(entry.record))
+        record = document["retrieval"]
+        assert document["contract_id"] == "kalpamani-production-acquisition-record/v2"
         assert bi.cross_check_record(
-            dict(record), entry=entry, locator=locator
+            document, entry=entry, locator=locator
         ) == datetime.fromisoformat(record["retrieved_at"])
+        # The request shape and the completion evidence must be the locator entry's.
+        for field, value, defect in (
+            ("window", "SNAPSHOT", bi.BuildInputDefect.PROVENANCE_CONTRADICTORY),
+            ("page_limit", 5000, bi.BuildInputDefect.PROVENANCE_CONTRADICTORY),
+            ("predicate", {"table": "stocks"}, bi.BuildInputDefect.PROVENANCE_CONTRADICTORY),
+            ("request_shape_sha256", "0" * 64, bi.BuildInputDefect.PROVENANCE_CONTRADICTORY),
+        ):
+            tampered_document = json.loads(json.dumps(document))
+            tampered_document["request"][field] = value
+            with pytest.raises(bi.BuildInputError) as refused:
+                bi.cross_check_record(tampered_document, entry=entry, locator=locator)
+            assert refused.value.defect is defect, field
+        tampered_document = json.loads(json.dumps(document))
+        tampered_document["pagination"]["row_count"] += 1
+        with pytest.raises(bi.BuildInputError) as refused:
+            bi.cross_check_record(tampered_document, entry=entry, locator=locator)
+        assert refused.value.defect is bi.BuildInputDefect.EVIDENCE_CONTRADICTORY
         cases = {
             "source_schema_version": ("other-schema", bi.BuildInputDefect.SCHEMA_INCOMPATIBLE),
             "dataset": ("stocks", bi.BuildInputDefect.PROVENANCE_CONTRADICTORY),
@@ -572,10 +604,10 @@ class TestVerifiedInputs:
             ),
         }
         for field, (value, defect) in cases.items():
-            tampered = dict(record)
-            tampered[field] = value
+            tampered_document = json.loads(json.dumps(document))
+            tampered_document["retrieval"][field] = value
             with pytest.raises(bi.BuildInputError) as refused:
-                bi.cross_check_record(tampered, entry=entry, locator=locator)
+                bi.cross_check_record(tampered_document, entry=entry, locator=locator)
             assert refused.value.defect is defect, field
 
     def test_bounds_refuse_before_the_read_that_would_exceed_them(
@@ -626,14 +658,43 @@ def _run_1_build(store: FakeS3Store) -> bp.BuildReport:
 
 
 class TestNormalizationRefusals:
-    def test_a_malformed_row_refuses_the_whole_input(self) -> None:
+    def test_a_malformed_row_halts_the_acquisition_and_a_partial_locator_refuses_the_build(
+        self,
+    ) -> None:
+        # Pagination v2: the acquisition actor parses every data page, so a ragged page
+        # halts the run before the group's writes; the PARTIAL locator refuses the build.
         responses = responses_for_run(1)
         ragged = csv(STOCKS_HEADER, [row[:-1] for row in stocks_rows(date(2026, 9, 1), run=1)])
         responses[("stocks", "2026-09-01/2026-09-01", 0)] = ragged
-        report = _run_1_build(_store_with_run_1(responses))
-        assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
-        assert report.defect == sv.SilverDefect.PAYLOAD_UNPARSEABLE.value
-        assert report.manifest is bm.ManifestDisposition.NOT_ATTEMPTED
+        store = FakeS3Store()
+        report = acquire(
+            store, run_id=RUN_1, run=1, at=RUN_1_AT, responses=responses, expect_completed=False
+        )
+        assert report.status is pp.AcquisitionStatus.HALTED
+        assert report.halt is pp.ProcessingHalt.DATA_PAGE_MALFORMED
+        build = BuildScenario(store, runs=((RUN_1, 1, RUN_1_AT),)).run()
+        assert build.status is bp.BuildStatus.REFUSED_INPUTS
+        assert build.defect == bi.BuildInputDefect.LOCATOR_INVALID.value
+        assert build.manifest is bm.ManifestDisposition.NOT_ATTEMPTED
+
+    def test_a_payload_the_build_cannot_parse_refuses_normalization(self) -> None:
+        # A verified page whose bytes are not a page: the build-side parse refusal.
+        store = _store_with_run_1(responses_for_run(1))
+        good = _run_1_build(store)
+        assert good.status is bp.BuildStatus.COMPLETED, good.defect
+        inputs = bi.verify_build_inputs(
+            admitted_input(((RUN_1, 1, RUN_1_AT),)),
+            reader=ProductionLocatorReader(client=store, licensed_bucket=BUCKET),
+        )
+        page = inputs.runs[0].pages[0]
+        broken = dataclasses.replace(page, payload=b"\xff\xfe not utf-8")
+        tampered = dataclasses.replace(
+            inputs,
+            runs=(dataclasses.replace(inputs.runs[0], pages=(broken, *inputs.runs[0].pages[1:])),),
+        )
+        with pytest.raises(sv.SilverError) as refused:
+            sv.normalize(tampered, schemas=SCHEMAS)
+        assert refused.value.defect is sv.SilverDefect.PAYLOAD_UNPARSEABLE
 
     def test_schema_drift_is_a_blocking_finding(self) -> None:
         responses = responses_for_run(1)
@@ -661,36 +722,64 @@ class TestNormalizationRefusals:
         report = _run_1_build(_store_with_run_1(responses))
         assert report.status is bp.BuildStatus.COMPLETED, report.defect
 
-    def test_a_full_first_page_is_truncation_and_a_later_data_page_is_unsupported(self) -> None:
+    def test_a_tickers_row_outside_the_requested_table_contradicts_the_predicate(self) -> None:
         responses = responses_for_run(1)
-        filler: list[tuple[str, ...]] = [
+        rows = tickers_rows(lastupdated="2026-09-04")
+        rows[0] = ("SEP", *rows[0][1:])
+        responses[("tickers", "SNAPSHOT", 0)] = csv(TICKERS_HEADER, rows)
+        report = _run_1_build(_store_with_run_1(responses))
+        assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
+        assert report.defect == sv.SilverDefect.TICKERS_TABLE_CONTRADICTED.value
+
+    def test_a_full_stocks_page_needs_a_passed_probe_and_a_data_bearing_probe_halts(self) -> None:
+        # The stocks limit is 10,000: an exactly-full page requires the completion probe.
+        base = stocks_rows(date(2026, 9, 1), run=1)
+        filler = [
             (
-                "SEP",
-                str(200000 + i),
                 f"ZZ{i:05d}",
-                "Synthetic",
-                "NYSE",
-                "N",
-                "Domestic Common Stock",
-                "",
-                "",
+                "2026-09-01",
+                "9.90",
+                "10.20",
+                "9.70",
+                "10.00",
+                "1000",
+                "10.00",
+                "10.00",
                 "2026-09-04",
-                "2010-01-04",
-                "2026-09-14",
             )
-            for i in range(10_000)
+            for i in range(10_000 - len(base))
         ]
-        # A full page at the first offset is truncation uncertainty; a data-bearing page
-        # at a later offset is the unsupported multi-page delivery, whatever it holds.
-        responses[("tickers", "SNAPSHOT", 0)] = csv(TICKERS_HEADER, filler)
-        report = _run_1_build(_store_with_run_1(responses))
-        assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
-        assert report.defect == sv.SilverDefect.DELIVERY_TRUNCATED.value
+        full = csv(STOCKS_HEADER, [*base, *filler])
+        assert full.count(b"\n") == 10_001
+        # A passed probe: the run completes, the probe is retained, the build admits it.
         responses = responses_for_run(1)
-        responses[("tickers", "SNAPSHOT", 30000)] = csv(TICKERS_HEADER, filler)
-        report = _run_1_build(_store_with_run_1(responses))
-        assert report.status is bp.BuildStatus.REFUSED_NORMALIZATION
-        assert report.defect == sv.SilverDefect.PAGINATION_UNSUPPORTED.value
+        responses[("stocks", "2026-09-01/2026-09-01", 0)] = full
+        responses[("stocks", "2026-09-01/2026-09-01", 10000)] = csv(STOCKS_HEADER, [])
+        store = FakeS3Store()
+        report = acquire(store, run_id=RUN_1, run=1, at=RUN_1_AT, responses=responses)
+        assert report.status is pp.AcquisitionStatus.COMPLETED
+        assert report.probes_issued == 1 and report.counts.provider_requests == 8
+        assert report.counts.s3_operations == 1 + 3 * 7 + 1  # the probe writes nothing
+        locator = json.loads(store.objects[f"bronze/sharadar/_indexes/{RUN_1}.json"])
+        probed = [e for e in locator["entries"] if e["pagination"]["probe"] is not None]
+        assert len(probed) == 1 and probed[0]["pagination"]["completion"] == "PROBE_PASSED"
+        assert probed[0]["pagination"]["probe"]["row_count"] == 0
+        assert locator["probes_issued"] == 1 and locator["provider_calls"] == 8
+        build = BuildScenario(store, runs=((RUN_1, 1, RUN_1_AT),)).run()
+        assert build.status is bp.BuildStatus.COMPLETED, build.defect
+        manifest = json.loads(store.objects[store.keys_under("manifests/")[0]])
+        assert manifest["pagination"]["groups_probed"]["stocks"] == 1
+        # A data-bearing probe: the run halts before the group's writes; no COMPLETE locator.
+        responses[("stocks", "2026-09-01/2026-09-01", 10000)] = csv(STOCKS_HEADER, base[:1])
+        store = FakeS3Store()
+        report = acquire(
+            store, run_id=RUN_1, run=1, at=RUN_1_AT, responses=responses, expect_completed=False
+        )
+        assert report.status is pp.AcquisitionStatus.HALTED
+        assert report.halt is pp.ProcessingHalt.PROBE_DATA_BEARING
+        assert BuildScenario(store, runs=((RUN_1, 1, RUN_1_AT),)).run().status is (
+            bp.BuildStatus.REFUSED_INPUTS
+        )
 
     def test_stocks_without_a_same_run_snapshot_cannot_be_identified(self) -> None:
         store = FakeS3Store()
@@ -698,14 +787,13 @@ class TestNormalizationRefusals:
             "acquisition_mode": "BACKFILL",
             "datasets": ["stocks"],
             "windows": {"stocks": "2026-09-01/2026-09-01"},
-            "request_count": 2,
+            "request_count": 1,
             "max_response_bytes": 4 * 1024 * 1024,
         }
         responses = {
             ("stocks", "2026-09-01/2026-09-01", 0): csv(
                 STOCKS_HEADER, stocks_rows(date(2026, 9, 1), run=1)
             ),
-            ("stocks", "2026-09-01/2026-09-01", 10000): csv(STOCKS_HEADER, []),
         }
         import fixtures.production_build as fixture
 
@@ -1214,8 +1302,8 @@ class TestBootstrapAndCompatibility:
     def test_the_acquisition_that_populates_the_store_is_the_accepted_one(self) -> None:
         store = FakeS3Store()
         report = acquire(store, run_id=RUN_1, run=1, at=RUN_1_AT)
-        assert report.counts.provider_requests == 16
-        assert report.counts.s3_operations == 1 + 3 * 16 + 1
+        assert report.counts.provider_requests == 7
+        assert report.counts.s3_operations == 1 + 3 * 7 + 1
         assert report.reservation is PayloadDisposition.WRITTEN
         assert set(slice_for_run(1)["datasets"]) == {"actions", "stocks", "tickers"}
         assert len(tickers_rows(lastupdated="2026-09-04")) == 9

@@ -84,7 +84,7 @@ class TestReceiptsFromTheEntries:
         )
         verified = pr.collect_and_verify(lines, expectation=expectation)
         assert verified.outcome is TaskOutcome.COMPLETED and verified.released
-        assert verified.counts is not None and verified.counts.provider_requests == 16
+        assert verified.counts is not None and verified.counts.provider_requests == 7
         completion = pr.ledger_completion(verified)
         assert completion is not None and completion.outcome == "COMPLETED"
         assert completion.counts == receipt.counts

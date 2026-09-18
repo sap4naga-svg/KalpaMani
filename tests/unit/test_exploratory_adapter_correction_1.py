@@ -374,10 +374,10 @@ MANIFEST_CASES: Final[list[tuple[str, Any, str]]] = [
     ("limitations not list", _set(("limitations",), "SINGLE_SOURCE_UNVERIFIED"), FIELD),
     ("spinoff_excluded_securities ints", _set(("spinoff_excluded_securities",), [1]), FIELD),
     ("restrictions entry malformed", _set(("restrictions",), [{"security_id": "x"}]), MALFORMED),
-    ("unresolved_contracts extra key", _set(("unresolved_contracts", "extra"), {}), UNKNOWN),
+    ("identity_contracts extra key", _set(("identity_contracts", "extra"), {}), UNKNOWN),
     (
-        "unresolved_contracts count str",
-        _set(("unresolved_contracts", "action-event-identity", "adjusted_rows_withheld"), "0"),
+        "identity_contracts count str",
+        _set(("identity_contracts", "action-event-identity", "adjusted_rows_withheld"), "0"),
         FIELD,
     ),
     ("empty_reason int", _set(("empty_reason",), 5), FIELD),

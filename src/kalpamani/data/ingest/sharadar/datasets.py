@@ -67,6 +67,26 @@ API_BASE_URL: Final = "https://api.sharadar.com/v1.0/data"
 #: it may not ask for more and quietly receive this.
 MAX_PAGE_LIMIT: Final = 10000
 
+#: The production cross-section page ceilings (ADR-0053 §13.2, qualified by D-21 at
+#: ``L = 100000`` for the ``table=stocks`` tickers group and the actions windows; the
+#: stocks limit is the existing vendor page limit). A cross-section request may ask
+#: for less than its dataset's ceiling and never more. The accepted qualification
+#: form (:class:`SharadarRequest` with :class:`Page`) keeps :data:`MAX_PAGE_LIMIT`.
+MAX_CROSS_SECTION_PAGE_LIMIT: Final = 100_000
+PRODUCTION_PAGE_LIMITS: Final[dict[str, int]] = {
+    "tickers": MAX_CROSS_SECTION_PAGE_LIMIT,
+    "actions": MAX_CROSS_SECTION_PAGE_LIMIT,
+    "stocks": MAX_PAGE_LIMIT,
+}
+
+#: The documented ``table`` predicate of the tickers table (`PSR-SHD-134`; ADR-0053
+#: §11.3): production tickers requests carry exactly one accepted table value, so one
+#: request names one logical group with ``permaticker`` as its within-group identity.
+#: Exactly ``{"stocks"}`` is accepted -- derived from the accepted consumers, not guessed.
+TICKERS_TABLE_PARAMETER: Final = "table"
+TICKERS_TABLE_STOCKS: Final = "stocks"
+ACCEPTED_TICKERS_TABLES: Final[frozenset[str]] = frozenset({TICKERS_TABLE_STOCKS})
+
 
 class SharadarDataset(StrEnum):
     """The three Stage-3A surfaces. Phase-3B tables are deliberately absent."""
@@ -207,8 +227,30 @@ class SharadarRequest:
 
 
 #: The parameters a production cross-section request may carry: the accepted allowlist
-#: without ``ticker``. No name is added to the accepted allowlist by this form.
-CROSS_SECTION_PARAMETER_ALLOWLIST: Final[frozenset[str]] = QUERY_PARAMETER_ALLOWLIST - {"ticker"}
+#: without ``ticker``, plus the tickers ``table`` predicate ADR-0053 §11.3 admits. No
+#: name is added to the accepted qualification allowlist by this form.
+CROSS_SECTION_PARAMETER_ALLOWLIST: Final[frozenset[str]] = (
+    QUERY_PARAMETER_ALLOWLIST - {"ticker"}
+) | {TICKERS_TABLE_PARAMETER}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CrossSectionPage:
+    """Explicit production pagination: one governed limit, one offset.
+
+    Bounded by :data:`MAX_CROSS_SECTION_PAGE_LIMIT`; the per-dataset ceiling is held
+    by :class:`CrossSectionRequest`. Distinct from the accepted :class:`Page` so the
+    qualification form's 10,000-row bound is untouched.
+    """
+
+    limit: int
+    skip: int
+
+    def __post_init__(self) -> None:
+        if type(self.limit) is not int or not 1 <= self.limit <= MAX_CROSS_SECTION_PAGE_LIMIT:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
+        if type(self.skip) is not int or self.skip < 0:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -220,15 +262,17 @@ class CrossSectionRequest:
     on every request and is unchanged. The vendor documents ``ticker`` as optional
     with the default ``all`` on the three tables, and shows ``from``/``to``-only
     examples; that is the whole of what this form uses. No filter beyond the window
-    exists here: no ``action``, ``contraticker``, ``permaticker``, ``table``, ``status``,
-    ``sort``, ``fields`` or ``years``, and the tickers table's own ``from``/``to``
-    (bounds on ``lastpricedate``) are refused because a snapshot carries no window.
+    exists here beyond the tickers ``table`` predicate ADR-0053 §11.3 requires: no
+    ``action``, ``contraticker``, ``permaticker``, ``status``, ``sort``, ``fields`` or
+    ``years``, and the tickers table's own ``from``/``to`` (bounds on ``lastpricedate``)
+    are refused because a snapshot carries no window.
     """
 
     dataset: SharadarDataset
     response_format: ResponseFormat
-    page: Page
+    page: CrossSectionPage
     window: DateWindow | None
+    table: str | None = None
 
     def __post_init__(self) -> None:
         dataset = closed_member(SharadarDataset, self.dataset)
@@ -239,7 +283,9 @@ class CrossSectionRequest:
         if response_format is None:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
         object.__setattr__(self, "response_format", response_format)
-        if type(self.page) is not Page:
+        if type(self.page) is not CrossSectionPage:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        if self.page.limit > PRODUCTION_PAGE_LIMITS[dataset.value]:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
         if self.window is not None and type(self.window) is not DateWindow:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
@@ -247,6 +293,13 @@ class CrossSectionRequest:
         if windowed and self.window is None:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
         if not windowed and self.window is not None:
+            raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        # The tickers predicate: required, exactly one accepted value, on the tickers
+        # table only. A missing, different or additional table value is refused.
+        if dataset is SharadarDataset.TICKERS:
+            if type(self.table) is not str or self.table not in ACCEPTED_TICKERS_TABLES:
+                raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
+        elif self.table is not None:
             raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, dataset.value)
 
     @property
@@ -261,8 +314,9 @@ def build_cross_section_query_parameters(
     """The exact query parameters for a cross-section request, in a fixed order.
 
     ``api_key``, ``format``, then ``from`` and ``to`` for a windowed dataset, then
-    ``limit`` and ``skip``. **Never ``ticker``.** The return value carries the
-    credential; hand it straight to :func:`build_cross_section_url`.
+    ``limit`` and ``skip``, then ``table`` for the tickers predicate -- the order the
+    qualified D-20/D-21 requests carried. **Never ``ticker``.** The return value carries
+    the credential; hand it straight to :func:`build_cross_section_url`.
 
     Raises:
         SharadarRequestError: if the built names are not a subset of
@@ -279,6 +333,8 @@ def build_cross_section_query_parameters(
         parameters.append(("to", request.window.end.isoformat()))
     parameters.append(("limit", str(request.page.limit)))
     parameters.append(("skip", str(request.page.skip)))
+    if request.table is not None:
+        parameters.append((TICKERS_TABLE_PARAMETER, request.table))
     names = {name for name, _ in parameters}
     if not names <= CROSS_SECTION_PARAMETER_ALLOWLIST or names & FORBIDDEN_QUERY_PARAMETERS:
         raise _refuse(SharadarErrorCode.REQUEST_MALFORMED, request.dataset.value)
@@ -296,9 +352,10 @@ def build_cross_section_url(request: CrossSectionRequest, *, credential: Sharada
 
 def describe_cross_section_request(request: CrossSectionRequest) -> str:
     """A disclosure-free description: dataset, range and page. No ticker exists to name."""
+    predicate = "" if request.table is None else f" table {request.table}"
     return (
         f"{PROVIDER} {request.dataset.value} cross-section range {request.requested_range} "
-        f"limit {request.page.limit} skip {request.page.skip}"
+        f"limit {request.page.limit} skip {request.page.skip}{predicate}"
     )
 
 
@@ -368,14 +425,20 @@ def describe_request(request: SharadarRequest) -> str:
 
 
 __all__ = [
+    "ACCEPTED_TICKERS_TABLES",
     "API_BASE_URL",
     "CROSS_SECTION_PARAMETER_ALLOWLIST",
     "FORBIDDEN_QUERY_PARAMETERS",
+    "MAX_CROSS_SECTION_PAGE_LIMIT",
     "MAX_PAGE_LIMIT",
+    "PRODUCTION_PAGE_LIMITS",
     "PROVIDER",
     "QUERY_PARAMETER_ALLOWLIST",
     "SNAPSHOT_RANGE",
+    "TICKERS_TABLE_PARAMETER",
+    "TICKERS_TABLE_STOCKS",
     "WINDOWED_DATASETS",
+    "CrossSectionPage",
     "CrossSectionRequest",
     "DateWindow",
     "Page",

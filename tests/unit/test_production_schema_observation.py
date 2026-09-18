@@ -95,7 +95,7 @@ class TestObservationBuild:
         )
         assert receipt.outcome is TaskOutcome.REFUSED_NORMALIZATION and receipt.exit_code == 31
         gets, puts = harness.data_plane_calls()
-        assert puts == 0 and gets == 33 and receipt.counts.s3_operations == 33
+        assert puts == 0 and gets == 15 and receipt.counts.s3_operations == 15
         assert source.store.keys_under("silver/") == []
         assert source.store.keys_under("gold/") == []
         assert source.store.keys_under("manifests/") == []
@@ -114,39 +114,68 @@ class TestObservationBuild:
         assert verified.ledger_outcome == "REFUSED" and pr.ledger_completion(verified) is not None
         assert pr.ledger_completion(verified).outcome != "COMPLETED"  # type: ignore[union-attr]
 
-    def test_an_unparseable_page_makes_the_observation_partial_not_complete(self) -> None:
+    def test_an_unparseable_page_halts_the_acquisition_and_reaches_no_observation(self) -> None:
+        # Pagination v2 (ADR-0053 §11.2): the acquisition actor parses every data page, so a
+        # body the accepted parser refuses halts the run before the group's writes and the
+        # PARTIAL locator refuses the build at its inputs -- no observation is reachable
+        # through the accepted path, and none is invented.
         responses = responses_for_run(1)
-        # One actions page whose bytes the accepted parser refuses: not a CSV at all.
         key = next(k for k in responses if k[0] == "actions")
         responses[key] = b"\x00\xff not a delivery"
-        source = _acquired(responses)
+        source = AcquisitionHarness(responses=responses, spent=CONFIGURED)
+        acquisition = source.run()
+        assert acquisition.outcome is TaskOutcome.ACQUISITION_HALTED and acquisition.exit_code == 22
         harness = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
         receipt = harness.run(
             configuration=harness.configuration(build_configuration=_observation_configuration())
         )
-        assert receipt.outcome is TaskOutcome.REFUSED_NORMALIZATION
-        observation = receipt.schema_observation
-        assert observation is not None and not observation.complete
-        block = observation.datasets["actions"]
+        assert receipt.outcome is TaskOutcome.REFUSED_INPUTS and receipt.exit_code == 30
+        assert receipt.schema_observation is None
+        assert harness.data_plane_calls()[1] == 0
+
+    def test_an_observation_over_a_page_that_does_not_parse_is_partial(self) -> None:
+        # The observation contract itself: a page the parser refuses is counted, not parsed.
+        from datetime import timedelta
+
+        from fixtures.production_build import AS_OF, ledger_row
+        from fixtures.production_runtime import BUCKET, build_input_document
+        from kalpamani.data.production.sharadar import build_inputs as bi
+        from kalpamani.data.production.sharadar.inputs import ledger_digest, parse_build_input
+        from kalpamani.data.production.sharadar.locator import ProductionLocatorReader
+        from kalpamani.data.production.sharadar.silver import observe_schemas
+
+        source = _acquired()
+        rows = [ledger_row(RUN_1, 1, RUN_1_AT)]
+        admitted = parse_build_input(
+            build_input_document(
+                rows,
+                ledger_digest=ledger_digest(rows),
+                issued_at=(AS_OF - timedelta(hours=1)).isoformat(),
+                expires_at=(AS_OF + timedelta(hours=1)).isoformat(),
+            ),
+            now=AS_OF,
+        )
+        inputs = bi.verify_build_inputs(
+            admitted, reader=ProductionLocatorReader(client=source.store, licensed_bucket=BUCKET)
+        )
+        pages = list(inputs.pages())
+        broken = dataclasses.replace(pages[0], payload=b"\x00\xff not a delivery")
+        observation = observe_schemas([broken, *pages[1:]])
+        assert not observation.complete
+        block = observation.datasets[pages[0].dataset]
         assert block.pages_parsed < block.pages_total
-        assert "schema_observation=PARTIAL" in " ".join(receipt.render())
-        harness2 = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
-        assert harness2.data_plane_calls()[1] == 0
 
     def test_a_refusal_before_schema_admission_carries_no_observation(self) -> None:
-        source = _acquired()
-        harness = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
-        # A page with a header the accepted schemas admit but a dataset the build cannot
-        # place is not constructible through the real path, so the case exercised here is
-        # the accepted-set refusal's neighbour: an unparseable payload under a REAL accepted
-        # set refuses PAYLOAD_UNPARSEABLE with no observation at all.
+        # Under pagination v2 an unparseable stocks page halts the acquisition, so the build
+        # refuses at its inputs -- before schema admission -- with no observation at all.
         responses = responses_for_run(1)
         key = next(k for k in responses if k[0] == "stocks")
         responses[key] = b"\x00\xff not a delivery"
-        source = _acquired(responses)
+        source = AcquisitionHarness(responses=responses, spent=CONFIGURED)
+        assert source.run().outcome is TaskOutcome.ACQUISITION_HALTED
         harness = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
         receipt = harness.run()
-        assert receipt.outcome is TaskOutcome.REFUSED_NORMALIZATION
+        assert receipt.outcome is TaskOutcome.REFUSED_INPUTS
         assert receipt.schema_observation is None
         assert pr.receipt_document(receipt)["schema_observation"] is None
 
@@ -155,7 +184,7 @@ class TestObservationBuild:
         harness = BuildHarness(source.store, runs=((RUN_1, 1, RUN_1_AT),))
         receipt = harness.run()
         assert receipt.outcome is TaskOutcome.COMPLETED and receipt.schema_observation is None
-        assert harness.data_plane_calls() == (33, 8)
+        assert harness.data_plane_calls() == (15, 8)
 
     def test_a_header_the_set_does_not_admit_is_observed_with_the_admitted_ones(self) -> None:
         """A real accepted set that misses one dataset's header refuses, and the

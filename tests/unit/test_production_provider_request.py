@@ -41,7 +41,9 @@ from kalpamani.data.ingest.sharadar.datasets import (
     API_BASE_URL,
     CROSS_SECTION_PARAMETER_ALLOWLIST,
     FORBIDDEN_QUERY_PARAMETERS,
+    PRODUCTION_PAGE_LIMITS,
     QUERY_PARAMETER_ALLOWLIST,
+    CrossSectionPage,
     CrossSectionRequest,
     DateWindow,
     Page,
@@ -58,7 +60,12 @@ from kalpamani.data.ingest.sharadar.transport import TransportResponse, Transpor
 from kalpamani.data.production.sharadar import processing as pp
 from kalpamani.data.production.sharadar import provider as pv
 from kalpamani.data.production.sharadar.inputs import parse_slice
-from kalpamani.data.production.sharadar.plan import ProductionRequest, compile_plan
+from kalpamani.data.production.sharadar.plan import (
+    NO_PREDICATE,
+    TICKERS_PREDICATE,
+    ProductionRequest,
+    compile_plan,
+)
 from kalpamani.data.qualify.sharadar.operations import AcquisitionDeadline
 
 pytestmark = pytest.mark.unit
@@ -67,10 +74,23 @@ TICKERS_HEADER_ONLY: Final = b"table,permaticker,ticker\r\n"
 
 
 def request(
-    dataset: str, window: str, offset: int = 0, limit: int = 10000, ordinal: int = 0
+    dataset: str,
+    window: str,
+    offset: int = 0,
+    limit: int = 10000,
+    ordinal: int = 0,
+    predicate: tuple[tuple[str, str], ...] | None = None,
 ) -> ProductionRequest:
+    """A coordinate with the dataset's own predicate unless one is stated."""
+    if predicate is None:
+        predicate = TICKERS_PREDICATE if dataset == "tickers" else NO_PREDICATE
     return ProductionRequest(
-        ordinal=ordinal, dataset=dataset, window=window, page_offset=offset, page_limit=limit
+        ordinal=ordinal,
+        dataset=dataset,
+        window=window,
+        predicate=predicate,
+        page_offset=offset,
+        page_limit=limit,
     )
 
 
@@ -118,21 +138,85 @@ class TestCrossSectionForm:
             )
         assert actions_request().ticker
 
-    def test_a_ticker_snapshot_carries_no_ticker_and_no_window(self) -> None:
-        cross = pv.compile_cross_section(request("tickers", "SNAPSHOT", 20000))
+    def test_a_ticker_snapshot_carries_the_table_predicate_no_ticker_and_no_window(self) -> None:
+        cross = pv.compile_cross_section(request("tickers", "SNAPSHOT", 100000, 100000))
         parameters = build_cross_section_query_parameters(cross, credential=credential())
+        # The qualified D-20/D-21 order: api_key, format, limit, skip, then table.
         assert parameters == (
             ("api_key", SYNTHETIC_CREDENTIAL_VALUE),
             ("format", "csv"),
-            ("limit", "10000"),
-            ("skip", "20000"),
+            ("limit", "100000"),
+            ("skip", "100000"),
+            ("table", "stocks"),
         )
         url = build_cross_section_url(cross, credential=credential())
         assert url.startswith(f"{API_BASE_URL}/tickers?")
         assert "ticker=" not in url and "from=" not in url and "to=" not in url
-        assert cross.requested_range == "SNAPSHOT"
+        assert url.endswith("&table=stocks")
+        assert cross.requested_range == "SNAPSHOT" and cross.table == "stocks"
         assert " ticker " not in describe_cross_section_request(cross)
+        assert describe_cross_section_request(cross).endswith("table stocks")
         assert SYNTHETIC_CREDENTIAL_VALUE not in describe_cross_section_request(cross)
+
+    @pytest.mark.parametrize(
+        "predicate",
+        [
+            (),
+            (("table", "funds"),),
+            (("table", "stocks"), ("status", "active")),
+            (("status", "x"),),
+        ],
+        ids=["missing", "different", "additional", "other-name"],
+    )
+    def test_a_tickers_request_without_exactly_the_accepted_table_predicate_is_refused(
+        self, predicate: tuple[tuple[str, str], ...]
+    ) -> None:
+        transport = CoordinateTransport(responses={})
+        provider = provider_over(transport)
+        with pytest.raises(pv.ProviderRefusedError) as refused:
+            provider.fetch(
+                request("tickers", "SNAPSHOT", predicate=predicate), credential=credential()
+            )
+        assert refused.value.refusal in (
+            pv.ProviderRefusal.PREDICATE_MALFORMED,
+            pv.ProviderRefusal.REQUEST_MALFORMED,
+        )
+        assert transport.call_count == 0
+
+    def test_a_predicate_on_a_windowed_table_is_refused(self) -> None:
+        with pytest.raises(pv.ProviderRefusedError) as refused:
+            pv.compile_cross_section(
+                request("stocks", "2026-09-03/2026-09-03", predicate=TICKERS_PREDICATE)
+            )
+        assert refused.value.refusal is pv.ProviderRefusal.PREDICATE_MALFORMED
+
+    def test_the_governed_limit_is_the_datasets_ceiling_and_the_probe_is_the_same_shape(
+        self,
+    ) -> None:
+        assert PRODUCTION_PAGE_LIMITS == {"tickers": 100000, "actions": 100000, "stocks": 10000}
+        for dataset, window in (
+            ("tickers", "SNAPSHOT"),
+            ("actions", "2026-01-01/2026-12-31"),
+            ("stocks", "2026-09-03/2026-09-03"),
+        ):
+            limit = PRODUCTION_PAGE_LIMITS[dataset]
+            data = request(dataset, window, 0, limit)
+            probe = data.probe()
+            data_query = query_of(
+                build_cross_section_url(pv.compile_cross_section(data), credential=credential())
+            )
+            probe_query = query_of(
+                build_cross_section_url(pv.compile_cross_section(probe), credential=credential())
+            )
+            assert data_query["skip"] == "0" and probe_query["skip"] == str(limit)
+            assert data_query["limit"] == probe_query["limit"] == str(limit)
+            # Everything but the offset is the same shape.
+            assert {k: v for k, v in data_query.items() if k != "skip"} == {
+                k: v for k, v in probe_query.items() if k != "skip"
+            }
+            with pytest.raises(pv.ProviderRefusedError) as refused:
+                pv.compile_cross_section(request(dataset, window, 0, limit + 1))
+            assert refused.value.refusal is pv.ProviderRefusal.PAGE_MALFORMED
 
     def test_an_action_window_and_a_stock_session_encode_their_exact_dates(self) -> None:
         window = pv.compile_cross_section(request("actions", "2026-08-01/2026-09-14", 10000))
@@ -153,7 +237,9 @@ class TestCrossSectionForm:
     def test_every_transmitted_name_is_on_the_accepted_allowlist_and_ticker_is_never_sent(
         self,
     ) -> None:
-        assert CROSS_SECTION_PARAMETER_ALLOWLIST == QUERY_PARAMETER_ALLOWLIST - {"ticker"}
+        assert CROSS_SECTION_PARAMETER_ALLOWLIST == (QUERY_PARAMETER_ALLOWLIST - {"ticker"}) | {
+            "table"
+        }
         for coordinates in (
             ("tickers", "SNAPSHOT"),
             ("stocks", "2026-09-01/2026-09-01"),
@@ -177,16 +263,23 @@ class TestCrossSectionForm:
             CrossSectionRequest(
                 dataset=SharadarDataset.TICKERS,
                 response_format=ResponseFormat.CSV,
-                page=Page(limit=10, skip=0),
+                page=CrossSectionPage(limit=10, skip=0),
                 window=DateWindow(start=date(2026, 9, 1), end=date(2026, 9, 1)),
+                table="stocks",
             )
         with pytest.raises(SharadarRequestError):
             CrossSectionRequest(
                 dataset=SharadarDataset.STOCKS,
                 response_format=ResponseFormat.CSV,
-                page=Page(limit=10, skip=0),
+                page=CrossSectionPage(limit=10, skip=0),
                 window=None,
             )
+        # The accepted qualification page is not the production page: 10,000 stays its bound.
+        with pytest.raises(SharadarRequestError):
+            Page(limit=10001, skip=0)
+        assert CrossSectionPage(limit=100000, skip=0).limit == 100000
+        with pytest.raises(SharadarRequestError):
+            CrossSectionPage(limit=100001, skip=0)
         with pytest.raises(SharadarRequestError):
             build_cross_section_query_parameters(stocks_request(), credential=credential())  # type: ignore[arg-type]
 
@@ -343,24 +436,23 @@ class TestAcquisitionIntegration:
             report.counts.provider_requests
             == transport.call_count
             == provider.transport_invocations
-            == 16
+            == 7
         )
         assert all(t == 30.0 for t in transport.timeouts)
         assert all("ticker" not in q for q in transport.queries)
-        # Pagination: page two of every window is skip=10000, and the terminal page is header-only.
+        # Pagination v2: one data request per group at offset 0; every synthetic page is
+        # short, so no probe is issued and no offset page exists.
+        assert all(c[2] == 0 for c in transport.coordinates)
         assert [c for c in transport.coordinates if c[0] == "actions"] == [
-            ("actions", "2026-08-01/2026-09-14", 0),
-            ("actions", "2026-08-01/2026-09-14", 10000),
+            ("actions", "2026-08-01/2026-09-14", 0)
         ]
-        assert [c[2] for c in transport.coordinates if c[0] == "tickers"] == [
-            0,
-            10000,
-            20000,
-            30000,
-        ]
+        tickers_queries = [q for q in transport.queries if q.get("table")]
+        assert len(tickers_queries) == 1 and tickers_queries[0]["table"] == ["stocks"]
+        assert tickers_queries[0]["limit"] == ["100000"]
         # Every published object is the bytes the transport returned, keyed by request identity.
         document = json.loads(store.objects[f"bronze/sharadar/_indexes/{RUN_1}.json"])
-        assert document["completeness"] == "COMPLETE" and len(document["entries"]) == 16
+        assert document["completeness"] == "COMPLETE" and len(document["entries"]) == 7
+        assert document["probes_issued"] == 0 and document["provider_calls"] == 7
         windows = {
             (e["dataset"], e["request"]["window"], e["request"]["page_offset"])
             for e in document["entries"]
@@ -377,7 +469,7 @@ class TestAcquisitionIntegration:
 
     def test_a_failing_page_halts_the_run_partial_and_is_never_reported_complete(self) -> None:
         store = FakeS3Store()
-        failing = ("stocks", "2026-09-02/2026-09-02", 10000)
+        failing = ("stocks", "2026-09-02/2026-09-02", 0)
         transport = transport_for_run(
             1, failures={failing: TransportUnavailableError(SharadarErrorCode.NETWORK_TIMEOUT)}
         )
@@ -398,7 +490,7 @@ class TestAcquisitionIntegration:
 
     def test_a_throttled_page_is_not_retried_by_the_adapter_or_the_processor(self) -> None:
         store = FakeS3Store()
-        throttled = ("actions", "2026-08-01/2026-09-14", 10000)
+        throttled = ("actions", "2026-08-01/2026-09-14", 0)
         transport = transport_for_run(
             1, failures={throttled: TransportResponse(status=429, body=b"")}
         )
@@ -408,7 +500,7 @@ class TestAcquisitionIntegration:
         )
         assert report.status is pp.AcquisitionStatus.HALTED
         assert transport.coordinates.count(throttled) == 1
-        assert report.counts.provider_requests == transport.call_count == 2
+        assert report.counts.provider_requests == transport.call_count == 1
 
     def test_a_locally_refused_request_counts_zero_transport_invocations(self) -> None:
         """A provider that refuses before the transport is not a provider request."""
@@ -449,11 +541,11 @@ class TestAcquisitionIntegration:
         second = provider_over(transport_for_run(2))
         acquire(store, run_id=RUN_1, run=1, at=RUN_1_AT, provider=first)
         acquire(store, run_id=RUN_2, run=2, at=RUN_2_AT, provider=second)
-        assert first.transport_invocations == 16 and second.transport_invocations == 32
+        assert first.transport_invocations == 7 and second.transport_invocations == 15
         scenario = BuildScenario(store)
         report = scenario.run()
         assert report.status.value == "COMPLETED", report.defect
-        assert report.objects_read == 2 + 2 * (16 + 32)
+        assert report.objects_read == 2 + 2 * (7 + 15)
         manifest = json.loads(store.objects[store.keys_under("manifests/")[0]])
         digests = {d for run in manifest["build_input"]["runs"] for d in run["payload_digests"]}
         distinct_bytes = set(responses_for_run(1).values()) | set(responses_for_run(2).values())

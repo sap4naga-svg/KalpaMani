@@ -132,7 +132,11 @@ def m0_build(
         runs=(
             SimpleNamespace(
                 locator=SimpleNamespace(
-                    run_id=run_id, plan_digest="2" * 64, acquisition_mode="BACKFILL"
+                    run_id=run_id,
+                    plan_digest="2" * 64,
+                    acquisition_mode="BACKFILL",
+                    probes_issued=0,
+                    provider_calls=len(payloads),
                 ),
                 pages=[SimpleNamespace(payload_sha256=d, record_sha256="3" * 64) for d in payloads],
             ),

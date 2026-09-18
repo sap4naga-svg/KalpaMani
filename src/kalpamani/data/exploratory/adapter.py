@@ -7,7 +7,7 @@ The M0 runner (:mod:`kalpamani.data.exploratory.m0`) reads a
 publishes exactly the material to rebuild them -- **as bytes** -- and this module turns those
 bytes back into the objects, refusing anything it cannot bind:
 
-* the **build manifest** (``kalpamani-production-build-manifest/v1``), parsed totally: a
+* the **build manifest** (``kalpamani-production-build-manifest/v2``), parsed totally: a
   closed key set at every level, exact types, duplicate keys refused, every fixed contract value
   (profile, classification, policies, versions, modes, tokens, dispositions) held to the accepted
   vocabulary, and every field validated whether or not the research path reads it;
@@ -87,6 +87,7 @@ from kalpamani.data.production.sharadar.pagination import (
 from kalpamani.data.production.sharadar.sessions import Session as CalendarSession
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
 from kalpamani.data.production.sharadar.silver import (
+    ACTIONS_IDENTITY_VERSION,
     SILVER_NORMALIZATION_VERSION,
     Provenance,
     RowVersion,
@@ -96,7 +97,7 @@ from kalpamani.data.production.sharadar.silver import (
 from kalpamani.data.production.sharadar.universe import UniverseRule
 
 #: The manifest contract this adapter reads. A different version is a different document.
-MANIFEST_CONTRACT: Final = "kalpamani-production-build-manifest/v1"
+MANIFEST_CONTRACT: Final = "kalpamani-production-build-manifest/v2"
 #: The history the exploratory path requires: the accepted module's, and no other.
 REQUIRED_HISTORY_SESSIONS: Final = 252
 #: The Silver artifacts an admitted build publishes, by dataset.
@@ -135,6 +136,7 @@ _FIXED_TRANSFORMATION_VERSIONS: Final[dict[str, str]] = {
     "action_selection_version": ACTION_SELECTION_VERSION,
     "resolution_policy_version": RESOLUTION_POLICY_VERSION,
     "pagination_policy_version": PAGINATION_POLICY_VERSION,
+    "actions_identity_version": ACTIONS_IDENTITY_VERSION,
     "quality_plan_version": QUALITY_PLAN_VERSION,
 }
 
@@ -359,7 +361,7 @@ _MANIFEST_KEYS: Final = frozenset(
         "limitations",
         "spinoff_excluded_securities",
         "restrictions",
-        "unresolved_contracts",
+        "identity_contracts",
         "empty_reason",
         "outputs",
         "completed_at",
@@ -367,7 +369,16 @@ _MANIFEST_KEYS: Final = frozenset(
 )
 _BUILD_INPUT_KEYS: Final = frozenset({"ledger_digest", "runs", "objects_read", "input_bytes"})
 _RUN_KEYS: Final = frozenset(
-    {"run_id", "plan_digest", "acquisition_mode", "entries", "payload_digests", "record_digests"}
+    {
+        "run_id",
+        "plan_digest",
+        "acquisition_mode",
+        "entries",
+        "probes_issued",
+        "provider_calls",
+        "payload_digests",
+        "record_digests",
+    }
 )
 _SOURCE_KEYS: Final = frozenset(
     {"source_schema_version", "accepted_schemas_version", "observed_schema_digests"}
@@ -382,6 +393,7 @@ _TRANSFORMATION_KEYS: Final = frozenset(
         "action_selection_version",
         "resolution_policy_version",
         "pagination_policy_version",
+        "actions_identity_version",
         "calendar_version",
         "quality_plan_version",
         "evidence_version",
@@ -412,13 +424,18 @@ _SERVED_KEYS: Final = frozenset(
 _PAGINATION_FIXED: Final[dict[str, Any]] = {
     key: value
     for key, value in PaginationSummary(
-        policy_version=PAGINATION_POLICY_VERSION, groups_admitted={}, groups_empty={}
+        policy_version=PAGINATION_POLICY_VERSION,
+        groups_admitted={},
+        groups_empty={},
+        groups_probed={},
     )
     .document()
     .items()
-    if key not in ("groups_admitted", "groups_empty")
+    if key not in ("groups_admitted", "groups_empty", "groups_probed")
 }
-_PAGINATION_KEYS: Final = frozenset({*_PAGINATION_FIXED, "groups_admitted", "groups_empty"})
+_PAGINATION_KEYS: Final = frozenset(
+    {*_PAGINATION_FIXED, "groups_admitted", "groups_empty", "groups_probed"}
+)
 _IDENTITY_KEYS: Final = frozenset(
     {"duplicate_rows", "unmapped_symbols", "ambiguous_symbols", "rows_excluded_for_identity"}
 )
@@ -448,9 +465,9 @@ _RESTRICTION_KEYS: Final = frozenset(
         "withheld",
     }
 )
-_UNRESOLVED_KEYS: Final = frozenset({"action-event-identity"})
+_IDENTITY_CONTRACT_KEYS: Final = frozenset({"action-event-identity"})
 _ACTION_EVENT_KEYS: Final = frozenset(
-    {"statement", "action_keys_with_redelivery_gaps", "adjusted_rows_withheld"}
+    {"contract_id", "statement", "action_keys_with_redelivery_gaps", "adjusted_rows_withheld"}
 )
 _OUTPUT_KEYS: Final = frozenset({"artifact", "key", "sha256", "bytes", "rows", "disposition"})
 _ACQUISITION_MODES: Final = frozenset(mode.value for mode in AcquisitionMode)
@@ -579,6 +596,12 @@ def _parse_build_input(value: Any) -> tuple[dict[str, RunRef], str]:
         entries = _count(run["entries"], _M)
         if entries != len(payloads) or entries != len(records):
             raise _refuse(_M)
+        # Pagination v2 accounting: at most one probe per entry, and every provider call
+        # is a data request or an issued probe.
+        probes = _count(run["probes_issued"], _M)
+        calls = _count(run["provider_calls"], _M)
+        if probes > entries or calls != entries + probes:
+            raise _refuse(_M)
         runs[run_id] = RunRef(
             run_id=run_id,
             plan_digest=_hex64(run["plan_digest"], _M),
@@ -654,7 +677,7 @@ def _parse_pagination(value: Any) -> PaginationSummary:
         if block[key] != expected:
             raise _refuse(_U if key == "policy_version" else _M)
     groups = {}
-    for name in ("groups_admitted", "groups_empty"):
+    for name in ("groups_admitted", "groups_empty", "groups_probed"):
         # Genuinely dynamic: one count per (run, dataset, window) group label the build saw.
         groups[name] = {
             _nonempty(k, _M): _count(v, _M) for k, v in _mapping(block[name], _M).items()
@@ -664,6 +687,7 @@ def _parse_pagination(value: Any) -> PaginationSummary:
             policy_version=PAGINATION_POLICY_VERSION,
             groups_admitted=groups["groups_admitted"],
             groups_empty=groups["groups_empty"],
+            groups_probed=groups["groups_probed"],
         )
     except (TypeError, ValueError):
         raise _refuse(_M) from None
@@ -729,9 +753,11 @@ def _validate_restrictions(value: Any) -> None:
         _nonempty(block["withheld"], _M)
 
 
-def _validate_unresolved_contracts(value: Any) -> None:
-    block = _block(value, _UNRESOLVED_KEYS)
+def _validate_identity_contracts(value: Any) -> None:
+    block = _block(value, _IDENTITY_CONTRACT_KEYS)
     contract = _block(block["action-event-identity"], _ACTION_EVENT_KEYS)
+    if contract["contract_id"] != ACTIONS_IDENTITY_VERSION:
+        raise _refuse(_U)
     _nonempty(contract["statement"], _M)
     _count(contract["action_keys_with_redelivery_gaps"], _M)
     _count(contract["adjusted_rows_withheld"], _M)
@@ -826,7 +852,7 @@ def parse_manifest(document: bytes) -> BuildManifestView:
         if not security:
             raise _refuse(_M)
     _validate_restrictions(top["restrictions"])
-    _validate_unresolved_contracts(top["unresolved_contracts"])
+    _validate_identity_contracts(top["identity_contracts"])
     if top["empty_reason"] is not None:
         _nonempty(top["empty_reason"], _M)
     outputs = _parse_outputs(top["outputs"])
@@ -1070,6 +1096,8 @@ _CONFIGURATION_KEYS: Final = frozenset(
         "action_selection_version",
         "silver_normalization_version",
         "source_schema_version",
+        "pagination_policy_version",
+        "actions_identity_version",
     }
 )
 _SCHEMAS_KEYS: Final = frozenset({"version", "digests"})
@@ -1086,6 +1114,8 @@ _REPEATED_VERSIONS: Final = (
     "adjustment_derivation_version",
     "action_selection_version",
     "silver_normalization_version",
+    "pagination_policy_version",
+    "actions_identity_version",
 )
 _C: Final = AdapterDefect.CONFIGURATION_MALFORMED
 _I: Final = AdapterDefect.CONFIGURATION_INCONSISTENT

@@ -9,7 +9,7 @@
       "kind": "production",
       "launched_at": "2026-09-10T14:00:00+00:00",
       "outcome": "COMPLETED",
-      "plan_digest": "8e57cc18ac51ef70adec3c33c3c9d767046293f888aeefba6d5f755fe7860f08",
+      "plan_digest": "d8bdd7e936b410a31d800bc101c915425ae390225c5be48c010dfc83e5aabccd",
       "slice": {
         "acquisition_mode": "BACKFILL",
         "datasets": [
@@ -17,7 +17,7 @@
           "tickers"
         ],
         "max_response_bytes": 4194304,
-        "request_count": 6,
+        "request_count": 2,
         "windows": {
           "actions": "2025-01-01/2025-12-31",
           "tickers": "SNAPSHOT"
@@ -32,7 +32,7 @@
       "kind": "verification",
       "launched_at": "2026-09-10T14:00:00+00:00",
       "outcome": "VERIFIED",
-      "plan_digest": "8e57cc18ac51ef70adec3c33c3c9d767046293f888aeefba6d5f755fe7860f08",
+      "plan_digest": "d8bdd7e936b410a31d800bc101c915425ae390225c5be48c010dfc83e5aabccd",
       "slice": {
         "acquisition_mode": "BACKFILL",
         "datasets": [
@@ -40,7 +40,7 @@
           "tickers"
         ],
         "max_response_bytes": 4194304,
-        "request_count": 6,
+        "request_count": 2,
         "windows": {
           "actions": "2025-01-01/2025-12-31",
           "tickers": "SNAPSHOT"
@@ -55,7 +55,7 @@
       "kind": "production",
       "launched_at": "2026-09-10T14:00:00+00:00",
       "outcome": "COMPLETED",
-      "plan_digest": "8e57cc18ac51ef70adec3c33c3c9d767046293f888aeefba6d5f755fe7860f08",
+      "plan_digest": "d8bdd7e936b410a31d800bc101c915425ae390225c5be48c010dfc83e5aabccd",
       "slice": {
         "acquisition_mode": "BACKFILL",
         "datasets": [
@@ -63,7 +63,7 @@
           "tickers"
         ],
         "max_response_bytes": 4194304,
-        "request_count": 6,
+        "request_count": 2,
         "windows": {
           "actions": "2025-01-01/2025-12-31",
           "tickers": "SNAPSHOT"

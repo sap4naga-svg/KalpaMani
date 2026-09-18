@@ -58,10 +58,16 @@ from kalpamani.data.production.sharadar.gold import (
 )
 from kalpamani.data.production.sharadar.metadata import CompiledTask
 from kalpamani.data.production.sharadar.metadata_grammar import CODE_COMMIT_RE
+from kalpamani.data.production.sharadar.pagination import PAGINATION_POLICY_VERSION
+from kalpamani.data.production.sharadar.plan import pagination_targets_document
 from kalpamani.data.production.sharadar.processing import SOURCE_SCHEMA_VERSION
 from kalpamani.data.production.sharadar.sessions import Session as TradingSession
 from kalpamani.data.production.sharadar.sessions import SessionCalendar
-from kalpamani.data.production.sharadar.silver import SILVER_NORMALIZATION_VERSION, AcceptedSchemas
+from kalpamani.data.production.sharadar.silver import (
+    ACTIONS_IDENTITY_VERSION,
+    SILVER_NORMALIZATION_VERSION,
+    AcceptedSchemas,
+)
 from kalpamani.data.production.sharadar.task_clients import compiled_origin_addresses
 from kalpamani.data.production.sharadar.universe import UNIVERSE_RULE_VERSION, UniverseRule
 
@@ -84,7 +90,13 @@ _COMMON_FIELDS: Final[frozenset[str]] = frozenset(
         "generated_at",
     }
 )
-_ACQUISITION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"secret_name", "origin_addresses"}
+#: The acquisition entry's file also carries the pagination-v2 deployment targets
+#: (ADR-0053 §13.2), pinned to the plan's constants at parse time.
+_ACQUISITION_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {
+    "secret_name",
+    "origin_addresses",
+    "pagination_targets",
+}
 _BUILD_FIELDS: Final[frozenset[str]] = _COMMON_FIELDS | {"build_configuration"}
 #: A verification entry's file (proposed ADR-0045): the origin address set and nothing
 #: actor-specific beyond it -- no secret name, no build configuration -- so a
@@ -119,6 +131,8 @@ _BUILD_CONFIGURATION_FIELDS: Final[frozenset[str]] = frozenset(
         "action_selection_version",
         "silver_normalization_version",
         "source_schema_version",
+        "pagination_policy_version",
+        "actions_identity_version",
     }
 )
 
@@ -149,6 +163,7 @@ class CompiledConfigurationDefect(StrEnum):
     ORIGIN_ADDRESSES_MALFORMED = "ORIGIN_ADDRESSES_MALFORMED"
     BUILD_CONFIGURATION_MALFORMED = "BUILD_CONFIGURATION_MALFORMED"
     DERIVATION_VERSION_MISMATCH = "DERIVATION_VERSION_MISMATCH"
+    PAGINATION_TARGETS_MISMATCH = "PAGINATION_TARGETS_MISMATCH"
 
 
 class CompiledConfigurationError(Exception):
@@ -271,6 +286,8 @@ def parse_build_configuration(document: object) -> BuildConfiguration:
         "action_selection_version": ACTION_SELECTION_VERSION,
         "silver_normalization_version": SILVER_NORMALIZATION_VERSION,
         "source_schema_version": SOURCE_SCHEMA_VERSION,
+        "pagination_policy_version": PAGINATION_POLICY_VERSION,
+        "actions_identity_version": ACTIONS_IDENTITY_VERSION,
     }
     for name, expected in pinned.items():
         if payload[name] != expected:
@@ -478,6 +495,10 @@ def parse_compiled_configuration(raw: bytes) -> tuple[EntryConfiguration, str]:
     if entry is TaskEntry.ACQUISITION:
         if secret_name_refusal(document["secret_name"]) is not None:
             raise _refuse(CompiledConfigurationDefect.SECRET_NAME_MALFORMED)
+        # The deployment targets the image was generated for must be the ones this
+        # code compiles; a file naming other limits, ceilings or memory cannot run here.
+        if document["pagination_targets"] != pagination_targets_document():
+            raise _refuse(CompiledConfigurationDefect.PAGINATION_TARGETS_MISMATCH)
         configuration = EntryConfiguration(
             entry=entry,
             compiled=compiled,
@@ -528,6 +549,7 @@ def build_compiled_configuration(
         )
         if entry is TaskEntry.ACQUISITION:
             document["secret_name"] = secret_name
+            document["pagination_targets"] = pagination_targets_document()
     raw = canonical_bytes(document)
     parse_compiled_configuration(raw)
     return raw

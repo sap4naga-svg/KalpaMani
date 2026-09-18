@@ -229,7 +229,7 @@ def test_case_3_the_manifest_is_parsed_totally(build: ba.BuildArtifacts) -> None
         d["as_of"] = "2026-09-21T00:00:00"
 
     def other_version(d: dict[str, Any]) -> None:
-        d["schema_version"] = "kalpamani-production-build-manifest/v2"
+        d["schema_version"] = "kalpamani-production-build-manifest/v3"
 
     def drop_key(d: dict[str, Any]) -> None:
         del d["served"]
@@ -323,6 +323,7 @@ def test_case_4_missing_unlisted_artifacts_and_excluded_revisions_are_refused(
         run["payload_digests"] = run["payload_digests"][:-1]
         run["record_digests"] = run["record_digests"][:-1]
         run["entries"] -= 1
+        run["provider_calls"] -= 1  # v2 accounting stays consistent: one call per entry
 
     assert (
         refusal(

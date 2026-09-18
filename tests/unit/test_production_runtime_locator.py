@@ -303,15 +303,26 @@ class TestLocatorClauses:
         document = locator_document()
         document["entries"].reverse()
         locator = _validate(document)
-        assert [entry.ordinal for entry in locator.entries] == [0, 1, 2, 3, 4, 5]
-        assert locator.object_count == 12
-        assert len(locator.exact_references()) == 12
-        # Identical bytes across distinct requests of one dataset (tickers pages 0 and 2):
-        # one payload name, distinct record names.
-        assert locator.entries[2].payload.logical_key == locator.entries[4].payload.logical_key
-        assert locator.entries[2].record.logical_key != locator.entries[4].record.logical_key
+        assert [entry.ordinal for entry in locator.entries] == [0, 1]
+        assert locator.object_count == 4
+        assert len(locator.exact_references()) == 4
+        assert locator.probes_issued == 0 and locator.provider_calls == 2
+        # Every v2 entry is one data coordinate at offset zero with its evidence.
+        assert all(entry.page_offset == 0 for entry in locator.entries)
+        assert locator.entries[1].predicate == (("table", "stocks"),)
+        assert locator.entries[0].predicate == ()
         for canary in CANARIES:
             assert canary not in repr(locator)
+
+    def test_identical_bytes_across_two_coordinates_share_one_payload_name(self) -> None:
+        document = locator_document()
+        document["entries"][1] = locator_entry(1, "tickers", PAYLOADS[0], RECORDS[1])
+        locator = _validate(document)
+        assert locator.entries[0].payload.expected_sha256 == (
+            locator.entries[1].payload.expected_sha256
+        )
+        assert locator.entries[0].payload.logical_key != locator.entries[1].payload.logical_key
+        assert locator.entries[0].record.logical_key != locator.entries[1].record.logical_key
 
     # Clause 1: identity binding.
     def test_a_run_id_that_did_not_derive_the_key_is_refused(self) -> None:
@@ -407,19 +418,17 @@ class TestLocatorClauses:
 
     def test_a_missing_or_duplicated_ordinal_is_refused(self) -> None:
         document = locator_document()
-        # Entry 2 restated as ordinal 0 with the tickers coordinates: its coordinates are
-        # not the compiled request at ordinal 0, which is the first clause to fire.
-        document["entries"][2] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
+        # Entry 1 restated as ordinal 0 with the tickers coordinates: its coordinates are
+        # not the compiled coordinate at ordinal 0, which is the first clause to fire.
+        document["entries"][1] = locator_entry(0, "tickers", PAYLOADS[0], RECORDS[0])
         assert _refused(document) is pl.RunLocatorDefect.REQUEST_COORDINATES_MISMATCH
         # Two entries that both are ordinal 0, coordinates and all: a duplicated request.
         document = locator_document()
-        document["entries"][2] = dict(document["entries"][0])
+        document["entries"][1] = dict(document["entries"][0])
         assert _refused(document) is pl.RunLocatorDefect.REQUEST_DUPLICATED
         # An ordinal outside the compiled plan.
         document = locator_document()
-        document["entries"][5] = locator_entry(
-            6, "tickers", PAYLOADS[1], RECORDS[1], page_offset=30000
-        )
+        document["entries"][1] = locator_entry(2, "tickers", PAYLOADS[1], RECORDS[1])
         assert _refused(document) is pl.RunLocatorDefect.ORDINAL_INCONSISTENT
 
     @pytest.mark.parametrize(
@@ -528,9 +537,9 @@ class TestTheReader:
         s3, reader = self._store()
         locator = reader.read_run_locator(run_id=RUN_ID, ledger_row=_row())
         objects = list(reader.iter_locator_objects(locator))
-        assert [entry.ordinal for entry, _, _ in objects] == [0, 1, 2, 3, 4, 5]
-        assert [payload for _, payload, _ in objects] == [PAYLOADS[i % 2] for i in range(6)]
-        assert [record for _, _, record in objects] == [RECORDS[i % 2] for i in range(6)]
+        assert [entry.ordinal for entry, _, _ in objects] == [0, 1]
+        assert [payload for _, payload, _ in objects] == [PAYLOADS[0], PAYLOADS[1]]
+        assert [record for _, _, record in objects] == [RECORDS[0], RECORDS[1]]
         # One by-name read plus two per entry: the count the ADR requires.
         assert reader.get_object_count == 1 + locator.object_count == len(s3.calls)
         assert all(call["Bucket"] == BUCKET for call in s3.calls)
@@ -569,8 +578,8 @@ class TestTheReader:
         [
             lambda d: d["entries"][0]["request"].__setitem__("page_offset", 555),
             lambda d: d["entries"][0]["request"].__setitem__("window", "2025-01-01/2025-06-30"),
-            lambda d: d["entries"].__setitem__(2, dict(d["entries"][0])),
-            lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 5)),
+            lambda d: d["entries"].__setitem__(1, dict(d["entries"][0])),
+            lambda d: (d["entries"].pop(), d.__setitem__("completed_requests", 1)),
         ],
         ids=["offset", "window", "duplicate", "missing-request"],
     )

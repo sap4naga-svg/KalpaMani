@@ -39,6 +39,12 @@ from typing import Any, Final
 
 from kalpamani.data.contracts.vocabulary import DataClassification
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER
+from kalpamani.data.production.sharadar.completion import (
+    CompletionError,
+    PaginationEvidence,
+    parse_pagination_evidence,
+    request_shape_digest,
+)
 from kalpamani.data.production.sharadar.inputs import BuildInput, LedgerRow
 from kalpamani.data.production.sharadar.locator import (
     MAX_LOCATOR_BYTES,
@@ -47,23 +53,33 @@ from kalpamani.data.production.sharadar.locator import (
     RunLocatorError,
     ValidatedRunLocator,
 )
-from kalpamani.data.production.sharadar.processing import SOURCE_SCHEMA_VERSION
-from kalpamani.data.qualify.sharadar.parser import MAX_PARSE_BYTES
+from kalpamani.data.production.sharadar.plan import (
+    MAX_DATA_COORDINATES_PER_RUN,
+    PAYLOAD_CEILING_BYTES,
+)
+from kalpamani.data.production.sharadar.processing import (
+    RECORD_CONTRACT_ID,
+    RECORD_FIELDS,
+    RECORD_REQUEST_FIELDS,
+    SOURCE_SCHEMA_VERSION,
+)
 from kalpamani.data.qualify.sharadar.read import LicensedReadError, ReadFailure
 
 #: The most objects one build may read across every run it consumes: two per
-#: request, at the input's run ceiling and the plan's request ceiling.
-MAX_BUILD_OBJECTS: Final = 2 * 32 * 96
+#: data coordinate, at the input's run ceiling and the plan's coordinate ceiling.
+MAX_BUILD_OBJECTS: Final = 2 * 32 * MAX_DATA_COORDINATES_PER_RUN
 
 #: The most bytes one build may read in total. A ceiling on work, not on a run.
 MAX_BUILD_INPUT_BYTES: Final = 2 * 1024 * 1024 * 1024
 
-#: The largest payload the build will read. The accepted parser refuses anything
-#: larger, so reading it would be work that cannot end in a row.
-MAX_BUILD_PAYLOAD_BYTES: Final = MAX_PARSE_BYTES
+#: The largest payload the build will read: the accepted production payload ceiling
+#: (ADR-0053 §13.2). The production parser refuses anything larger whole, so reading
+#: it would be work that cannot end in a row.
+MAX_BUILD_PAYLOAD_BYTES: Final = PAYLOAD_CEILING_BYTES
 
-#: The largest acquisition record the build will read. A closed document of ten
-#: short fields; anything approaching this is not one.
+#: The largest acquisition record the build will read. A closed v2 document -- the
+#: retrieval record, the request shape and the completion evidence; anything
+#: approaching this is not one.
 MAX_RECORD_BYTES: Final = 16 * 1024
 
 _RECORD_FIELDS: Final[frozenset[str]] = frozenset(
@@ -94,7 +110,9 @@ class BuildInputDefect(StrEnum):
     PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
     RECORD_TOO_LARGE = "RECORD_TOO_LARGE"
     RECORD_MALFORMED = "RECORD_MALFORMED"
+    RECORD_CONTRACT_UNSUPPORTED = "RECORD_CONTRACT_UNSUPPORTED"
     PROVENANCE_CONTRADICTORY = "PROVENANCE_CONTRADICTORY"
+    EVIDENCE_CONTRADICTORY = "EVIDENCE_CONTRADICTORY"
     SCHEMA_INCOMPATIBLE = "SCHEMA_INCOMPATIBLE"
     RUN_DUPLICATED = "RUN_DUPLICATED"
     DEADLINE_EXHAUSTED = "DEADLINE_EXHAUSTED"
@@ -127,8 +145,10 @@ class AcquiredPage:
     ordinal: int
     dataset: str
     window: str
+    predicate: tuple[tuple[str, str], ...]
     page_offset: int
     page_limit: int
+    pagination: PaginationEvidence
     acquisition_mode: str
     retrieved_at: datetime
     payload: bytes
@@ -187,14 +207,34 @@ class VerifiedBuildInputs:
 
 
 def _record(raw: bytes) -> dict[str, Any]:
-    """Decode one acquisition record: strict UTF-8 JSON, exactly the closed field set."""
+    """Decode one v2 acquisition record: strict UTF-8 JSON, exactly the closed shape.
+
+    A bare v1 retrieval record -- the closed ten-field document historical run 1
+    wrote -- is a recognized, **superseded** contract and is refused as
+    ``RECORD_CONTRACT_UNSUPPORTED``; it is never reinterpreted under v2.
+    """
     if len(raw) > MAX_RECORD_BYTES:
         raise _refuse(BuildInputDefect.RECORD_TOO_LARGE)
     try:
         document = json.loads(raw.decode("utf-8", errors="strict"))
     except (UnicodeDecodeError, ValueError):
         raise _refuse(BuildInputDefect.RECORD_MALFORMED) from None
-    if type(document) is not dict or set(document) != _RECORD_FIELDS:
+    if type(document) is not dict:
+        raise _refuse(BuildInputDefect.RECORD_MALFORMED)
+    if set(document) == _RECORD_FIELDS:
+        raise _refuse(BuildInputDefect.RECORD_CONTRACT_UNSUPPORTED)
+    if set(document) != RECORD_FIELDS:
+        raise _refuse(BuildInputDefect.RECORD_MALFORMED)
+    if document["contract_id"] != RECORD_CONTRACT_ID:
+        raise _refuse(BuildInputDefect.RECORD_CONTRACT_UNSUPPORTED)
+    retrieval = document["retrieval"]
+    request = document["request"]
+    if (
+        type(retrieval) is not dict
+        or set(retrieval) != _RECORD_FIELDS
+        or type(request) is not dict
+        or set(request) != RECORD_REQUEST_FIELDS
+    ):
         raise _refuse(BuildInputDefect.RECORD_MALFORMED)
     return document
 
@@ -212,18 +252,51 @@ def _instant(value: object) -> datetime:
 
 
 def cross_check_record(
-    record: dict[str, Any], *, entry: RunLocatorEntry, locator: ValidatedRunLocator
+    document: dict[str, Any], *, entry: RunLocatorEntry, locator: ValidatedRunLocator
 ) -> datetime:
     """The record's retrieval instant, once the record agrees with the entry and the run.
+
+    The retrieval record, the request shape and the completion evidence are each held
+    to the locator entry: a record that names another window, predicate, page, row
+    count, schema digest, completion or probe than the locator does is contradictory
+    provenance, and neither document is trusted over the other.
 
     Raises:
         BuildInputError: ``SCHEMA_INCOMPATIBLE`` for a record under a source-schema
             version this build does not normalize; ``PROVENANCE_CONTRADICTORY`` for
-            any disagreement with the locator entry or the run; ``RECORD_MALFORMED``
-            for a value of the wrong shape.
+            any disagreement with the locator entry or the run; ``EVIDENCE_CONTRADICTORY``
+            for completion evidence that is not the entry's; ``RECORD_MALFORMED`` for a
+            value of the wrong shape.
     """
+    record = document["retrieval"]
     if record["source_schema_version"] != SOURCE_SCHEMA_VERSION:
         raise _refuse(BuildInputDefect.SCHEMA_INCOMPATIBLE)
+    request = document["request"]
+    expected_request = {
+        "window": entry.window,
+        "predicate": dict(entry.predicate),
+        "page_offset": entry.page_offset,
+        "page_limit": entry.page_limit,
+        "request_shape_sha256": request_shape_digest(
+            dataset=entry.dataset,
+            window=entry.window,
+            predicate=entry.predicate,
+            page_offset=entry.page_offset,
+            page_limit=entry.page_limit,
+        ),
+    }
+    for field, value in expected_request.items():
+        observed = request[field]
+        if type(observed) is not type(value) or observed != value:
+            raise _refuse(BuildInputDefect.PROVENANCE_CONTRADICTORY)
+    try:
+        evidence = parse_pagination_evidence(
+            document["pagination"], governed_limit=entry.page_limit
+        )
+    except CompletionError:
+        raise _refuse(BuildInputDefect.RECORD_MALFORMED) from None
+    if evidence != entry.pagination:
+        raise _refuse(BuildInputDefect.EVIDENCE_CONTRADICTORY)
     expected = {
         "provider": PROVIDER,
         "dataset": entry.dataset,
@@ -311,8 +384,10 @@ def _verify_run(reader: ProductionLocatorReader, row: LedgerRow, *, budget: _Bud
                 ordinal=entry.ordinal,
                 dataset=entry.dataset,
                 window=entry.window,
+                predicate=entry.predicate,
                 page_offset=entry.page_offset,
                 page_limit=entry.page_limit,
+                pagination=entry.pagination,
                 acquisition_mode=locator.acquisition_mode,
                 retrieved_at=retrieved_at,
                 payload=payload,

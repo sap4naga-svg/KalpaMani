@@ -76,6 +76,7 @@ def test_the_entries_families_and_contracts_match_the_document() -> None:
         assert ENTRY_FIELDS[member] == ENTRY_FIELDS[entry.TaskEntry.ACQUISITION] - {
             "secret_name",
             "origin_addresses",
+            "pagination_targets",
         }
     for actor in ProductionActor:
         assert constants_for(actor).probe_task_family in ADR_TEXT
