@@ -648,7 +648,9 @@ record. Nothing in §12 other than the named cell is amended.
 
 **Status: PROPOSED — NOT IN FORCE while the pull request carrying this section is open; it changes no
 task image, no compiled configuration, no task definition, no Terraform, no IAM and no registration.**
-Proposed by [ADR-0054](ADR-0054-historical-v1-reservations-and-registration-historical-rebinding.md) on 2026-09-18, and effective with it; the text above is preserved as accepted and is not rewritten.
+Proposed by [ADR-0054](ADR-0054-historical-v1-reservations-and-registration-historical-rebinding.md) on 2026-09-18, and effective with it; the text above is preserved as accepted and is not rewritten. *[Since accepted: ADR-0054 is ACCEPTED / IN FORCE on the merge of PR #135 — 2026-09-18T17:35:07Z, merge commit
+`8be462b953c33a6953429ee9edc321f843ab6ae1`, ordered parents `a5a6384f…` then `bbaa419d…`, merge tree identical to the reviewed head
+tree — and this section with it; true when written, not rewritten.]*
 
 §6's store gains one evidence-only read beside its strict one. `parse_reservation`, `LaunchStore.reservation` and
 `reservations()` admit exactly what they admitted before; every execution path of the launch tool — recover,

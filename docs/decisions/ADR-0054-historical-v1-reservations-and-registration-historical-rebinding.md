@@ -13,6 +13,19 @@ tooling change merged beside it. **Acceptance authorizes no execution** (§5): n
 no D-15 attestation, no preparation of any cell, no receipt collection, no verdict, no rerun of any PASSED
 cell, no permission batch, no IAM, Terraform, tfvars, registration or image change, no acquisition.
 
+**The condition above has since been satisfied.** **PR #135 merged** — merged **2026-09-18T17:35:07Z**, merge commit
+**`8be462b953c33a6953429ee9edc321f843ab6ae1`**, ordered parents **`a5a6384f44df09cbf7736e2ec0e58d9c5e0149bc`** (the PR #134 merge) then
+**`bbaa419dea40f53040f2d228d25fc1eb631b713c`** (the reviewed head), with a **merge tree identical to the reviewed pull-request head tree**
+(`39a7eac736d63eeacde27a853fe0f48aaa078fab`). ADR-0054 is therefore **ACCEPTED / IN FORCE** exactly as the clause above states —
+**the two narrow governance decisions of §2 and the amendments of §4, and nothing else**: acceptance authorizes only the
+supported-v1 historical read of §2.1 (evidence, never authority) and the registration-historical cell supersession of §2.2 under
+the merged safeguards, effective together with the offline tooling change merged beside it (PR #135; every runtime and tooling
+file of that merge unchanged by this synchronization). While the pull request was open it was proposed and carried no authority —
+true then, and not rewritten. **Acceptance authorizes no execution**: no launch, no reservation, no D-15, no receipt, no verdict,
+no permission batch, no IAM, Terraform, tfvars, registration or image change, no acquisition; each stays its own written
+authorization. **This synchronization changed no runtime behaviour, task image, compiled configuration, Terraform, IAM or
+registration.**
+
 **Nothing was run against AWS to produce this decision.** No AWS call, no STS call, no S3 operation, no
 image built or pulled, no credential retrieved, no provider request. The only real artifacts read were
 the owner's private launch store, read-only, on the workstation, to establish the facts of §1; every
