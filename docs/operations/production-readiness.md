@@ -1134,3 +1134,21 @@ specification `899f2e11…` superseded and preserved, identity `run-20260917T232
 on hold pending the recompiled O-5 program. S10c: blocked. G1, G4, G5, PEAD, short-side and M0 readiness: unchanged. **Next
 owner decision after the merge: the bounded provider-qualification authorization (D-19).** Estimate at the observed cadence:
 ≈ 8 bounded cycles to acquisition resumption, ≈ 10 to the first observation build, ≈ +20–25 to the first M0 backtest.
+
+### 17.1 The first D-19 attempt and the ADR-0053 §11 amendment (2026-09-18)
+
+**D-19 attempt 1 → `PROVIDER_REFUSED`, preserved.** Two of at most six provider requests through the accepted adapter, client and transport (one
+accepted secret read; STS 1; S3/SSM/ECS 0): the tickers data request at `limit=100000` returned 25,432,082 bytes / 74,202 rows / 28 fields / schema
+`11621972…` in 3.66 s — complete-shaped in itself, but with **30,304 `permaticker` repeats carrying conflicting content** (the vendor delivers one row per
+ticker per `table`; zero duplicates on `(permaticker, table)`), refused by the accepted parser's 4 MiB ceiling, peak RSS not measured; the completion probe
+at `skip=100000` was refused **HTTP 400**; actions untested. `L = 100000` is **not qualified** and no ceiling is qualified.
+
+**The amendment (ADR-0053 §11; proposed, effective on its merge).** The owner's decision, verbatim in §11.0: a parsed data response with fewer than `L`
+rows is complete-shaped without a probe; a probe is required only for exactly `L` rows; tickers requests carry an explicit documented `table` predicate
+per required logical group with `permaticker` the within-group identity and tables never combined. The consumer proof (§11.4) fixes the predicate set for
+the first observation build at **exactly `table=stocks`** — every accepted consumer (Silver mapping and normalization, `breakout-long-v1` membership,
+Gold, availability, the Route-A contract, the actions consumers) is a consumer of priced entities; the spelling is the vendor's documented example
+(`PSR-SHD-134`). Multi-page and offset assembly stay prohibited. **Nothing runs by the amendment**: the `table` parameter, the conditional probe, the
+ceilings and the plan compiler are a later code cycle; run 1 stays historical and not buildable; run 2's specification stays superseded; runs 2–19 and S10c
+stay blocked; the second qualification is owner-input **D-20**.
+

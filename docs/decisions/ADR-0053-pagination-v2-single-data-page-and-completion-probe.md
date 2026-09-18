@@ -281,3 +281,100 @@ This ADR changes documentation, governance metadata, docs-audit support and gove
 changes no production runtime behaviour, no image, no configuration, no Terraform and no registration.
 Every number it carries is either measured evidence (§1), an accepted contract fact, or an explicitly
 unqualified candidate (§2.13, §3, §8).
+
+## 11. Amendment (2026-09-18) — conditional completion, the tickers `table` predicate, and the first D-19 outcome
+
+**Proposed in the pull request introducing this section; effective only on that pull request's independently reviewed merge, and carrying no
+authority while it is open.** The text of §2 is preserved as accepted; the rules this section supersedes are named exactly, and nothing else moves.
+Everything below is governance and contract; **nothing is implemented, qualified or deployed by it**, and every numeric ceiling stays a candidate.
+
+### 11.0 The owner's decision, recorded verbatim
+
+> I accept amending ADR-0053 so that a successfully parsed data response containing fewer than the governed limit `L` is complete-shaped without a completion probe. A completion probe is required only when the data response contains exactly `L` rows. For the tickers dataset, use an explicit documented `table` predicate for each required logical group and retain `permaticker` as the within-group identity; do not widen the identity to `(permaticker, table)` merely to combine unrelated provider tables. The required table value or values must be derived from accepted repository consumers and Route-A contracts, not guessed.
+
+This decision does **not** retroactively qualify `L = 100000`, does **not** make the first D-19 attempt a pass, does **not** make run 1 buildable,
+does **not** authorize offset-based multi-page assembly, does **not** authorize runtime implementation, deployment, acquisition, S10c or backtesting,
+and **preserves the first D-19 evidence and verdict unchanged**.
+
+### 11.1 The first D-19 attempt — `PROVIDER_REFUSED`, preserved
+
+On 2026-09-18 (02:32Z) the bounded qualification of candidate `L = 100000` issued **two** of at most six provider requests through the accepted
+adapter, client and transport (one accepted secret read; STS 1; S3/SSM/ECS 0): the tickers data request (`limit=100000`, `skip=0`) returned HTTP 200,
+**25,432,082 bytes** in 3.66 s, parsed to **74,202 rows** (28 fields, schema digest `11621972…` — the digest run 1 delivered) with **30,304 rows repeating
+a `permaticker` with conflicting content** and **zero duplicates on `(permaticker, table)`**; the accepted parser as-is refused the body at its
+qualification-era 4 MiB ceiling (`PAYLOAD_TOO_LARGE`); peak RSS was **not measured** (a diagnostic binding fault). The completion probe (`limit=100000`,
+`skip=100000`) was **refused by the provider with HTTP 400** and an empty body (0.14 s), and the qualification stopped there; the actions windows were
+**not tested**. The verdict **`PROVIDER_REFUSED` stands, unchanged**: it proved that an unfiltered tickers request mixes the vendor's table namespaces
+(one row per ticker per `table`), it did **not** qualify `L = 100000`, it did **not** measure peak RSS, **a second qualification is required**, and
+**the actions groups remain unqualified**. The vendor documents no error behaviour (`PSR-SHD-132`), so **why** the probe was refused is not established
+and is not inferred.
+
+### 11.2 Conditional completion rule (supersedes §2.2's unconditional probe, §2.4/§2.5's "probe or fail", and §2.10)
+
+For each independently governed group (one dataset, one exact window or predicate, one run):
+
+1. The data response at limit `L` is parsed by the accepted parser.
+2. If **`0 ≤ row_count < L`**, the group is **complete-shaped without a completion probe**; no probe is issued for it.
+3. If **`row_count == L`**, **exactly one completion probe at offset `L`** (same table, predicate, filters, date bounds, ordering, projection and every other
+   immutable parameter) is required.
+4. That probe must parse successfully and contain **zero** rows (a header-only body is empty only when the accepted parser proves it).
+5. If a required probe is data-bearing, malformed, schema-incompatible, refused by the provider or unavailable, **the group is not complete** —
+   the acquisition fails closed and publishes no `COMPLETE` locator; the build refuses the group.
+6. A response containing **more than `L` rows is malformed** (`PAGE_OVER_LIMIT`).
+7. **Multiple data-bearing pages remain prohibited**, and **offset-based assembly remains prohibited** (§2.1, §2.12 unchanged).
+8. An HTTP or provider refusal of an **unnecessary** probe after a short page **cannot** invalidate the short page, because under this rule that probe is
+   no longer issued. (The first attempt's HTTP 400 followed a 74,202-row short page and was exactly such a probe.)
+
+§2.6–§2.9 (probe retained and hashed, contributes no rows; schema equality between a data page and **its issued** probe; within-page primary-key and
+uniqueness rules; no silent deduplication) are unchanged, and ADR-0043 §7's probe check applies to every probe that **is** issued.
+
+### 11.3 Tickers identity rule (amends §2.8 for the tickers dataset; amends ADR-0035 §3.1 and ADR-0041 §3 for the request form)
+
+1. **Every tickers request carries an accepted explicit `table` predicate** — the vendor's documented `table` query parameter (`PSR-SHD-134`:
+   "Returns data for tickers in the specified data table (e.g. stocks, fundamentals)"). An unfiltered tickers request is refused by the plan compiler.
+2. **`permaticker` remains the identity within each table-specific logical group** (the accepted Silver row key `security_id = sharadar:<permaticker>`).
+3. **Conflicting duplicate `permaticker` rows inside one table-specific response are refused** (the accepted `ROW_CONFLICT_IN_RUN`); identical
+   repeats are counted sightings as today.
+4. **Different Sharadar tables are never silently combined into one tickers snapshot**; the composite key `(permaticker, table)` is **not** adopted as a
+   shortcut for mixing tables.
+5. **Each required table is its own logical group** — independently planned (its own compiled request(s) and predicate), hashed (its own payload,
+   claim, record and locator entries), evidenced and admitted; an expansion to another table requires a governed consumer need and a plan
+   recompilation.
+6. **The accepted predicate set for the first observation build is exactly `{ "stocks" }`**, derived in §11.4 from the accepted consumers — not guessed.
+   Adding a value is an amendment of this section.
+7. Request form: the production cross-section form (ADR-0041) admits the parameter `table` **for the tickers dataset only**, with a value drawn from the
+   accepted predicate set, transmitted after the fixed parameters; the qualification form (`SharadarRequest`) is unchanged; `table` is not added to the
+   forbidden set and not admitted for `stocks` or `actions` requests. (Runtime change: a later, separately authorized code cycle.)
+
+### 11.4 The tickers `table` derivation — consumer proof (read-only repository analysis, 2026-09-18)
+
+| Consumer (accepted code / contract) | Required tickers fields | Required Sharadar `table` | Why required for the first observation build |
+|---|---|---|---|
+| `silver._snapshot_mapping` / `_normalize_keyed` (ADR-0035 §3.5, ADR-0040) — every `stocks` and `actions` row is mapped `ticker → permaticker` through the **same run's** tickers snapshot | `ticker`, `permaticker` | **`stocks`** — the entities that have bars; a symbol absent from the snapshot is `unmapped` (excluded and counted, never adopted) | the mapping is the identity of every Silver bar and action; without the `stocks` entities nothing maps |
+| `silver._normalize_tickers` (Silver tickers dataset; `TICKERS_COLUMNS`) | `permaticker`, `ticker`, `exchange`, `category`, `isdelisted`, `sector`, `industry`, `firstpricedate`, `lastpricedate`, `lastupdated` | **`stocks`** — attributes of the priced entities | the attribute revision every membership row cites |
+| `universe.py` `breakout-long-v1` (ADR-0035 §3.4; build configuration `universe_rule`: `eligible_exchanges`, `common_stock_categories`, listing life) | `exchange`, `category`, `isdelisted`, `firstpricedate`, `lastpricedate` | **`stocks`** | the exchange/category/listing-life clauses are evaluated only for entities with bars (`history_sessions` of `stocks`) |
+| `gold.py` (adjusted bars, first/last price bounds) | `firstpricedate`, `lastpricedate` | **`stocks`** | Gold is derived from `stocks` bars |
+| `availability.py` (P-2 first-seen bounds for tickers attribute revisions) | the tickers row as a revision | **`stocks`** | bounds the same rows |
+| Route-A build contract (`owner-accepted-schemas-2026-09-16-routeA-v1`: tickers accepted set empty — observed at the build; `stocks` 1, `actions` 1) | the delivered tickers header, observed | **`stocks`** (no other table's schema is accepted or observed) | Route A observes exactly what the build consumes |
+| `actions` consumers (`_normalize_keyed(..., key_columns=("date","action"))`, action selection, spinoff/delisting clauses) | mapped through the snapshot | **`stocks`** — actions rows of entities outside the `stocks` table (funds, fundamentals-only issuers; `PSR-SHD-011`) become `rows_excluded_for_identity`, counted in the manifest, never merged | the equity universe is the priced universe |
+| fundamentals / funds / insiders / holdings consumers | none exist on `main` | — | not a prerequisite of the first observation build (Phase 3B; G-4/G-5 open) |
+
+**Decision rule 1 applies: exactly one table — `stocks`.** The value's spelling is the vendor's documented example for the `table` parameter
+(`PSR-SHD-134`); its selection is the consumers' (every consumer is a consumer of priced entities). Whether the vendor's `table` **column** carries the
+same spelling is a fact the second qualification observes and records; it does not affect the predicate.
+
+### 11.5 Qualification status and the second qualification (D-20)
+
+`L = 100000` is **not qualified**; no byte, row, memory, timeout or storage ceiling is qualified. The second bounded qualification (owner-input D-20)
+covers **the `table=stocks` tickers group, actions window 1 and actions window 2** at `L = 100000` — one data request each, a completion probe **only**
+when a data response carries exactly `L` rows (at most six requests in all), peak RSS measured by a corrected and regression-tested binding, parser time
+recorded independently, one attempt each, no retry, under the same accepted identity, secret and transport path and the same diagnostic guards
+(128 MiB body, 384 MiB aggregate, six requests, the accepted timeout). Its verdict is per §3/§8 and B7 of its authorization; a partial run is never a
+partial pass.
+
+### 11.6 What this amendment does not do
+
+It authorizes no request (the second qualification is its own authorization), no runtime change (the `table` parameter, the conditional probe, the
+ceilings and the plan compiler all remain to be implemented by a later code cycle), no image, Terraform, IAM or registration change, no acquisition,
+no S10c, no M0. Run 1 stays historical and not buildable; run 2's specification stays superseded and preserved; runs 2–19 and S10c stay blocked.
+
