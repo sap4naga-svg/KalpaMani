@@ -167,7 +167,8 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
         assert "ADR-0053 pagination v2 (governance):" in text, name
         assert (
             "D-19 attempt 1 PROVIDER_REFUSED" in text
-            and "D-20 second qualification PENDING" in text
+            and "D-21 third qualification PENDING" in text
+            and "D-20 round 2 DUPLICATE_PRIMARY_KEY" in text
         ), name
         assert "runtime pagination-v2 implementation ABSENT" in text, name
 
