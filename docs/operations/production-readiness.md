@@ -1152,3 +1152,20 @@ Gold, availability, the Route-A contract, the actions consumers) is a consumer o
 ceilings and the plan compiler are a later code cycle; run 1 stays historical and not buildable; run 2's specification stays superseded; runs 2–19 and S10c
 stay blocked; the second qualification is owner-input **D-20**.
 
+### 17.2 D-20 round 2 and the ADR-0053 §12 amendment (2026-09-18)
+
+**D-20 → `DUPLICATE_PRIMARY_KEY`, preserved.** Two of at most six requests: the `table=stocks` tickers group came back complete-shaped without a probe
+(8,196,857 bytes / 20,976 rows / 28 fields / schema `11621972…`; one `table` value; zero duplicate `permaticker`) — the §11.3 predicate confirmed in
+evidence; actions window 2024-09-15/2025-09-15 parsed to 41,437 rows (3,016,310 bytes; the accepted seven-field schema `f2de54a5…`) with **44 rows repeating
+the coarse `(ticker, date, action)` key with differing content** — the provider supplies several same-kind events per ticker-day, and the accepted Silver key
+would refuse any complete actions window. `L = 100000` stays unqualified; the round's memory figure was an upper bound contaminated by an in-process
+self-test.
+
+**The amendment (ADR-0053 §12; proposed, effective on its merge).** The owner's decision, verbatim in §12.0: a schema-bound canonical full-row event
+identity — the seven governed fields `date, action, ticker, name, value, contraticker, contraname` (derived: the accepted Route-A digest `f2de54a5…`
+equals the parser's digest of exactly that header) in accepted order with typed normalization — replaces the coarse key for the pagination-v2 Route-A
+actions input; exact duplicates refused, no precedence, no silent combining, deterministic ordering, schema-bound with an explicit review on any schema
+change; D-20's tickers group may be carried into D-21 under the reuse binding of §12.5; D-21 requalifies both actions windows with a clean per-request
+memory measurement. **Nothing runs by the amendment**; run 1 stays historical and not buildable; run 2's specification stays superseded; runs 2–19 and S10c
+stay blocked.
+

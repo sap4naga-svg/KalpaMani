@@ -378,3 +378,102 @@ It authorizes no request (the second qualification is its own authorization), no
 ceilings and the plan compiler all remain to be implemented by a later code cycle), no image, Terraform, IAM or registration change, no acquisition,
 no S10c, no M0. Run 1 stays historical and not buildable; run 2's specification stays superseded and preserved; runs 2–19 and S10c stay blocked.
 
+## 12. Amendment (2026-09-18) — the schema-bound canonical full-row actions identity; D-20 recorded; D-21
+
+**Proposed in the pull request introducing this section; effective only on that pull request's independently reviewed merge, and carrying no
+authority while it is open.** Governance and contract only: nothing is implemented, qualified or deployed by it; no prior verdict is relabelled.
+
+### 12.0 The owner's decision, recorded verbatim
+
+> I accept a schema-bound canonical full-row identity for each delivered Sharadar actions event. Every accepted typed field in the governed actions schema participates in the event identity in documented field order. Multiple rows sharing ticker, date and action remain distinct when any other governed field differs. Exact duplicate full rows are refused; they are never silently deduplicated. The completed table-filtered tickers evidence from D-20 may be carried forward only if its request, schema, identity rule and evidence remain unchanged and the governance amendment explicitly admits group-scoped evidence reuse.
+
+This decision replaces the coarse `(security_id, date, action)` identity **for the pagination-v2 Route-A actions input**; it does not modify prior raw
+evidence, does not convert D-20 into an overall pass, does not qualify `L = 100000` until D-21 passes, does not make run 1 buildable, and does not
+authorize implementation, deployment, acquisition, S10c or backtesting.
+
+### 12.1 D-20 round 2 — `DUPLICATE_PRIMARY_KEY`, preserved; the tickers group complete
+
+On 2026-09-18 (03:14Z) the second bounded qualification issued **two** of at most six requests (one accepted secret read; STS 1; S3/SSM/ECS 0): the
+**`table=stocks` tickers data request** returned HTTP 200, **8,196,857 bytes / 20,976 rows / 28 fields**, schema digest `11621972…`, one `table` value
+equal to the predicate, **zero duplicate `permaticker`, zero conflicts** — **complete-shaped without a probe** (`COMPLETE_SHAPED_SHORT_PAGE`); the
+**actions window 2024-09-15/2025-09-15 data request** returned HTTP 200, **3,016,310 bytes / 41,437 rows / 7 fields**, the accepted schema `f2de54a5…`,
+the accepted parser as-is refusing at its 10,000-row ceiling (`ROW_COUNT_EXCEEDED`), and **44 rows repeating the coarse `(ticker, date, action)` key with
+differing delivered content** (zero exact-duplicate rows). Under the accepted Silver identity those rows are `ROW_CONFLICT_IN_RUN`, so the round stopped
+there; the second actions window was **not tested**. **D-20 remains failed overall** (`DUPLICATE_PRIMARY_KEY`); `L = 100000` remains unqualified; the
+peak-RSS figure of that round is an upper bound contaminated by an in-process self-test and is not a measurement.
+
+### 12.2 Why the coarse key is insufficient
+
+The provider legitimately supplies **several same-kind events for one ticker on one date** — the delivered fields beyond `(ticker, date, action)` (`value`,
+`contraticker`, and the descriptive `name`/`contraname`) are what distinguish them (a spinoff with two counterparties, two dividends of one kind on one
+date). A key that omits them collapses distinct events into a conflict, and any rule that picked one (first, last, largest) would discard vendor evidence
+silently. Run 1's own pages already showed the structure (25 / 34 coarse repeats, 0 repeated full rows); D-20 measured it on a complete window (44).
+
+### 12.3 The governed actions schema (derived, not assumed)
+
+The accepted Route-A actions schema digest **`f2de54a58d32d33efb87647b1b62e6768175cb720bad6e7a2991fbba23a1fa72`** (`owner-accepted-schemas-2026-09-16-routeA-v1`,
+observed again by D-20) **equals `schema_digest_of(("date", "action", "ticker", "name", "value", "contraticker", "contraname"))`** — the accepted parser's
+order-sensitive digest of exactly the seven columns the vendor documents (`PSR-SHD-094`, `PSR-SHD-112`), in delivered order. The seven governed fields, in
+accepted order, with their typed normalization:
+
+| # | field | type | normalization (from the accepted parser and the accepted canonical encoder) |
+|---|---|---|---|
+| 1 | `date` | calendar date | must parse as `YYYY-MM-DD` (a malformed date refuses the row); emitted as `YYYY-MM-DD`; never promoted to an instant |
+| 2 | `action` | string | exact delivered text after strict UTF-8 decoding; no trimming, no case folding, no Unicode normalization |
+| 3 | `ticker` | string | exact delivered text |
+| 4 | `name` | string or null | exact delivered text; an empty field is **null** |
+| 5 | `value` | decimal or null | must parse as a decimal literal (`Decimal`); the **exact delivered literal** is the canonical form (no rescaling, no float) ; an empty field is null; a non-decimal literal refuses the row |
+| 6 | `contraticker` | string or null | exact delivered text; empty is null |
+| 7 | `contraname` | string or null | exact delivered text; empty is null |
+
+Null is exactly the parser's absent value (an empty CSV field); it is never an empty string, never zero, never a default.
+
+### 12.4 The event identity contract — `sharadar-actions-event-identity/v1`
+
+1. **Canonical row** = the accepted `canonical_bytes` of the mapping `{"contract": "sharadar-actions-event-identity/v1", "schema": <the governed schema
+   digest>, "fields": [[name, normalized value], … in the accepted field order of §12.3]}` — a list of pairs, so **JSON object ordering is irrelevant**
+   (the encoder sorts mapping keys and preserves list order); dates as `YYYY-MM-DD`, decimals as their exact literal, strings exact, nulls as JSON null;
+   no locale, no float, no lossy conversion. **The schema version (digest) is bound into every identity.**
+2. **Event identity** = SHA-256 of the canonical row.
+3. **Two rows are the same event only when all seven governed normalized fields are equal**; a difference in any field — `value` or `contraticker`
+   included — is a different event.
+4. **Exact duplicate canonical rows are refused** (`ACTIONS_DUPLICATE_EVENT`); they are never silently deduplicated and no first/last precedence exists.
+5. **Same digest, different canonical bytes** is an identity collision and is refused (`ACTIONS_IDENTITY_COLLISION`).
+6. **No rows are silently combined**; the Silver row key for the pagination-v2 Route-A actions input becomes `(security_id, event_identity)`, and the
+   revision chronology of ADR-0035 §3.2 applies per event identity across runs.
+7. **Deterministic ordering**: within a run the admitted events are ordered by the canonical field tuple (lexicographically on the canonical strings, nulls
+   first), independent of provider delivery order; the delivered order is retained as evidence in the acquisition record and is not an input to identity.
+8. **Schema-bound**: any change to the governed actions schema (a column added, removed, renamed or reordered → a different digest) **requires an
+   explicit identity-contract review** before any actions input under it is admitted; the identity contract version moves with it.
+9. The old coarse key `(security_id, date, action)` is **superseded** for this input; a test holds that the coarse rule fails the mutation control (§12.7).
+
+### 12.5 Group-scoped evidence reuse — the D-20 tickers group
+
+Group-scoped reuse of a **complete-shaped, fully evidenced** qualification group is admitted **only** when every binding field of the reused group matches
+the current contract exactly: the request predicate (`table=stocks`), the compiled window (`SNAPSHOT`), the request-shape digest, the schema digest
+(`11621972…`), the identity rule (`permaticker` within the group), the verdict (`COMPLETE_SHAPED_SHORT_PAGE`, probe not required) and the recorded
+measurements (bytes, rows, SHA-256). The actions-key amendment of §12.4 cannot affect that group. **D-21 therefore carries the D-20 tickers group forward
+without another request**, and its evidence binding is re-checked by the D-21 driver before any provider call. Reuse **never conceals an incomplete or
+failed group**: only a group whose own verdict is complete may be reused, and the overall round verdict is still the conjunction of every group.
+
+### 12.6 D-21 scope and the qualification status
+
+`L = 100000` remains **unqualified** until D-21 succeeds. D-21 requalifies **both actions windows** under §12.4 — one data request each at `limit=100000`,
+a completion probe only for a page of exactly `L` rows (≤ 4 requests), a clean per-request memory measurement (self-test in a subprocess; baseline,
+streaming peak, parsing peak, final RSS per request), one attempt, no retry — with the D-20 tickers group carried forward under §12.5. A round with any
+new full-row duplicate, identity collision, parser failure, required-probe failure, leak or resource-bound failure is failed, never partially qualified.
+
+### 12.7 Tests (governance/contract; no runtime path)
+
+`tests/unit/test_adr_0053_actions_identity.py` carries a **specification-executable reference** of §12.4 (test-local; not a runtime module) and proves:
+two rows equal on `(ticker, date, action)` but differing elsewhere have different identities; each of the seven fields independently changes the identity;
+source object ordering does not; provider row ordering does not change the canonical event set; null / empty / numeric / date normalization is
+deterministic; exact duplicates are refused; a digest collision with differing canonical bytes is refused; the coarse key fails the mutation control; and
+tickers evidence reuse is admitted only when every binding field matches (an altered predicate, schema, request digest or identity rule refuses).
+
+### 12.8 What this amendment does not do
+
+No request (D-21 is its own authorization), no runtime change (the identity module, the Silver key, the plan compiler and the ceilings are a later code
+cycle), no image, Terraform, IAM or registration change, no acquisition, no S10c, no M0; D-19 and D-20 are not relabelled; run 1 stays historical and not
+buildable; run 2's specification stays superseded; runs 2–19 and S10c stay blocked.
+
