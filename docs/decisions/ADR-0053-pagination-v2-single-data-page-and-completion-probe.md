@@ -477,3 +477,85 @@ No request (D-21 is its own authorization), no runtime change (the identity modu
 cycle), no image, Terraform, IAM or registration change, no acquisition, no S10c, no M0; D-19 and D-20 are not relabelled; run 1 stays historical and not
 buildable; run 2's specification stays superseded; runs 2–19 and S10c stay blocked.
 
+## 13. Amendment (2026-09-18) — D-21 accepted; the pagination-v2 implementation envelope; the conditional-probe evidence model
+
+**Proposed in the pull request introducing this section; effective only on that pull request's independently reviewed merge, and carrying no
+authority while it is open.** Governance and contract only: the values below are **qualified implementation targets for offline code and tests**, not
+deployed state; nothing is deployed, launched or acquired by this section.
+
+### 13.0 The owner's decision, recorded verbatim
+
+> I accept D-21 as qualifying candidate limit `L=100000` for the accepted `tickers&table=stocks` group and the two governed actions windows. I accept the measured 32 MiB payload/read/parse ceiling, 1,024 MiB process-memory ceiling, existing 2,048 MiB task memory, existing storage, 30-second per-request timeout and 1,800-second task timeout as pagination-v2 implementation targets. These values are authorized for offline implementation and tests only; they are not deployed until the later image, infrastructure, registration and verification gates pass. O-5 and I-8 must be recompiled by the accepted planner rather than copied from indicative arithmetic.
+
+This decision preserves D-19 (`PROVIDER_REFUSED`) and D-20 (`DUPLICATE_PRIMARY_KEY`) as failed attempts, records **D-21 as `QUALIFIED_AT_L_100000` —
+the first successful overall qualification**, does not make historical run 1 buildable, does not revive the superseded run-2 specification, and does not
+authorize acquisition, S10c, M0, image publication, Terraform or AWS operations.
+
+### 13.1 D-21 — `QUALIFIED_AT_L_100000` (2026-09-18, 06:02Z)
+
+Two of at most four requests, no probe required, one attempt each, no retry; the `table=stocks` tickers group carried forward under §12.5 with its binding
+verified field by field; identity gate `IDENTITY_PROVEN` after one owner login (the first gate attempt refused on a lapsed Identity Center session and
+made no request); one accepted secret read; S3/SSM/ECS 0. Actions window 2024-09-15/2025-09-15: HTTP 200, **3,016,310 bytes, 41,437 rows**, the governed
+seven-field schema, 44 coarse repeats, **0 full-row identity duplicates, 0 canonical duplicates, 0 collisions**. Actions window 2025-09-16/2026-09-14:
+HTTP 200, **3,405,618 bytes, 46,295 rows**, 83 coarse repeats, **0 / 0 / 0**. Memory measured cleanly (self-test in a subprocess): streaming delta
+≤ 3.6 MB, parsing delta ≤ 48.9 MB (≈ 16× the body), process peak 148.1 MB; parse ≤ 0.156 s; request ≤ 0.922 s (tickers 1.375 s in D-20).
+
+### 13.2 Accepted implementation targets (qualified; not deployed)
+
+| item | accepted target |
+|---|---|
+| tickers predicate | `table=stocks` |
+| tickers limit | 100,000 |
+| actions limit | 100,000 |
+| stocks limit | existing 10,000 |
+| payload / read / parse ceiling | **32 MiB** — applies to the **complete provider response body before admission**; a larger body is **refused whole**, never truncated |
+| process-memory ceiling | 1,024 MiB (documented target; enforced through the configuration and task-definition contracts, not a fake runtime measurement) |
+| task memory | existing 2,048 MiB |
+| storage | existing |
+| per-request timeout | existing 30 s |
+| task timeout | existing 1,800 s |
+| offset data-page assembly | prohibited |
+| short-page probe | not issued |
+| exactly-full-page probe | required once |
+| data-bearing or refused required probe | fail closed |
+
+### 13.3 The conditional-probe evidence model
+
+1. **Each planned group has one data coordinate** (dataset, window or predicate, offset 0, limit `L`).
+2. **A completion probe is a bounded verification operation attached to that data coordinate — not a second buildable data page.**
+3. A probe is issued **only** when the data response contains **exactly `L` rows**.
+4. The probe contributes **no build rows**; its body is **never treated as a Bronze data payload** and is **not written** as one.
+5. Its request-shape digest, offset and limit, response SHA-256, exact byte count, row count, schema digest, parser outcome and completion outcome are
+   **retained in the group's acquisition record and in the locator entry**.
+6. **Provider-operation counts include probes actually issued.**
+7. **S3 write arithmetic is based on planned data coordinates, not optional probes**: a complete run of `N` data coordinates performs `1 + 3N + 1`
+   conditional writes.
+8. The plan carries **both** the planned data-coordinate count **and** the worst-case provider-call ceiling including one conditional probe per data
+   coordinate (`2N`); no operation may exceed either bound.
+9. For a short page the record and locator entry state that **no probe was required and why**: the observed row count, the governed limit and the
+   outcome `SHORT_PAGE_COMPLETE`.
+10. The locator validator distinguishes **probe not required**, **required probe passed**, **required probe failed** and **probe evidence missing**; the
+    last two refuse the run for building, and a `COMPLETE` locator is published only after every data group and every required probe passed.
+11. If the existing locator or record schema cannot carry this evidence without ambiguity, the implementation **stops for a contract amendment rather than
+    improvise** — the expected resolution is an explicitly versioned locator/record contract (v2) with closed parsing of both versions and no silent upgrade
+    of stored evidence (§13.5).
+
+### 13.4 Arithmetic status — `CALCULATED — PLANNER MUST RECOMPILE`
+
+Replacement run 1 appears to contain 44 stocks data coordinates, one filtered tickers data coordinate and two actions data coordinates — **47 data
+coordinates**, expected writes `1 + 3×47 + 1 = 143`, worst-case provider calls if every group required a probe **94** (the existing per-run provider
+maximum of 96 remains sufficient). O-5 appears to reduce to **10 runs, 847 data coordinates, 2,561 writes**. Every one of these values is
+**CALCULATED — PLANNER MUST RECOMPILE**: none is final until the implementation's accepted planner produces it from fixtures; O-5 and I-8 are re-recorded
+from the planner's output, never copied from this section.
+
+### 13.5 Backward compatibility and historical evidence
+
+The v2 implementation refuses historical multi-page run 1 as a build input and the superseded run-2 specification, preserves both as evidence, does not
+reinterpret v1 locators under v2, versions every changed locator, record, plan or manifest contract explicitly, parses old and new versions with closed
+outcomes, and never silently upgrades stored evidence.
+
+### 13.6 What this amendment does not do
+
+No runtime change (Part B of the same authorization is a separate offline code cycle with its own pull request), no image, Terraform, IAM, registration or
+live operation; run 1 stays historical and not buildable; run 2's specification stays superseded; runs 2–19 and S10c stay blocked; M0 not started.
+

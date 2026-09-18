@@ -1169,3 +1169,15 @@ change; D-20's tickers group may be carried into D-21 under the reuse binding of
 memory measurement. **Nothing runs by the amendment**; run 1 stays historical and not buildable; run 2's specification stays superseded; runs 2–19 and S10c
 stay blocked.
 
+### 17.3 D-21 qualified; the implementation envelope accepted (ADR-0053 §13, 2026-09-18)
+
+**D-21 → `QUALIFIED_AT_L_100000`** — the first successful overall qualification: both actions windows short pages with every canonical full-row identity
+distinct (41,437 and 46,295 rows; 0 duplicates; 0 collisions), the `table=stocks` tickers group carried forward under the §12.5 binding, clean memory
+(parse delta ≤ 48.9 MB). **The owner accepted the envelope as pagination-v2 implementation targets** (§13.2: `L` 100,000 for tickers/actions, stocks
+10,000, 32 MiB whole-body ceiling before admission — never truncation — 1,024 MiB process target, task 2,048 MiB / 30 s / 1,800 s unchanged; offset
+assembly prohibited; probe only on an exactly-full page; a failed required probe fails closed) and the conditional-probe evidence model (§13.3: one data
+coordinate per group; a probe is a bounded verification operation, never a payload; probe evidence retained in the record and locator; writes `1 + 3N + 1`
+on data coordinates; the plan carries `N` and the `2N` provider-call ceiling). **Arithmetic is `CALCULATED — PLANNER MUST RECOMPILE`** (run 1′ ≈ 47 / 143 /
+94 worst-case; O-5 ≈ 10 runs / 847 / 2,561). D-19 and D-20 stay failed attempts; run 1 historical; run 2 superseded; S10c blocked; M0 not started; nothing
+deployed.
+

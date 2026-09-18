@@ -167,7 +167,8 @@ def test_the_registers_the_owner_inputs_and_the_readiness_record_are_synchronize
         assert "ADR-0053 pagination v2 (governance):" in text, name
         assert (
             "D-19 attempt 1 PROVIDER_REFUSED" in text
-            and "D-21 third qualification PENDING" in text
+            and "D-21 round 3 QUALIFIED_AT_L_100000" in text
+            and "CALCULATED" in text
             and "D-20 round 2 DUPLICATE_PRIMARY_KEY" in text
         ), name
         assert "runtime pagination-v2 implementation ABSENT" in text, name
@@ -238,3 +239,29 @@ def test_section_11_records_the_second_decision_the_first_attempt_and_the_stocks
         encoding="utf-8"
     )
     assert "### 17.1 The first D-19 attempt and the ADR-0053" in readiness
+
+
+def test_section_13_accepts_the_envelope_as_targets_and_marks_arithmetic_calculated() -> None:
+    assert "## 13. Amendment (2026-09-18)" in ADR_TEXT
+    section = _plain(ADR_TEXT.split("## 13. Amendment (2026-09-18)", 1)[1])
+    for phrase in (
+        "I accept D-21 as qualifying candidate limit L=100000",
+        "QUALIFIED_AT_L_100000",
+        "the first successful overall qualification",
+        "32 MiB",
+        "refused whole, never truncated",
+        "1,024 MiB",
+        "not a second buildable data page",
+        "never treated as a Bronze data payload",
+        "1 + 3N + 1",
+        "one conditional probe per data coordinate (2N)",
+        "SHORT_PAGE_COMPLETE",
+        "probe evidence missing",
+        "CALCULATED",
+        "PLANNER MUST RECOMPILE",
+        "never silently upgrades stored evidence",
+        "does not make historical run 1 buildable",
+    ):
+        assert phrase in section, phrase
+    for preserved in ("PROVIDER_REFUSED", "DUPLICATE_PRIMARY_KEY"):
+        assert preserved in section
