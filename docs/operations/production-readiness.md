@@ -1212,3 +1212,33 @@ Mutation controls (`tests/unit/test_pagination_v2_mutation_controls.py`) hold ni
 their mutations. **Not deployed**: the four images, the task-definition registration, the S9 verification and any run remain
 separately gated; run 1 stays historical and not buildable; run 2's specification stays superseded; S10c stays blocked.
 
+## 18. The historical-rebinding cycle (2026-09-18) — ADR-0054 ACCEPTED on the merge of PR #135 (two narrow governance decisions); the store reconciled under the pagination-v2 registration; six fresh R-1 cells prepared; nothing launched
+
+**What the pagination-v2 registration did to the verification evidence.** The strict v2 specification parser recompiles an
+acquisition workload's plan digest, so every reservation carrying a v1 workload (run 1, one earlier acquisition-verification
+reservation and the three 2026-09-17 acquisition-verification reservations) reads `FIELD_MALFORMED` to it, and the accepted cell
+runner refused the whole store before deriving a cell; and ADR-0052 §2.3, written against re-launching a PASSED cell, also
+refused `--prepare-cell` on every R-1 cell whose bound launch is `HISTORICAL` only because the registration moved.
+
+**The owner's two decisions (recorded verbatim in ADR-0054 §1; owner-input D-22).** A supported, integrity-valid v1 reservation
+may be read solely to preserve and classify historical evidence, never as launch authority and never bypassing the v2 parser; a cell
+whose prior bound launch is runner-derived `HISTORICAL` solely because it belongs to a different registration may receive a fresh
+identity and specification, with the prior binding, launch, reservation, ledger row and receipt preserved and auditable, and with no
+current, prepared, unlaunched, malformed or otherwise non-historical binding ever replaced. **ADR-0054 was PROPOSED and carried no
+authority while its pull request was open — true then, not rewritten; PR #135 merged 2026-09-18T17:35:07Z (merge commit `8be462b9…`,
+approved head `bbaa419d…`, merge tree identical to the reviewed head tree), so it is ACCEPTED / IN FORCE as those two decisions and
+their amendments (ADR-0052 §2.3, ADR-0045 §6, ADR-0046 §2) only.** The merged tooling: an evidence-only `HistoricalReservation` read
+beside the unchanged strict read (every execution path of the launch tool still reads strictly); `HISTORICAL` derived from a
+historical chain under the one accepted binding rule, never `PASSED`; `--prepare-cell` proving, before any write, that the bound
+identity was launched, its chain is integrity-valid, the runner derives it `HISTORICAL`, the registration differs and the replacement
+identity is fresh everywhere — then preserving the previous cells document owner-only beside the ledger and recording a closed,
+digest-bound `supersedes` link. **Deployment impact: none** — no task entry imports the changed modules; the deployed images, task
+definitions, policies and the registration are unchanged.
+
+**What was then done under the prior authorization, and what was not.** The real store reconciled read-only under the registration
+now in force: nine reservations (five historical v1, four current), zero refused, R-3 current, every R-1/R-2 launch cell
+`HISTORICAL`, the permission cells `HISTORICAL` (R-8 blocked on D-1); six fresh R-1 cells prepared with fresh `verify-` identities
+over the revision-3 verification targets (acquisition over the run-1′ slice, build over the empty run set), each supersession-linked
+to its preserved 2026-09-17 binding. **Nothing launched**: every launch, receipt, verdict and the R-2 corroboration re-preparation
+remain separately gated on their own written authorizations (D-15 per launch), and the historical cells never become a current PASS.
+

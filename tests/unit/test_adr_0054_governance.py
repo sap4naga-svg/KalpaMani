@@ -26,6 +26,12 @@ ADR_TEXT: Final = ADR.read_text(encoding="utf-8")
 PROPOSED: Final = (
     "PROPOSED — NOT IN FORCE. No authority until the pull request introducing this ADR is"
 )
+MERGE_COMMIT: Final = "8be462b953c33a6953429ee9edc321f843ab6ae1"
+ACCEPTED_CLAUSE: Final = (
+    "ADR-0054 is therefore ACCEPTED / IN FORCE exactly as the clause above states"
+)
+SINCE_ACCEPTED: Final = "Since accepted: ADR-0054 is ACCEPTED / IN FORCE on the merge of PR #135"
+APPROVED_HEAD: Final = "bbaa419dea40f53040f2d228d25fc1eb631b713c"
 TWELVE_DIGITS: Final = re.compile(r"\b[0-9]{12}\b")
 DECISION_ONE: Final = (
     "A supported, integrity-valid v1 reservation may be read by pagination-v2 workstation tooling "
@@ -66,7 +72,10 @@ ADR_PLAIN: Final = _plain(ADR_TEXT)
 
 def test_the_adr_exists_is_proposed_and_authorizes_nothing() -> None:
     assert [p.name for p in sorted(DECISIONS.glob("ADR-0054-*.md"))] == [ADR.name]
-    assert PROPOSED in ADR_TEXT
+    assert PROPOSED in ADR_TEXT  # the historical clause stays
+    assert ACCEPTED_CLAUSE in ADR_PLAIN
+    assert MERGE_COMMIT in ADR_TEXT and APPROVED_HEAD in ADR_TEXT
+    assert "acceptance authorizes only the supported-v1 historical read" in ADR_PLAIN
     assert "Acceptance authorizes no execution" in ADR_PLAIN
     assert "Acceptance authorizes nothing that runs" in ADR_PLAIN
     assert "Mocked results are not AWS verification" in ADR_PLAIN
@@ -142,6 +151,7 @@ def test_every_amended_adr_carries_a_dated_section_naming_adr_0054() -> None:
         assert "ADR-0054" in tail, name
         assert PROPOSED_SECTION in plain, name
         assert "preserved as accepted and is not rewritten" in plain, name
+        assert SINCE_ACCEPTED in plain, name
         # The historical text above is untouched: the heading appears once, at the end.
         assert text.count(heading) == 1 and text.rstrip().endswith(tail.rstrip()), name
     adr_0052 = _plain((DECISIONS / next(iter(AMENDED))).read_text(encoding="utf-8"))
@@ -150,8 +160,16 @@ def test_every_amended_adr_carries_a_dated_section_naming_adr_0054() -> None:
 
 
 def test_the_registers_and_the_audit_registry_are_synchronized() -> None:
-    assert "ADR-0054" in audit.PROPOSED_ADR_STATUS
-    assert "ADR-0054" not in dict(audit.MERGED_ADR_STATUS)
+    assert "ADR-0054" not in audit.PROPOSED_ADR_STATUS
+    assert dict(audit.MERGED_ADR_STATUS)["ADR-0054"] == "PR #135 merged"
+    owner_inputs = (REPO_ROOT / "docs" / "operations" / "production-owner-inputs.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| D-22 |" in owner_inputs and DECISION_ONE in _plain(owner_inputs)
+    readiness = (REPO_ROOT / "docs" / "operations" / "production-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## 18. The historical-rebinding cycle (2026-09-18)" in readiness
     documents = {
         name: (REPO_ROOT / name).read_text(encoding="utf-8") for name in ("CLAUDE.md", "README.md")
     }
@@ -159,8 +177,9 @@ def test_the_registers_and_the_audit_registry_are_synchronized() -> None:
     for name, text in documents.items():
         rows = [line for line in text.splitlines() if "[ADR-0054](docs/decisions/" in line]
         assert len(rows) == 1, name
-        assert audit.PROPOSED_ROW_MARK in rows[0], name
-        assert "PR #" not in rows[0].split("|")[2], name
+        assert audit.PROPOSED_ROW_MARK not in rows[0], name
+        assert "ACCEPTED / IN FORCE" in rows[0] and "PR #135 merged" in rows[0], name
+        assert MERGE_COMMIT in rows[0] and APPROVED_HEAD in rows[0], name
         assert "Deployment impact: none" in rows[0], name
         assert "never becomes a current `PASSED`" in rows[0], name
         assert "ADR-0054 historical v1 reservations + registration-historical rebinding:" in text

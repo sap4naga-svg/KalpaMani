@@ -856,6 +856,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # one completion probe per group, multi-page data refused on evidence; governance and
     # contract only; every limit and ceiling a candidate until the D-19 qualification cycle.
     ("ADR-0053", "PR #129 merged"),
+    # ADR-0054 merged as PR #135 on 2026-09-18: supported v1 reservations read as evidence only;
+    # the registration-historical rebinding exception to ADR-0052 s.2.3 under preservation.
+    ("ADR-0054", "PR #135 merged"),
 )
 
 #: ADRs that are PROPOSED -- on ``main`` as documents, with register rows, and with no
@@ -867,10 +870,9 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
 PROPOSED_ADR_STATUS: Final[tuple[str, ...]] = (
     # ADR-0053 was listed here from its proposal (2026-09-18) until PR #129 merged the same
     # day; it moved to MERGED_ADR_STATUS in the activation synchronization.
-    # ADR-0054 proposed 2026-09-18: historical v1 reservations readable as evidence only, and
-    # the registration-historical rebinding exception to ADR-0052 s.2.3; moves to
-    # MERGED_ADR_STATUS in its activation synchronization.
-    "ADR-0054",
+    # ADR-0054 was listed here from its proposal until PR #135 merged the same day (2026-09-18);
+    # it moved to MERGED_ADR_STATUS in its activation synchronization. Empty until the next
+    # proposed decision.
 )
 
 #: The words a proposed ADR's register row must carry.
