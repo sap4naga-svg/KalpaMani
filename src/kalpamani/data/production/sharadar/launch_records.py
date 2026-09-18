@@ -127,7 +127,7 @@ EVIDENCE_CONTRACT_ID: Final = "kalpamani-launch-evidence/v2"
 SUPERSEDED_EVIDENCE_CONTRACT_IDS: Final[frozenset[str]] = frozenset(
     {"kalpamani-launch-evidence/v1"}
 )
-#: The closed field set of one retained poll diagnostic (outcomes.PollDiagnostic.document)
+#: The closed field set of one retained poll diagnostic (poll_evidence.PollDiagnostic.document)
 #: and the grammars its two bounded strings are held to. A document carrying any other
 #: key, an unvalidated string or a non-number is refused before it is written.
 EVIDENCE_DIAGNOSTIC_FIELDS: Final[frozenset[str]] = frozenset(
