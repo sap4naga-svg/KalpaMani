@@ -1293,11 +1293,27 @@ class TestCompletion:
             task_started=True,
             exit_codes=[0],
             recorded_at=NOW,
+            diagnostics=[
+                {
+                    "phase": "IMAGE",
+                    "operation": "DESCRIBE_TASKS",
+                    "failure": "UNKNOWN",
+                    "exception_class": "ConnectTimeoutError",
+                    "service_code": None,
+                    "attempt": 4,
+                    "elapsed_ms": 16200,
+                    "poll_class": "TRANSPORT",
+                    "disposition": "RE_POLLED",
+                }
+            ],
+            stop_outcome="ALREADY_TERMINAL",
         )
         text = encode(evidence).decode("utf-8")
         for canary in CANARIES:
             assert canary not in text
         assert RUN_ID not in text and TASK_ARN not in text
+        assert evidence["contract_id"] == lr.EVIDENCE_CONTRACT_ID == "kalpamani-launch-evidence/v2"
+        assert set(evidence["diagnostics"][0]) == lr.EVIDENCE_DIAGNOSTIC_FIELDS
         with pytest.raises(TypeError):
             lr.evidence_document(
                 actor=ACQ,
@@ -1309,6 +1325,76 @@ class TestCompletion:
                 task_started=True,
                 exit_codes=[0],
                 recorded_at=NOW,
+                diagnostics=[],
+                stop_outcome="NOT_APPLICABLE",
+            )
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda d: d.__setitem__("message", "synthetic backend message"),
+            lambda d: d.__setitem__("exception_class", "arn:aws:ecs::000000000000:task/x"),
+            lambda d: d.__setitem__("service_code", "Throttling; request id 0123456789ab"),
+            lambda d: d.__setitem__("phase", "CLEANUP"),
+            lambda d: d.__setitem__("poll_class", "RETRY"),
+            lambda d: d.__setitem__("attempt", 0),
+            lambda d: d.__setitem__("elapsed_ms", 16.2),
+            lambda d: d.pop("disposition"),
+        ],
+        ids=[
+            "extra-key",
+            "arn-as-class",
+            "free-text-code",
+            "phase",
+            "class",
+            "attempt",
+            "elapsed",
+            "missing",
+        ],
+    )
+    def test_a_diagnostic_outside_its_closed_shape_never_reaches_the_document(
+        self, mutate: Any
+    ) -> None:
+        """ADR-0045 s.15: the evidence retains bounded, sanitized fields and nothing else."""
+        entry: dict[str, Any] = {
+            "phase": "PLACEMENT",
+            "operation": "DESCRIBE_TASKS",
+            "failure": "THROTTLED",
+            "exception_class": "ClientError",
+            "service_code": "ThrottlingException",
+            "attempt": 2,
+            "elapsed_ms": 5001,
+            "poll_class": "THROTTLED",
+            "disposition": "RE_POLLED",
+        }
+        mutate(entry)
+        with pytest.raises(TypeError):
+            lr.evidence_document(
+                actor=ACQ,
+                kind=lr.LaunchKind.PRODUCTION,
+                outcome="REFUSED_PLACEMENT_UNVERIFIED",
+                counts={"run_task": 1},
+                incident=None,
+                cleanup_failures=[],
+                task_started=True,
+                exit_codes=[],
+                recorded_at=NOW,
+                diagnostics=[entry],
+                stop_outcome="STOPPED",
+            )
+        with pytest.raises(TypeError):
+            lr.evidence_document(
+                actor=ACQ,
+                kind=lr.LaunchKind.PRODUCTION,
+                outcome="REFUSED_PLACEMENT_UNVERIFIED",
+                counts={"run_task": 1},
+                incident=None,
+                cleanup_failures=[],
+                task_started=True,
+                exit_codes=[],
+                recorded_at=NOW,
+                diagnostics=[],
+                stop_outcome="stopped",
             )
 
     def test_the_constants_the_vocabulary_holds(self) -> None:

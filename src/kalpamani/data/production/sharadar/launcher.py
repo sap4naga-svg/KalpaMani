@@ -21,7 +21,22 @@ What the sequence guarantees, each with a test behind it:
 - **bounded observation** until the task's terminal state;
 - **prescribed cleanup** -- one ``DeleteParameter`` on the release under the
   launcher profile, one on the input under the human profile -- whose failures are
-  reported **beside** the primary outcome, never in place of it.
+  reported **beside** the primary outcome, never in place of it;
+- **bounded read-only re-polling** (ADR-0045 s.15) -- a ``DescribeTasks`` that fails
+  inside the placement, image-digest or observation loop is classified (throttled,
+  transient, transport, unknown, terminal) and, for the first four classes, repeated
+  after the accepted interval **inside the unchanged ceiling** -- at most three
+  consecutive classified failures, at most one unknown -- never a second
+  ``RunTask``, never a verified state derived from an exception; a terminal class,
+  the bound or the ceiling refuses exactly as before, and each failed poll is
+  retained as a bounded, sanitized diagnostic (operation, exception class, validated
+  service code, attempt, elapsed milliseconds, classification, disposition);
+- **the post-start stop invariant** (ADR-0045 s.15) -- once ``RunTask`` accepted a
+  task, every terminal refusal before the task's own terminal state issues one
+  best-effort ``StopTask`` on **this task only** (unless the last valid description
+  already reported it terminal), records whether the stop succeeded, failed or was
+  unnecessary, and then runs the prescribed cleanup; a failed stop is a cleanup
+  failure beside the refusal, never in place of it.
 
 **Every count reported is the count of requests the adapters actually issued**,
 read from the adapters' own counters at the end, never planned and never
@@ -68,6 +83,14 @@ from kalpamani.data.production.sharadar.parameters import (
     ParameterFailure,
     SsmParameterAdapter,
 )
+from kalpamani.data.production.sharadar.poll_evidence import (
+    PollClass,
+    PollDiagnostic,
+    PollDisposition,
+    PollPhase,
+    StopOutcome,
+    poll_class_of,
+)
 from kalpamani.data.production.sharadar.release import (
     ReleaseError,
     ReleaseMode,
@@ -94,6 +117,13 @@ OBSERVE_CEILING_SECONDS: Final = 3600.0
 #: reaches RUNNING inside it is still holding when the check arrives.
 HELD_READY_POLL_INTERVAL_SECONDS: Final = 5.0
 HELD_READY_CEILING_SECONDS: Final = 120.0
+#: The read-only re-poll bounds (ADR-0045 s.15). A failed ``DescribeTasks`` of a
+#: classified class -- throttled, transient, transport -- is repeated after the phase's
+#: accepted interval at most this many times in a row; an unclassified (``UNKNOWN``)
+#: failure at most once. Both sit inside the phase's unchanged ceiling, which is never
+#: extended. Lowerable, never raisable.
+MAX_CONSECUTIVE_POLL_FAILURES: Final = 3
+MAX_UNKNOWN_POLL_FAILURES: Final = 1
 
 #: The lifecycle ``Expiration`` each parameter rides with: input 24 h, release 1 h.
 INPUT_EXPIRATION: Final = MAX_INPUT_VALIDITY
@@ -102,6 +132,7 @@ RELEASE_EXPIRATION: Final = timedelta(hours=1)
 #: The closed ``StopTask`` reason tokens. No identifier is ever part of one.
 STOP_REASON_MISPLACED: Final = "kalpamani-placement-mismatch"
 STOP_REASON_RELEASE_EXISTS: Final = "kalpamani-stale-release"
+STOP_REASON_REFUSED: Final = "kalpamani-launch-refused"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -213,11 +244,26 @@ class LaunchReport:
     #: description the check was admitted on -- present exactly when ``INVOKED``.
     held_check: HeldCheckOutcome = HeldCheckOutcome.NOT_APPLICABLE
     held_task: HeldTask | None = None
+    #: Every failed read-only poll of this sequence (ADR-0045 s.15), in order: bounded,
+    #: sanitized entries and nothing else. Empty when no poll failed.
+    diagnostics: tuple[PollDiagnostic, ...] = ()
+    #: What the post-start stop invariant established (ADR-0045 s.15): ``NOT_APPLICABLE``
+    #: exactly when no task was accepted; otherwise stopped, stop failed, or the task
+    #: was already terminal.
+    stop_outcome: StopOutcome = StopOutcome.NOT_APPLICABLE
 
     def __post_init__(self) -> None:
         """Closed members and integers only; a handle exactly when a task started."""
         if type(self.outcome) is not LaunchOutcome:
             raise TypeError("outcome must be an exact LaunchOutcome member")
+        if type(self.stop_outcome) is not StopOutcome:
+            raise TypeError("stop_outcome must be an exact StopOutcome member")
+        if type(self.diagnostics) is not tuple or any(
+            type(entry) is not PollDiagnostic for entry in self.diagnostics
+        ):
+            raise TypeError("diagnostics must be a tuple of exact PollDiagnostic values")
+        if (self.stop_outcome is StopOutcome.NOT_APPLICABLE) != (self.handle is None):
+            raise ValueError("a stop outcome is recorded exactly when a task was accepted")
         if type(self.release_mode) is not ReleaseMode:
             raise TypeError("release_mode must be an exact ReleaseMode member")
         if type(self.held_check) is not HeldCheckOutcome:
@@ -270,7 +316,8 @@ class LaunchReport:
         """Outcome and counts of failures. **Never a handle.**"""
         return (
             f"LaunchReport(outcome={self.outcome.value!r}, "
-            f"cleanup_failures={len(self.cleanup_failures)})"
+            f"cleanup_failures={len(self.cleanup_failures)}, "
+            f"diagnostics={len(self.diagnostics)}, stop_outcome={self.stop_outcome.value!r})"
         )
 
 
@@ -487,6 +534,10 @@ def launch_authorized_run(
     released_interface: str | None = None
     released_subnet: str | None = None
     released_groups: tuple[str, ...] | None = None
+    diagnostics: list[PollDiagnostic] = []
+    stop_outcome = StopOutcome.NOT_APPLICABLE
+    stop_issued = False
+    last_task: TaskDescription | None = None
 
     def prove(path: IdentityPath) -> None:
         nonlocal identity_calls
@@ -501,14 +552,87 @@ def launch_authorized_run(
         return max(0.0, monotonic() - start)
 
     def stop_own_task(reason: str) -> None:
-        """``StopTask`` on the task this sequence started, and on no other."""
+        """``StopTask`` on the task this sequence started, and on no other -- once.
+
+        The outcome is recorded beside the launch outcome: a refused stop is a cleanup
+        failure for the ``STOP_TASK`` stage and never replaces the refusal it follows.
+        """
+        nonlocal stop_issued, stop_outcome
         assert handle is not None
+        if stop_issued:
+            return
+        stop_issued = True
         try:
             adapters.ecs.stop_task(handle.task_arn, reason=reason)
         except ComputeError as error:
+            stop_outcome = StopOutcome.STOP_FAILED
             cleanup.append(
                 CleanupFailure(stage=CleanupStage.STOP_TASK, failure=error.failure.value)
             )
+            return
+        stop_outcome = StopOutcome.STOPPED
+
+    def describe_polled(
+        phase: PollPhase,
+        started: float,
+        interval: float,
+        ceiling: float,
+        refusal: LaunchOutcome,
+        state: dict[str, int | bool],
+    ) -> TaskDescription:
+        """One valid ``DescribeTasks`` of this task, through bounded read-only re-polling.
+
+        A refusal from the adapter is classified (:func:`poll_class_of`) and retained as
+        a sanitized diagnostic. A throttled, transient or transport failure is repeated
+        after ``interval`` at most :data:`MAX_CONSECUTIVE_POLL_FAILURES` times in a row,
+        an unknown failure at most :data:`MAX_UNKNOWN_POLL_FAILURES` -- and only while
+        another interval still fits inside ``ceiling``, measured from the phase's own
+        start, which is never extended. A terminal class, the bound or the ceiling
+        raises ``refusal``. **Only a description the adapter returned is ever returned**:
+        no exception is read as a state, and nothing here issues a ``RunTask``.
+        """
+        nonlocal last_task
+        while True:
+            state["attempts"] = int(state["attempts"]) + 1
+            try:
+                task = adapters.ecs.describe_task(task_arn)
+            except ComputeError as error:
+                poll_class = poll_class_of(error.failure, error.exception_class)
+                state["failures"] = int(state["failures"]) + 1
+                if poll_class is PollClass.UNKNOWN:
+                    state["unknown"] = True
+                bound = (
+                    MAX_UNKNOWN_POLL_FAILURES if state["unknown"] else MAX_CONSECUTIVE_POLL_FAILURES
+                )
+                if poll_class is PollClass.TERMINAL:
+                    disposition = PollDisposition.REFUSED_CLASS
+                elif int(state["failures"]) > bound:
+                    disposition = PollDisposition.REFUSED_BOUND
+                elif elapsed_since(started) + interval > ceiling:
+                    disposition = PollDisposition.REFUSED_DEADLINE
+                else:
+                    disposition = PollDisposition.RE_POLLED
+                diagnostics.append(
+                    PollDiagnostic(
+                        phase=phase,
+                        operation=error.operation,
+                        failure=error.failure,
+                        exception_class=error.exception_class,
+                        service_code=error.service_code,
+                        attempt=int(state["attempts"]),
+                        elapsed_ms=round(elapsed_since(started) * 1000.0),
+                        poll_class=poll_class,
+                        disposition=disposition,
+                    )
+                )
+                if disposition is not PollDisposition.RE_POLLED:
+                    raise _AbortedError(refusal) from None
+                sleep(interval)
+                continue
+            state["failures"] = 0
+            state["unknown"] = False
+            last_task = task
+            return task
 
     def cleanup_stage(stage: CleanupStage, path: IdentityPath, delete: Callable[[], None]) -> None:
         """One prescribed cleanup: its own identity proof, then one delete.
@@ -546,7 +670,7 @@ def launch_authorized_run(
                 lambda: adapters.human_parameters.delete_parameter(constants.input_parameter),
             )
 
-    outcome: LaunchOutcome
+    outcome: LaunchOutcome | None = None
     try:
         # Step 0: the human profile materializes the input, create-only.
         prove(IdentityPath.HUMAN)
@@ -574,12 +698,17 @@ def launch_authorized_run(
 
         # Step 1a: placement, as soon as the attachment reports ATTACHED.
         started = monotonic()
+        poll_state: dict[str, int | bool] = {"attempts": 0, "failures": 0, "unknown": False}
         task: TaskDescription | None = None
         while True:
-            try:
-                task = adapters.ecs.describe_task(task_arn)
-            except ComputeError:
-                raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED) from None
+            task = describe_polled(
+                PollPhase.PLACEMENT,
+                started,
+                PLACEMENT_POLL_INTERVAL_SECONDS,
+                PLACEMENT_CEILING_SECONDS,
+                LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED,
+                poll_state,
+            )
             attached = task.attachment is not None and task.attachment.status == "ATTACHED"
             if attached or task.stopped:
                 break
@@ -615,10 +744,14 @@ def launch_authorized_run(
                 stop_own_task(STOP_REASON_MISPLACED)
                 raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED)
             sleep(PLACEMENT_POLL_INTERVAL_SECONDS)
-            try:
-                task = adapters.ecs.describe_task(task_arn)
-            except ComputeError:
-                raise _AbortedError(LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED) from None
+            task = describe_polled(
+                PollPhase.IMAGE,
+                started,
+                PLACEMENT_POLL_INTERVAL_SECONDS,
+                PLACEMENT_CEILING_SECONDS,
+                LaunchOutcome.REFUSED_PLACEMENT_UNVERIFIED,
+                poll_state,
+            )
         found = _image_incident(compiled, task)
         if found is not None:
             stop_own_task(STOP_REASON_MISPLACED)
@@ -733,11 +866,16 @@ def launch_authorized_run(
 
         # Step 9, observed: wait for the terminal state, bounded.
         observe_started = monotonic()
+        observe_state: dict[str, int | bool] = {"attempts": 0, "failures": 0, "unknown": False}
         while True:
-            try:
-                task = adapters.ecs.describe_task(task_arn)
-            except ComputeError:
-                raise _AbortedError(LaunchOutcome.OBSERVATION_FAILED) from None
+            task = describe_polled(
+                PollPhase.OBSERVATION,
+                observe_started,
+                OBSERVE_POLL_INTERVAL_SECONDS,
+                OBSERVE_CEILING_SECONDS,
+                LaunchOutcome.OBSERVATION_FAILED,
+                observe_state,
+            )
             if task.stopped:
                 exit_codes = task.exit_codes
                 break
@@ -752,10 +890,24 @@ def launch_authorized_run(
         outcome = aborted.outcome
         incident = aborted.incident
     finally:
+        # The post-start stop invariant (ADR-0045 s.15): a task ``RunTask`` accepted is
+        # stopped -- once, best effort, this task only -- on every terminal refusal
+        # before its own terminal state, and on an exception nothing above classified,
+        # unless the last valid description already reported it terminal. The refusal
+        # is preserved separately: a stop that succeeds turns nothing into a success.
+        if handle is not None:
+            if outcome is LaunchOutcome.TASK_TERMINAL or (
+                last_task is not None and last_task.stopped
+            ):
+                if not stop_issued:
+                    stop_outcome = StopOutcome.ALREADY_TERMINAL
+            elif not stop_issued:
+                stop_own_task(STOP_REASON_REFUSED)
         # Step 10: prescribed cleanup, whatever stopped the sequence -- a closed
         # outcome or an exception nothing above classified. Each stage records its
         # own failure; the outcome, when there is one, stands.
         prescribed_cleanup()
+    assert outcome is not None
 
     after = _AdapterCounts.of(adapters)
     counts = OperationCounts(
@@ -784,6 +936,8 @@ def launch_authorized_run(
         release_mode=release_mode,
         held_check=held_check,
         held_task=held_task,
+        diagnostics=tuple(diagnostics),
+        stop_outcome=stop_outcome,
     )
 
 
@@ -791,12 +945,15 @@ __all__ = [
     "HELD_READY_CEILING_SECONDS",
     "HELD_READY_POLL_INTERVAL_SECONDS",
     "INPUT_EXPIRATION",
+    "MAX_CONSECUTIVE_POLL_FAILURES",
+    "MAX_UNKNOWN_POLL_FAILURES",
     "OBSERVE_CEILING_SECONDS",
     "OBSERVE_POLL_INTERVAL_SECONDS",
     "PLACEMENT_CEILING_SECONDS",
     "PLACEMENT_POLL_INTERVAL_SECONDS",
     "RELEASE_EXPIRATION",
     "STOP_REASON_MISPLACED",
+    "STOP_REASON_REFUSED",
     "STOP_REASON_RELEASE_EXISTS",
     "HeldTask",
     "LaunchAdapters",

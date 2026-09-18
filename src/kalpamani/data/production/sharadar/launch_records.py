@@ -120,7 +120,29 @@ from kalpamani.data.production.sharadar.vocabulary import ProductionActor, const
 LEDGER_CONTRACT_ID: Final = "kalpamani-owner-ledger/v1"
 LAUNCH_INPUTS_CONTRACT_ID: Final = "kalpamani-launch-inputs/v1"
 AUTHORIZATION_CONTRACT_ID: Final = "kalpamani-launch-authorization/v1"
-EVIDENCE_CONTRACT_ID: Final = "kalpamani-launch-evidence/v1"
+#: The evidence document's contract. v2 (ADR-0045 s.15) adds the sanitized poll
+#: diagnostics and the post-start stop outcome beside v1's tokens and counts; every v1
+#: document written before it is preserved as written and never re-read by the tool.
+EVIDENCE_CONTRACT_ID: Final = "kalpamani-launch-evidence/v2"
+SUPERSEDED_EVIDENCE_CONTRACT_IDS: Final[frozenset[str]] = frozenset(
+    {"kalpamani-launch-evidence/v1"}
+)
+#: The closed field set of one retained poll diagnostic (outcomes.PollDiagnostic.document)
+#: and the grammars its two bounded strings are held to. A document carrying any other
+#: key, an unvalidated string or a non-number is refused before it is written.
+EVIDENCE_DIAGNOSTIC_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "phase",
+        "operation",
+        "failure",
+        "exception_class",
+        "service_code",
+        "attempt",
+        "elapsed_ms",
+        "poll_class",
+        "disposition",
+    }
+)
 RECORD_SCHEMA_VERSION: Final = 1
 #: An owner document is small; a ceiling keeps a mistaken file from being parsed at all.
 MAX_RECORD_BYTES: Final = 256 * 1024
@@ -1728,6 +1750,46 @@ def parse_authorization(
 # ---------------------------------------------------------------------------
 
 
+def _admitted_diagnostic(entry: object) -> dict[str, Any]:
+    """One poll diagnostic held to its closed field set and grammars, or refused."""
+    from kalpamani.data.production.sharadar.compute import (
+        EXCEPTION_CLASS_RE,
+        SERVICE_CODE_RE,
+        ComputeFailure,
+        ComputeOperation,
+    )
+    from kalpamani.data.production.sharadar.poll_evidence import (
+        PollClass,
+        PollDisposition,
+        PollPhase,
+    )
+
+    if type(entry) is not dict or set(entry) != EVIDENCE_DIAGNOSTIC_FIELDS:
+        raise TypeError("a diagnostic carries exactly the closed field set")
+    members: dict[str, type[StrEnum]] = {
+        "phase": PollPhase,
+        "operation": ComputeOperation,
+        "failure": ComputeFailure,
+        "poll_class": PollClass,
+        "disposition": PollDisposition,
+    }
+    for name, vocabulary in members.items():
+        if type(entry[name]) is not str or entry[name] not in {m.value for m in vocabulary}:
+            raise TypeError(f"{name} must be a closed member")
+    for name, grammar in (
+        ("exception_class", EXCEPTION_CLASS_RE),
+        ("service_code", SERVICE_CODE_RE),
+    ):
+        value = entry[name]
+        if value is not None and (type(value) is not str or not grammar.fullmatch(value)):
+            raise TypeError(f"{name} must match its grammar or be None")
+    if type(entry["attempt"]) is not int or entry["attempt"] < 1:
+        raise TypeError("attempt must be a positive int")
+    if type(entry["elapsed_ms"]) is not int or entry["elapsed_ms"] < 0:
+        raise TypeError("elapsed_ms must be a non-negative int")
+    return {name: entry[name] for name in sorted(EVIDENCE_DIAGNOSTIC_FIELDS)}
+
+
 def evidence_document(
     *,
     actor: ProductionActor,
@@ -1739,10 +1801,22 @@ def evidence_document(
     task_started: bool,
     exit_codes: list[int | None],
     recorded_at: datetime,
+    diagnostics: list[dict[str, Any]],
+    stop_outcome: str,
 ) -> dict[str, Any]:
-    """The sanitized launch evidence: tokens, counts, exit codes. No ARN, no identifier."""
+    """The sanitized launch evidence: tokens, counts, exit codes, bounded diagnostics.
+
+    No ARN, no identifier, no message: every diagnostic entry is held to the closed
+    field set and the two grammars before the document exists (ADR-0045 s.15).
+    """
+    from kalpamani.data.production.sharadar.poll_evidence import StopOutcome
+
     if any(type(v) is not int or v < 0 for v in counts.values()):
         raise TypeError("counts must be non-negative integers")
+    if type(stop_outcome) is not str or stop_outcome not in {m.value for m in StopOutcome}:
+        raise TypeError("stop_outcome must be a closed StopOutcome member")
+    if type(diagnostics) is not list:
+        raise TypeError("diagnostics must be a list")
     return {
         "schema_version": RECORD_SCHEMA_VERSION,
         "contract_id": EVIDENCE_CONTRACT_ID,
@@ -1755,6 +1829,8 @@ def evidence_document(
         "task_started": task_started,
         "exit_codes": list(exit_codes),
         "recorded_at": recorded_at.isoformat(),
+        "diagnostics": [_admitted_diagnostic(entry) for entry in diagnostics],
+        "stop_outcome": stop_outcome,
     }
 
 
@@ -2191,6 +2267,7 @@ def complete_ledger_row(
 __all__ = [
     "AUTHORIZATION_CONTRACT_ID",
     "EVIDENCE_CONTRACT_ID",
+    "EVIDENCE_DIAGNOSTIC_FIELDS",
     "LAUNCH_INPUTS_CONTRACT_ID",
     "LAUNCH_RECORD_CONTRACT_ID",
     "LEDGER_CONTRACT_ID",
@@ -2200,6 +2277,7 @@ __all__ = [
     "PROBE_STARTED_BY_PREFIX",
     "RECORD_SCHEMA_VERSION",
     "SPECIFICATION_CONTRACT_ID",
+    "SUPERSEDED_EVIDENCE_CONTRACT_IDS",
     "SUPERSEDED_WORKLOAD_CONTRACT_ID",
     "TASK_DEFINITION_INTENTIONAL_DIFFERENCES",
     "TASK_DEFINITION_SHARED_FIELDS",

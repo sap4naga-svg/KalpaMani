@@ -1267,6 +1267,8 @@ def _execute_probe(
         task_started=report.task_started,
         exit_codes=list(report.task_exit_codes),
         recorded_at=recorded_at,
+        diagnostics=[entry.document() for entry in report.diagnostics],
+        stop_outcome=report.stop_outcome.value,
     )
     try:
         with admitted.store.locked(now=now):
