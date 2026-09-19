@@ -494,7 +494,7 @@ def bind_run_locators(
 ) -> dict[str, str]:
     """The SHA-256 of every named run's admitted locator, each held to its ledger row first.
 
-    The producer half of the version-2 binding (ADR-0055 §2.2): for every run identity,
+    The producer half of the version-2 binding (ADR-0055 §2.3): for every run identity,
     in order, the preserved locator bytes the owner supplies are held to the run's own
     ledger row through the accepted validator -- identity, slice, plan digest, every
     entry against the compiled plan, counts, completeness -- and only a locator that
@@ -548,7 +548,7 @@ def materialize_build_input(
     one run; every run named -- for either kind -- must be a buildable row, and
     ``locator_digests`` (from :func:`bind_run_locators`) must carry exactly one SHA-256
     for each of them. The canonical bytes are held to the advanced-tier ceiling here,
-    before the caller can write them anywhere (ADR-0055 §2.4): ``INPUT_TOO_LARGE``.
+    before the caller can write them anywhere (ADR-0055 §2.5): ``INPUT_TOO_LARGE``.
     """
     admitted = admit_identity(ledger, identity, kind=kind)
     if type(run_identities) is not list:

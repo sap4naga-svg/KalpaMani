@@ -616,7 +616,7 @@ def validate_run_locator(
 
 
 def ledger_row_of_locator(document: object, *, run_id: str) -> LedgerRow:
-    """The ledger-row view a **digest-bound** locator carries of itself (ADR-0055 §2.3).
+    """The ledger-row view a **digest-bound** locator carries of itself (ADR-0055 §2.2).
 
     A version-2 build input binds a run by its identity and the SHA-256 of the locator
     the owner admitted; the slice, plan digest, mode and interval version 1 repeated
@@ -659,7 +659,7 @@ def ledger_row_of_locator(document: object, *, run_id: str) -> LedgerRow:
 def validate_bound_run_locator(
     raw: object, *, run_id: str, expected_sha256: str
 ) -> ValidatedRunLocator:
-    """The digest-bound read of one run locator (ADR-0055 §2.3). **Reads nothing.**
+    """The digest-bound read of one run locator (ADR-0055 §2.4). **Reads nothing.**
 
     In this order, and nothing before the first passes: the bytes hash to
     ``expected_sha256`` (``LOCATOR_DIGEST_MISMATCH`` otherwise -- the content is not
@@ -786,7 +786,7 @@ class ProductionLocatorReader:
     def read_bound_run_locator(self, *, run_id: str, expected_sha256: str) -> ValidatedRunLocator:
         """Retrieve one run locator by name and admit it only if its bytes hash to the binding.
 
-        The version-2 build input's read (ADR-0055 §2.3): the key from the identity through
+        The version-2 build input's read (ADR-0055 §2.4): the key from the identity through
         the one accepted builder, the body bounded while reading, the digest compared
         before the document is decoded, then :func:`validate_bound_run_locator`.
         """

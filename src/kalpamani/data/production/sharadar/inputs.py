@@ -629,7 +629,7 @@ class BuildInput:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HistoricalBuildInputV1:
-    """A retained version-1 build input, read as **evidence** (ADR-0055 §2.5).
+    """A retained version-1 build input, read as **evidence** (ADR-0055 §2.7).
 
     A distinct type on purpose: nothing that admits a :class:`BuildInput` accepts one,
     so a v1 document can be parsed for the historical record and can never enter a
@@ -714,7 +714,7 @@ def parse_historical_build_input_v1(document: object, *, now: datetime) -> Histo
     The version-1 rules, exactly as they were accepted (ADR-0036 §2.6): the whole
     ledger row per run, the ledger digest over the rows as delivered, at most 32 runs, a
     production input naming at least one. The result is a :class:`HistoricalBuildInputV1`
-    that no task, launch specification or materialization accepts (ADR-0055 §2.5). The
+    that no task, launch specification or materialization accepts (ADR-0055 §2.7). The
     validity window is checked at ``now`` like any other instant-bound document; a
     reader of a retained document passes the instant it was issued at.
 

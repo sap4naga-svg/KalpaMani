@@ -447,7 +447,7 @@ def _store(arguments: LaunchArguments, root: Path) -> Any:
 
 
 #: Where the owner's preserved run locators sit: beside the ledger, one file per run
-#: identity, exactly as the retrieval procedure preserved them (ADR-0055 §2.2).
+#: identity, exactly as the retrieval procedure preserved them (ADR-0055 §2.3).
 LOCATORS_DIRECTORY: Final = "locators"
 LOCATOR_FILE_TEMPLATE: Final = "run-locator-{identity}.json"
 
@@ -485,7 +485,7 @@ def prepare_launch(
     """Parse every record, build the specification, materialize the input, compile. **Offline.**
 
     Raises :class:`LaunchRefusalError` with a closed key; never a value. A materialized
-    input over the advanced-tier ceiling is ``refused_input_size`` (ADR-0055 §2.4): a
+    input over the advanced-tier ceiling is ``refused_input_size`` (ADR-0055 §3): a
     closed refusal, before any file or store write and before any client exists.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
@@ -601,7 +601,7 @@ def prepare_launch(
         authorization = LaunchAuthorization(identity=arguments.identity, input_bytes=input_bytes)
     except ValueError:
         # Unreachable while the materializer enforces the ceiling; kept so a raw
-        # exception can never cross this boundary again (ADR-0055 §2.4).
+        # exception can never cross this boundary again (ADR-0055 §3).
         raise LaunchRefusalError("refused_input_size", EXIT_REFUSED_INPUT_SIZE) from None
     return PreparedLaunch(
         actor=actor,

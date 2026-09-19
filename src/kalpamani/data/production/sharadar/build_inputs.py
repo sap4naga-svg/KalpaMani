@@ -371,7 +371,7 @@ def _verify_run(
         MAX_LOCATOR_BYTES, ceiling=MAX_LOCATOR_BYTES, defect=BuildInputDefect.LOCATOR_INVALID
     )
     try:
-        # ADR-0055 §2.3: the key from the identity, the bytes held to the row's digest
+        # ADR-0055 §2.4: the key from the identity, the bytes held to the row's digest
         # before they are decoded, then every locator clause.
         locator = reader.read_bound_run_locator(
             run_id=row.run_identity, expected_sha256=row.locator_sha256

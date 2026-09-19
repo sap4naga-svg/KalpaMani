@@ -363,7 +363,7 @@ class TestBuildInput:
         assert info.value.defect is pin.InputDefect.ROW_MALFORMED
 
     def test_a_version_one_document_is_refused_for_execution(self) -> None:
-        """The retained v1 shape parses nowhere on the execution path (ADR-0055 §2.5)."""
+        """The retained v1 shape parses nowhere on the execution path (ADR-0055 §2.7)."""
         with pytest.raises(pin.InputError) as info:
             pin.parse_build_input(historical_build_input_v1_document(), now=NOW)
         assert info.value.defect is pin.InputDefect.SCHEMA_VERSION_UNKNOWN
@@ -432,7 +432,7 @@ class TestBuildInput:
 
 
 class TestHistoricalBuildInputV1:
-    """The retained version-1 document is readable as evidence, and only there (ADR-0055 §2.5)."""
+    """The retained version-1 document is readable as evidence, and only there (ADR-0055 §2.7)."""
 
     def test_a_retained_document_parses_through_the_historical_reader(self) -> None:
         parsed = pin.parse_historical_build_input_v1(historical_build_input_v1_document(), now=NOW)
