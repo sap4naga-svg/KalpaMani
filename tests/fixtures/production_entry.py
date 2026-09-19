@@ -25,8 +25,8 @@ from fixtures.production_build import (
     FakeS3Store,
     FakeSecrets,
     ShiftedClock,
+    compact_rows,
     configuration,
-    ledger_row,
     responses_for_run,
     slice_for_run,
 )
@@ -43,6 +43,7 @@ from fixtures.production_runtime import (
     FakeSsm,
     binding_document,
     build_input_document,
+    compact_row_document,
     compiled_task,
     compiled_verification_task,
     encode,
@@ -297,7 +298,8 @@ class BuildHarness:
         slices: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         constants = constants_for(BUILD)
-        rows = [ledger_row(run_id, run, at, (slices or {}).get(run_id)) for run_id, run, at in runs]
+        del slices  # ADR-0055: the compact input carries no slice; the locator carries its own
+        rows = compact_rows(store, runs)
         self.ssm = FakeSsm()
         self.ssm.values[constants.binding_parameter] = encode(binding_document(BUILD))
         self.input_bytes = encode(
@@ -437,7 +439,7 @@ class VerificationHarness:
             )
         else:
             # ADR-0045 s.11: a verification-only build launch may carry no run at all.
-            rows = [] if empty_runs else [ledger_row(RUN_1, 1, RUN_1_AT, None)]
+            rows = [] if empty_runs else [compact_row_document(RUN_1)]
             self.identity = "verify-" + BUILD_ID
             self.input_bytes = encode(
                 build_input_document(

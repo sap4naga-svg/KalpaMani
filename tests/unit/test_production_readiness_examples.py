@@ -50,6 +50,7 @@ EXPECTED_FILES: Final[frozenset[str]] = frozenset(
         "compiled-configuration.build.synthetic.json",
         "acquisition-input.v2.synthetic.json",
         "build-input.v1.synthetic.json",
+        "build-input.v2.synthetic.json",
         "owner-ledger.synthetic.json",
         "launch-authorization.synthetic.json",
     }
@@ -148,11 +149,28 @@ def test_the_acquisition_input_example_is_admitted_and_binds_its_plan() -> None:
 
 
 def test_the_build_input_example_is_admitted() -> None:
-    document = _load("build-input.v1.synthetic.json")
+    document = _load("build-input.v2.synthetic.json")
     assert document["build_identity"].startswith("synthetic-")
     admitted = parse_build_input(document, now=NOW)
     assert admitted.build_identity == document["build_identity"]
     assert all(row["run_identity"].startswith("synthetic-") for row in document["runs"])
+    assert all(set(row) == {"run_identity", "locator_sha256"} for row in document["runs"])
+
+
+def test_the_version_one_build_input_example_is_historical_only() -> None:
+    """ADR-0055: the retained v1 example reads through the historical reader and nowhere else."""
+    from kalpamani.data.production.sharadar.inputs import (
+        InputDefect,
+        InputError,
+        parse_historical_build_input_v1,
+    )
+
+    document = _load("build-input.v1.synthetic.json")
+    historical = parse_historical_build_input_v1(document, now=NOW)
+    assert historical.build_identity == document["build_identity"]
+    with pytest.raises(InputError) as info:
+        parse_build_input(document, now=NOW)
+    assert info.value.defect is InputDefect.SCHEMA_VERSION_UNKNOWN
 
 
 def test_the_observation_example_admits_nothing_and_differs_only_in_its_accepted_set() -> None:

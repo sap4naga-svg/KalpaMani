@@ -899,3 +899,37 @@ and the regional-endpoint requirement; Fargate task ephemeral storage; the Farga
 API types (ENI attachment details); S3 access-denied troubleshooting (same-account explicit-deny context by
 policy type); Parameter Store parameter versions; S3 `AbortMultipartUpload` (repeat while parts are in flight;
 `ListParts` to confirm; `NoSuchUpload`).
+
+---
+
+## 7. Amendment (2026-09-19) — the build input's compact, digest-bound form (ADR-0055)
+
+**PROPOSED — NOT IN FORCE while the pull request carrying this section is open; in force on the exact-head
+merge of that pull request, together with ADR-0055.** The accepted text above is not rewritten.
+
+**What ADR-0055 amends here, and only here.** §2.6's build-input *content* column read "for each, the
+owner's slice-ledger row (run identity, slice, plan digest, ledger outcome, launch and completion instants)";
+under `kalpamani-research-build-input/v2` (`schema_version = 2`) each row is **the run identity and the
+SHA-256 of its admitted run locator**, and nothing else. §2.6's *integrity* column keeps every rule — schema
+and contract, expiry, the ledger digest over the rows as delivered, distinct identities in the run-id
+grammar — and adds: every locator digest distinct, and the 8 KiB ceiling applied by the **materializer before
+any write** as well as by the task before parsing. §2.6's *reconciliation* column is satisfied by the task
+holding each retrieved locator's full SHA-256 to the row's digest **before decoding**, then re-deriving the
+ledger-row view from the validated locator's own content. **§2.4 clause 1** (identity binding) is satisfied
+in two halves: on the owner side, the launch tool validates every preserved locator against the **true**
+ledger row through the unchanged validator before recording its digest; on the task side, the locator's
+`run_id` must equal the identity that derived its key, its plan digest must equal the digest of the plan
+recompiled from its own slice, and every other clause runs unchanged over the locator's own content.
+
+**Why.** Eighteen whole ledger rows canonicalize to 8,266 bytes against the tier's 8,192; the embedded row
+duplicated values the validated locator already carries; the 32-run ceiling this section states was
+unreachable by the contract that stated it. The compact form makes it reachable (32 rows at their widest
+valid width: 5,717 bytes) inside the **unchanged** ceiling, and removes only what the identity, the key or the
+validated locator determines. `kalpamani-research-build-input/v1` is historical evidence, readable through
+a distinct evidence-only reader and refused by every execution path.
+
+**Unchanged by this amendment:** the acquisition input contract, the locator schema and its four clauses,
+the exact-read discipline, the bootstrap and human policies, the parameter tier, `MAX_BUILD_RUNS`, the write
+order, the manifest and every gate of §6. Deployment consequences (two images, two task definitions, two
+registration blocks) are ADR-0055 §6's and are **not authorized by acceptance**.
+

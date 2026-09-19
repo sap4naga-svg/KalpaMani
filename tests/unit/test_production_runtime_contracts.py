@@ -33,14 +33,18 @@ from fixtures.production_runtime import (
     FakeSsm,
     acquisition_input_document,
     build_input_document,
+    compact_row_document,
     compiled_task,
     encode,
+    historical_build_input_v1_document,
     ledger_row_document,
     loose_encode,
     metadata_document,
     revision_arn,
     slice_document,
+    synthetic_locator_sha256,
 )
+from kalpamani.data.contracts.canonical import canonical_bytes
 from kalpamani.data.production.sharadar import barrier as pbar
 from kalpamani.data.production.sharadar import inputs as pin
 from kalpamani.data.production.sharadar import metadata as pm
@@ -64,6 +68,11 @@ from kalpamani.data.production.sharadar.vocabulary import (
     ProductionActor,
     constants_for,
 )
+
+#: The exact canonical size of a 32-run version-2 build input with every field at its
+#: widest valid width -- 64-character identities, 64-hex digests, microsecond instants
+#: (ADR-0055 §2.6 states the same number and the margin it leaves under 8,192).
+WORST_CASE_32_RUN_BYTES: Final = 5_717
 
 ACQ: Final = ProductionActor.ACQUISITION
 BLD: Final = ProductionActor.BUILD
@@ -276,21 +285,26 @@ class TestAcquisitionInput:
 
 
 class TestBuildInput:
+    """The version-2 compact build input (ADR-0055): identity + locator digest per run."""
+
     def test_a_valid_input_is_admitted(self) -> None:
         parsed = pin.parse_build_input(build_input_document(), now=NOW)
         assert parsed.build_identity == BUILD_ID and len(parsed.runs) == 1
         assert parsed.row_for(RUN_ID) is not None and parsed.row_for(OTHER_RUN_ID) is None
-        assert BUILD_ID not in repr(parsed) and RUN_ID not in repr(parsed.runs[0])
+        row = parsed.runs[0]
+        assert row.locator_sha256 == synthetic_locator_sha256(RUN_ID)
+        assert BUILD_ID not in repr(parsed) and RUN_ID not in repr(row)
+        assert row.locator_sha256 not in repr(row)
 
     def test_the_ledger_digest_binds_the_rows_as_delivered(self) -> None:
         document = build_input_document()
-        document["runs"][0]["plan_digest"] = OTHER_PLAN_DIGEST
+        document["runs"][0]["locator_sha256"] = synthetic_locator_sha256(OTHER_RUN_ID)
         with pytest.raises(pin.InputError) as info:
             pin.parse_build_input(document, now=NOW)
         assert info.value.defect is pin.InputDefect.LEDGER_DIGEST_MISMATCH
 
     def test_a_reordered_row_list_changes_the_digest(self) -> None:
-        rows = [ledger_row_document(RUN_ID), ledger_row_document(OTHER_RUN_ID)]
+        rows = [compact_row_document(RUN_ID), compact_row_document(OTHER_RUN_ID)]
         document = build_input_document(rows)
         document["runs"].reverse()
         with pytest.raises(pin.InputError) as info:
@@ -298,14 +312,24 @@ class TestBuildInput:
         assert info.value.defect is pin.InputDefect.LEDGER_DIGEST_MISMATCH
 
     def test_a_duplicated_run_identity_is_refused(self) -> None:
-        rows = [ledger_row_document(RUN_ID), ledger_row_document(RUN_ID)]
+        rows = [compact_row_document(RUN_ID), compact_row_document(RUN_ID)]
         with pytest.raises(pin.InputError) as info:
             pin.parse_build_input(build_input_document(rows), now=NOW)
         assert info.value.defect is pin.InputDefect.IDENTITY_DUPLICATED
 
+    def test_a_duplicated_locator_digest_is_refused(self) -> None:
+        shared = synthetic_locator_sha256(RUN_ID)
+        rows = [
+            compact_row_document(RUN_ID, locator_sha256=shared),
+            compact_row_document(OTHER_RUN_ID, locator_sha256=shared),
+        ]
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_build_input(build_input_document(rows), now=NOW)
+        assert info.value.defect is pin.InputDefect.LOCATOR_DIGEST_DUPLICATED
+
     def test_more_than_the_ceiling_is_refused(self) -> None:
         rows = [
-            ledger_row_document(f"synthetic-run-{index:04d}")
+            compact_row_document(f"synthetic-run-{index:04d}")
             for index in range(pin.MAX_BUILD_RUNS + 1)
         ]
         with pytest.raises(pin.InputError) as info:
@@ -317,25 +341,129 @@ class TestBuildInput:
             pin.parse_build_input(build_input_document([]), now=NOW)
         assert info.value.defect is pin.InputDefect.NO_RUNS
 
-    @pytest.mark.parametrize("outcome", ["MISPLACED", "REFUSED", "HALTED"])
-    def test_a_row_that_did_not_complete_is_refused(self, outcome: str) -> None:
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"run_identity": RUN_ID},
+            {"locator_sha256": synthetic_locator_sha256()},
+            {"run_identity": RUN_ID, "locator_sha256": "not-a-digest"},
+            {"run_identity": RUN_ID, "locator_sha256": synthetic_locator_sha256().upper()},
+            {"run_identity": "../escape", "locator_sha256": synthetic_locator_sha256()},
+            # a version-1 row: the whole ledger row is not a compact row
+            {
+                "run_identity": RUN_ID,
+                "locator_sha256": synthetic_locator_sha256(),
+                "plan_digest": PLAN_DIGEST,
+            },
+        ],
+    )
+    def test_a_malformed_row_is_refused(self, row: dict[str, Any]) -> None:
         with pytest.raises(pin.InputError) as info:
-            pin.parse_build_input(
-                build_input_document([ledger_row_document(outcome=outcome)]), now=NOW
-            )
-        assert info.value.defect is pin.InputDefect.ROW_NOT_COMPLETED
+            pin.parse_build_input(build_input_document([row]), now=NOW)
+        assert info.value.defect is pin.InputDefect.ROW_MALFORMED
 
-    def test_a_malformed_row_is_refused(self) -> None:
+    def test_a_version_one_document_is_refused_for_execution(self) -> None:
+        """The retained v1 shape parses nowhere on the execution path (ADR-0055 §2.7)."""
         with pytest.raises(pin.InputError) as info:
-            pin.parse_build_input(
-                build_input_document([ledger_row_document(outcome="OTHER")]), now=NOW
-            )
+            pin.parse_build_input(historical_build_input_v1_document(), now=NOW)
+        assert info.value.defect is pin.InputDefect.SCHEMA_VERSION_UNKNOWN
+        relabelled = historical_build_input_v1_document(
+            schema_version=pin.BUILD_INPUT_SCHEMA_VERSION
+        )
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_build_input(relabelled, now=NOW)
+        assert info.value.defect is pin.InputDefect.CONTRACT_ID_UNKNOWN
+        relabelled["contract_id"] = constants_for(ProductionActor.BUILD).input_contract_id
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_build_input(relabelled, now=NOW)  # v1 rows are not compact rows
         assert info.value.defect is pin.InputDefect.ROW_MALFORMED
 
     def test_the_acquisition_contract_is_refused_by_the_build_parser(self) -> None:
         with pytest.raises(pin.InputError) as info:
             pin.parse_build_input(acquisition_input_document(), now=NOW)
         assert info.value.defect in {pin.InputDefect.FIELD_UNKNOWN, pin.InputDefect.FIELD_MISSING}
+
+    def test_the_verification_only_path_admits_an_empty_run_set(self) -> None:
+        admitted = pin.parse_build_input(build_input_document([]), now=NOW, verification_only=True)
+        assert admitted.runs == () and admitted.ledger_digest == pin.ledger_digest([])
+
+    def test_the_materializer_ceiling_is_the_task_ceiling(self) -> None:
+        """One number: the materializer applies it before any write, the task before parsing."""
+        assert pin.MAX_BUILD_INPUT_DOCUMENT_BYTES == MAX_ADVANCED_PARAMETER_BYTES == 8 * 1024
+        exact = b"x" * pin.MAX_BUILD_INPUT_DOCUMENT_BYTES
+        assert pin.check_input_size(exact) is exact
+        with pytest.raises(pin.InputError) as info:
+            pin.check_input_size(exact + b"x")
+        assert info.value.defect is pin.InputDefect.TOO_LARGE
+        with pytest.raises(pin.InputError) as info:
+            pin.decode_input(exact + b"x")
+        assert info.value.defect is pin.InputDefect.TOO_LARGE
+        with pytest.raises(pin.InputError) as info:
+            pin.check_input_size(b"")
+        assert info.value.defect is pin.InputDefect.EMPTY
+        with pytest.raises(pin.InputError) as info:
+            pin.check_input_size("text")
+        assert info.value.defect is pin.InputDefect.DOCUMENT_MALFORMED
+
+    def test_the_worst_case_thirty_two_run_document_fits(self) -> None:
+        """The accepted 32-run ceiling is reachable inside the unchanged 8 KiB tier (ADR-0055)."""
+        widest = 64  # RUN_ID_RE admits up to 64 characters
+        identities = [("r" * (widest - 8)) + f"{index:08x}" for index in range(pin.MAX_BUILD_RUNS)]
+        rows = [compact_row_document(identity, locator_sha256="f" * 64) for identity in identities]
+        for index, row in enumerate(rows):  # distinct digests, every hex position at its widest
+            row["locator_sha256"] = ("f" * 56) + f"{index:08x}"
+        document = build_input_document(
+            rows,
+            build_identity="b" * widest,
+            ledger_digest=pin.ledger_digest(rows),
+            issued_at="2026-09-18T23:59:59.999999+00:00",
+            expires_at="2026-09-19T23:59:59.999999+00:00",
+        )
+        raw = canonical_bytes(document)
+        assert len(raw) == WORST_CASE_32_RUN_BYTES
+        assert len(raw) <= pin.MAX_BUILD_INPUT_DOCUMENT_BYTES - 512
+        assert pin.check_input_size(raw) is raw
+        from datetime import datetime
+
+        admitted = pin.parse_build_input(
+            pin.decode_input(raw), now=datetime.fromisoformat("2026-09-19T00:00:00+00:00")
+        )
+        assert len(admitted.runs) == pin.MAX_BUILD_RUNS
+
+
+class TestHistoricalBuildInputV1:
+    """The retained version-1 document is readable as evidence, and only there (ADR-0055 §2.7)."""
+
+    def test_a_retained_document_parses_through_the_historical_reader(self) -> None:
+        parsed = pin.parse_historical_build_input_v1(historical_build_input_v1_document(), now=NOW)
+        assert type(parsed) is pin.HistoricalBuildInputV1 and len(parsed.runs) == 1
+        assert parsed.runs[0].plan_digest == PLAN_DIGEST
+        assert BUILD_ID not in repr(parsed) and RUN_ID not in repr(parsed.runs[0])
+
+    def test_the_historical_reader_refuses_the_current_contract(self) -> None:
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_historical_build_input_v1(build_input_document(), now=NOW)
+        assert info.value.defect is pin.InputDefect.SCHEMA_VERSION_UNKNOWN
+
+    def test_the_historical_reader_keeps_the_version_one_rules(self) -> None:
+        document = historical_build_input_v1_document()
+        document["runs"][0]["plan_digest"] = OTHER_PLAN_DIGEST
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_historical_build_input_v1(document, now=NOW)
+        assert info.value.defect is pin.InputDefect.LEDGER_DIGEST_MISMATCH
+        with pytest.raises(pin.InputError) as info:
+            pin.parse_historical_build_input_v1(
+                historical_build_input_v1_document([ledger_row_document(outcome="HALTED")]), now=NOW
+            )
+        assert info.value.defect is pin.InputDefect.ROW_NOT_COMPLETED
+
+    def test_the_historical_type_is_not_a_build_input(self) -> None:
+        parsed = pin.parse_historical_build_input_v1(historical_build_input_v1_document(), now=NOW)
+        assert type(parsed) is pin.HistoricalBuildInputV1  # a distinct type, not a BuildInput
+        from kalpamani.data.production.sharadar import build_inputs as bi
+
+        with pytest.raises(TypeError):
+            bi.verify_build_inputs(parsed, reader=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

@@ -73,6 +73,9 @@ from kalpamani.data.production.sharadar.vocabulary import ProductionActor, const
 
 pytestmark = pytest.mark.unit
 
+#: A synthetic locator digest for materialization tests (never a real object's).
+LOCATOR_DIGEST: Final = "1" * 64
+
 VERIFY_ID: Final = "verify-" + RUN_ID
 OTHER_VERIFY_ID: Final = "verify-" + OTHER_RUN_ID
 
@@ -278,6 +281,7 @@ class TestBuildInput:
             kind=lr.LaunchKind.PRODUCTION,
             run_identities=[RUN_ID],
             now=NOW,
+            locator_digests={RUN_ID: LOCATOR_DIGEST},
         )
         from kalpamani.data.production.sharadar.documents import decode_document
 
@@ -286,6 +290,8 @@ class TestBuildInput:
         assert admitted.build_identity == BUILD_ID and [r.run_identity for r in admitted.runs] == [
             RUN_ID
         ]
+        assert admitted.runs[0].locator_sha256 == LOCATOR_DIGEST
+        assert document["runs"] == [{"run_identity": RUN_ID, "locator_sha256": LOCATOR_DIGEST}]
         for unbuildable in (OTHER_RUN_ID, VERIFY_ID, "synthetic-run-halted", "never-launched"):
             with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
                 lr.materialize_build_input(
@@ -294,7 +300,26 @@ class TestBuildInput:
                     kind=lr.LaunchKind.PRODUCTION,
                     run_identities=[unbuildable],
                     now=NOW,
+                    locator_digests={unbuildable: LOCATOR_DIGEST},
                 )
+        # A buildable run without its locator digest, or with a malformed one, is not bound.
+        with _refuses(lr.LaunchRecordDefect.LOCATOR_MISSING):
+            lr.materialize_build_input(
+                ledger,
+                identity=BUILD_ID,
+                kind=lr.LaunchKind.PRODUCTION,
+                run_identities=[RUN_ID],
+                now=NOW,
+            )
+        with _refuses(lr.LaunchRecordDefect.LOCATOR_MISSING):
+            lr.materialize_build_input(
+                ledger,
+                identity=BUILD_ID,
+                kind=lr.LaunchKind.PRODUCTION,
+                run_identities=[RUN_ID],
+                now=NOW,
+                locator_digests={RUN_ID: "not-a-digest"},
+            )
 
     def test_a_build_verification_input_may_name_no_run_and_a_production_one_may_not(
         self,
@@ -335,6 +360,7 @@ class TestBuildInput:
                 kind=lr.LaunchKind.PRODUCTION,
                 run_identities=[VERIFY_ID],
                 now=NOW,
+                locator_digests={VERIFY_ID: LOCATOR_DIGEST},
             )
         # A verification launch that DOES name a run still needs a buildable one.
         with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
@@ -344,6 +370,7 @@ class TestBuildInput:
                 kind=lr.LaunchKind.VERIFICATION,
                 run_identities=[VERIFY_ID],
                 now=NOW,
+                locator_digests={VERIFY_ID: LOCATOR_DIGEST},
             )
 
     def test_duplicates_empties_and_the_ceiling_are_refused(self) -> None:
@@ -355,6 +382,7 @@ class TestBuildInput:
                 kind=lr.LaunchKind.PRODUCTION,
                 run_identities=[RUN_ID, RUN_ID],
                 now=NOW,
+                locator_digests={RUN_ID: LOCATOR_DIGEST},
             )
         with _refuses(lr.LaunchRecordDefect.FIELD_MALFORMED):
             lr.materialize_build_input(
@@ -367,6 +395,7 @@ class TestBuildInput:
                 kind=lr.LaunchKind.PRODUCTION,
                 run_identities=[f"synthetic-run-{i:04d}" for i in range(33)],
                 now=NOW,
+                locator_digests={f"synthetic-run-{i:04d}": LOCATOR_DIGEST for i in range(33)},
             )
 
     def test_a_verification_build_needs_a_verification_identity(self) -> None:
@@ -378,6 +407,7 @@ class TestBuildInput:
                 kind=lr.LaunchKind.VERIFICATION,
                 run_identities=[RUN_ID],
                 now=NOW,
+                locator_digests={RUN_ID: LOCATOR_DIGEST},
             )
         raw = lr.materialize_build_input(
             ledger,
@@ -385,6 +415,7 @@ class TestBuildInput:
             kind=lr.LaunchKind.VERIFICATION,
             run_identities=[RUN_ID],
             now=NOW,
+            locator_digests={RUN_ID: LOCATOR_DIGEST},
         )
         assert b"verify-" in raw
 
@@ -1227,6 +1258,7 @@ class TestCompletion:
             kind=lr.LaunchKind.PRODUCTION,
             run_identities=[RUN_1],
             now=RUN_1_AT,
+            locator_digests={RUN_1: LOCATOR_DIGEST},
         )
         with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):
             lr.materialize_build_input(
@@ -1235,6 +1267,7 @@ class TestCompletion:
                 kind=lr.LaunchKind.PRODUCTION,
                 run_identities=[RUN_1],
                 now=RUN_1_AT,
+                locator_digests={RUN_1: LOCATOR_DIGEST},
             )
         # Never rewritten a second time.
         with _refuses(lr.LaunchRecordDefect.ROW_NOT_BUILDABLE):

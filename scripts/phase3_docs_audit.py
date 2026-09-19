@@ -859,6 +859,11 @@ MERGED_ADR_STATUS: Final[tuple[tuple[str, str], ...]] = (
     # ADR-0054 merged as PR #135 on 2026-09-18: supported v1 reservations read as evidence only;
     # the registration-historical rebinding exception to ADR-0052 s.2.3 under preservation.
     ("ADR-0054", "PR #135 merged"),
+    # ADR-0055 merged as PR #138 on 2026-09-19 at its exact reviewed head: the compact, digest-bound
+    # build input v2 (rows of identity + locator SHA-256, the 32-run ceiling reachable inside the
+    # unchanged 8 KiB tier), v1 historical only, the two refusal-boundary corrections; the
+    # register rows were written for the post-merge state in the same pull request.
+    ("ADR-0055", "PR #138 merged"),
 )
 
 #: ADRs that are PROPOSED -- on ``main`` as documents, with register rows, and with no

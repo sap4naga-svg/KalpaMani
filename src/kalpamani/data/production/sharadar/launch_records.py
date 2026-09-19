@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -74,21 +75,31 @@ from kalpamani.data.production.sharadar.entry import (
 )
 from kalpamani.data.production.sharadar.inputs import (
     ACQUISITION_INPUT_SCHEMA_VERSION,
-    INPUT_SCHEMA_VERSION,
+    BUILD_INPUT_SCHEMA_VERSION,
     LEDGER_OUTCOME_COMPLETED,
     LEDGER_OUTCOME_PROBED,
     LEDGER_OUTCOMES,
     MAX_BUILD_RUNS,
     MAX_INPUT_VALIDITY,
     MAX_SPENT_IDENTITIES,
+    InputError,
     Slice,
+    check_input_size,
+    compact_row_document,
     ledger_digest,
     parse_acquisition_input,
     parse_build_input,
     parse_slice,
     spent_identities_block,
 )
+from kalpamani.data.production.sharadar.inputs import _row as _historical_ledger_row
 from kalpamani.data.production.sharadar.keys import RUN_ID_RE
+from kalpamani.data.production.sharadar.locator import (
+    MAX_LOCATOR_BYTES,
+    RunLocatorError,
+    decode_run_locator,
+    validate_run_locator,
+)
 from kalpamani.data.production.sharadar.metadata_grammar import (
     CODE_COMMIT_RE,
     CONFIGURATION_DIGEST_RE,
@@ -190,6 +201,10 @@ class LaunchRecordDefect(StrEnum):
     #: A specification offered to the historical parser that the current parser admits:
     #: current evidence is never read as historical (ADR-0054).
     WORKLOAD_CURRENT = "WORKLOAD_CURRENT"
+    LOCATOR_MISSING = "LOCATOR_MISSING"
+    LOCATOR_REFUSED = "LOCATOR_REFUSED"
+    LOCATOR_DIGEST_DUPLICATE = "LOCATOR_DIGEST_DUPLICATE"
+    INPUT_TOO_LARGE = "INPUT_TOO_LARGE"
 
 
 class LaunchRecordError(Exception):
@@ -297,7 +312,13 @@ class OwnerLedgerRow:
         )
 
     def build_input_row(self) -> dict[str, Any]:
-        """The accepted build-input ledger row (ADR-0036 §2.6) this row projects to."""
+        """The **historical** (version-1) build-input ledger row this row projects to.
+
+        ADR-0036 §2.6 as first accepted; since ADR-0055 no materialization carries it --
+        the compact version-2 row names the run and the SHA-256 of its admitted locator
+        (:func:`bind_run_locators`), and this projection remains the ledger-row view the
+        accepted locator validator holds a preserved locator to at materialization.
+        """
         if not self.buildable:
             raise _refuse(LaunchRecordDefect.ROW_NOT_BUILDABLE)
         assert self.slice is not None and self.plan_digest is not None
@@ -468,6 +489,48 @@ def materialize_acquisition_input(
     return canonical_bytes(document)
 
 
+def bind_run_locators(
+    ledger: OwnerLedger, *, run_identities: list[str], locators: Mapping[str, bytes]
+) -> dict[str, str]:
+    """The SHA-256 of every named run's admitted locator, each held to its ledger row first.
+
+    The producer half of the version-2 binding (ADR-0055 §2.3): for every run identity,
+    in order, the preserved locator bytes the owner supplies are held to the run's own
+    ledger row through the accepted validator -- identity, slice, plan digest, every
+    entry against the compiled plan, counts, completeness -- and only a locator that
+    passes contributes its digest. A run without locator bytes, a locator the validator
+    refuses, or two runs whose locators hash alike refuse the whole binding. Nothing is
+    read from any store: the bytes are the owner's preserved retrieval.
+
+    Raises:
+        LaunchRecordError: one closed :class:`LaunchRecordDefect`.
+    """
+    if type(run_identities) is not list or not isinstance(locators, Mapping):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
+    if len(set(run_identities)) != len(run_identities):
+        raise _refuse(LaunchRecordDefect.IDENTITY_DUPLICATE)
+    digests: dict[str, str] = {}
+    for run_identity in run_identities:
+        row = ledger.row(_identity(run_identity))
+        if row is None or not row.buildable:
+            raise _refuse(LaunchRecordDefect.ROW_NOT_BUILDABLE)
+        raw = locators.get(row.identity)
+        if type(raw) is not bytes or not raw or len(raw) > MAX_LOCATOR_BYTES:
+            raise _refuse(LaunchRecordDefect.LOCATOR_MISSING)
+        try:
+            validate_run_locator(
+                decode_run_locator(raw),
+                run_id=row.identity,
+                ledger_row=_historical_ledger_row(row.build_input_row()),
+            )
+        except (RunLocatorError, InputError):
+            raise _refuse(LaunchRecordDefect.LOCATOR_REFUSED) from None
+        digests[row.identity] = sha256_hex(raw)
+    if len(set(digests.values())) != len(digests):
+        raise _refuse(LaunchRecordDefect.LOCATOR_DIGEST_DUPLICATE)
+    return digests
+
+
 def materialize_build_input(
     ledger: OwnerLedger,
     *,
@@ -475,13 +538,17 @@ def materialize_build_input(
     kind: LaunchKind,
     run_identities: list[str],
     now: datetime,
+    locator_digests: Mapping[str, str] | None = None,
 ) -> bytes:
-    """The build input v1 bytes for one launch over completed, receipt-verified rows only.
+    """The compact build input (version 2) bytes for one launch, within the 8 KiB ceiling.
 
     A **verification** launch (ADR-0045 s.11) may name no run at all: the verify entry
     terminates at the release barrier and reads nothing, so its input carries an empty
     run set and the ledger digest over ``[]``. A production launch must name at least
-    one run, and every run named -- for either kind -- must be a buildable row.
+    one run; every run named -- for either kind -- must be a buildable row, and
+    ``locator_digests`` (from :func:`bind_run_locators`) must carry exactly one SHA-256
+    for each of them. The canonical bytes are held to the advanced-tier ceiling here,
+    before the caller can write them anywhere (ADR-0055 §2.5): ``INPUT_TOO_LARGE``.
     """
     admitted = admit_identity(ledger, identity, kind=kind)
     if type(run_identities) is not list:
@@ -492,15 +559,23 @@ def materialize_build_input(
         raise _refuse(LaunchRecordDefect.TOO_MANY)
     if len(set(run_identities)) != len(run_identities):
         raise _refuse(LaunchRecordDefect.IDENTITY_DUPLICATE)
+    digests: Mapping[str, str] = {} if locator_digests is None else locator_digests
+    if not isinstance(digests, Mapping):
+        raise _refuse(LaunchRecordDefect.FIELD_MALFORMED)
     rows: list[dict[str, Any]] = []
     for run_identity in run_identities:
         row = ledger.row(_identity(run_identity))
         if row is None or not row.buildable:
             raise _refuse(LaunchRecordDefect.ROW_NOT_BUILDABLE)
-        rows.append(row.build_input_row())
+        digest = hex_digest(digests.get(row.identity))
+        if digest is None:
+            raise _refuse(LaunchRecordDefect.LOCATOR_MISSING)
+        rows.append(compact_row_document(run_identity=row.identity, locator_sha256=digest))
+    if len({row["locator_sha256"] for row in rows}) != len(rows):
+        raise _refuse(LaunchRecordDefect.LOCATOR_DIGEST_DUPLICATE)
     constants = constants_for(ProductionActor.BUILD)
     document = {
-        "schema_version": INPUT_SCHEMA_VERSION,
+        "schema_version": BUILD_INPUT_SCHEMA_VERSION,
         "contract_id": constants.input_contract_id,
         "build_identity": admitted,
         "runs": rows,
@@ -509,7 +584,12 @@ def materialize_build_input(
         "expires_at": (now + MAX_INPUT_VALIDITY).isoformat(),
     }
     parse_build_input(document, now=now, verification_only=kind is LaunchKind.VERIFICATION)
-    return canonical_bytes(document)
+    raw = canonical_bytes(document)
+    try:
+        check_input_size(raw)
+    except InputError:
+        raise _refuse(LaunchRecordDefect.INPUT_TOO_LARGE) from None
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -2299,6 +2379,7 @@ __all__ = [
     "TaskDefinitionEvidence",
     "admit_identity",
     "append_row",
+    "bind_run_locators",
     "build_specification",
     "compile_launch",
     "complete_ledger_row",
