@@ -45,10 +45,16 @@ from kalpamani.data.production.sharadar.completion import (
     parse_pagination_evidence,
     request_shape_digest,
 )
-from kalpamani.data.production.sharadar.inputs import BuildInput, LedgerRow
+from kalpamani.data.production.sharadar.inputs import (
+    LEDGER_OUTCOME_COMPLETED,
+    BuildInput,
+    BuildInputRow,
+    LedgerRow,
+)
 from kalpamani.data.production.sharadar.locator import (
     MAX_LOCATOR_BYTES,
     ProductionLocatorReader,
+    RunLocatorDefect,
     RunLocatorEntry,
     RunLocatorError,
     ValidatedRunLocator,
@@ -103,6 +109,7 @@ class BuildInputDefect(StrEnum):
 
     LOCATOR_UNREADABLE = "LOCATOR_UNREADABLE"
     LOCATOR_INVALID = "LOCATOR_INVALID"
+    LOCATOR_DIGEST_MISMATCH = "LOCATOR_DIGEST_MISMATCH"
     OBJECT_UNREADABLE = "OBJECT_UNREADABLE"
     OBJECT_INTEGRITY = "OBJECT_INTEGRITY"
     OBJECT_COUNT_EXCEEDED = "OBJECT_COUNT_EXCEEDED"
@@ -172,9 +179,15 @@ class AcquiredPage:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class VerifiedRun:
-    """One run's validated locator and every page it named, verified and cross-checked."""
+    """One run's validated locator and every page it named, verified and cross-checked.
+
+    ``row`` is the ledger-row view the digest-bound locator carries of itself
+    (:func:`kalpamani.data.production.sharadar.locator.ledger_row_of_locator`);
+    ``locator_sha256`` is the binding the build input named and the bytes hashed to.
+    """
 
     row: LedgerRow
+    locator_sha256: str
     locator: ValidatedRunLocator
     pages: tuple[AcquiredPage, ...]
 
@@ -349,17 +362,25 @@ def _read(reader: ProductionLocatorReader, reference: Any) -> bytes:
         raise _refuse(BuildInputDefect.OBJECT_UNREADABLE) from None
 
 
-def _verify_run(reader: ProductionLocatorReader, row: LedgerRow, *, budget: _Budget) -> VerifiedRun:
+def _verify_run(
+    reader: ProductionLocatorReader, row: BuildInputRow, *, budget: _Budget
+) -> VerifiedRun:
     # The locator is charged at its ceiling before it is read: its size is not
     # known until it is, and a conservative charge can only refuse sooner.
     budget.admit(
         MAX_LOCATOR_BYTES, ceiling=MAX_LOCATOR_BYTES, defect=BuildInputDefect.LOCATOR_INVALID
     )
     try:
-        locator = reader.read_run_locator(run_id=row.run_identity, ledger_row=row)
+        # ADR-0055 §2.3: the key from the identity, the bytes held to the row's digest
+        # before they are decoded, then every locator clause.
+        locator = reader.read_bound_run_locator(
+            run_id=row.run_identity, expected_sha256=row.locator_sha256
+        )
     except LicensedReadError:
         raise _refuse(BuildInputDefect.LOCATOR_UNREADABLE) from None
-    except RunLocatorError:
+    except RunLocatorError as error:
+        if error.defect is RunLocatorDefect.LOCATOR_DIGEST_MISMATCH:
+            raise _refuse(BuildInputDefect.LOCATOR_DIGEST_MISMATCH) from None
         raise _refuse(BuildInputDefect.LOCATOR_INVALID) from None
     pages: list[AcquiredPage] = []
     for entry in locator.entries:
@@ -398,7 +419,19 @@ def _verify_run(reader: ProductionLocatorReader, row: LedgerRow, *, budget: _Bud
                 run_completed_at=locator.completed_at,
             )
         )
-    return VerifiedRun(row=row, locator=locator, pages=tuple(pages))
+    return VerifiedRun(
+        row=LedgerRow(
+            run_identity=locator.run_id,
+            slice=locator.slice,
+            plan_digest=locator.plan_digest,
+            outcome=LEDGER_OUTCOME_COMPLETED,
+            launched_at=locator.started_at,
+            completed_at=locator.completed_at,
+        ),
+        locator_sha256=row.locator_sha256,
+        locator=locator,
+        pages=tuple(pages),
+    )
 
 
 def verify_build_inputs(

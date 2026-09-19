@@ -1,0 +1,14 @@
+{
+  "build_identity": "synthetic-production-build-0001",
+  "contract_id": "kalpamani-research-build-input/v2",
+  "expires_at": "2026-09-13T13:00:00+00:00",
+  "issued_at": "2026-09-12T13:00:00+00:00",
+  "ledger_digest": "d2b057b14a2388938c812b6ec07953eafa04ecbc39af2536054e014592949d82",
+  "runs": [
+    {
+      "locator_sha256": "1de889be84943c9901224909687653f553cfdf42b4e15aeb80e05556276bae60",
+      "run_identity": "synthetic-production-run-0001"
+    }
+  ],
+  "schema_version": 2
+}

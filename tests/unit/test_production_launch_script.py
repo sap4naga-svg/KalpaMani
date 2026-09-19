@@ -60,6 +60,7 @@ from fixtures.production_runtime import (
     encode,
     human_identity_arn,
     interface_entry,
+    locator_document,
     revision_arn,
     slice_document,
     task_entry,
@@ -164,6 +165,19 @@ class _Scenario:
             else ([ledger_row(RUN_ID)] if actor is BLD else [])
         )
         self.ledger.write_bytes(encode(ledger_document(rows)))
+        # ADR-0055: a production build binds every run to its preserved locator, read from
+        # beside the ledger; the scenario preserves one valid synthetic locator per
+        # buildable row, exactly where the retrieval procedure keeps them.
+        self.locators = self.ledger.parent / launch.LOCATORS_DIRECTORY
+        self.locators.mkdir(exist_ok=True)
+        for row in rows:
+            if (
+                row.get("actor") == "acquisition"
+                and row.get("kind") == "production"
+                and row.get("outcome") == "COMPLETED"
+                and row.get("evidence") == "RECEIPT_VERIFIED"
+            ):
+                self.preserve_locator(row["identity"])
         self.slice = self.root / "slice.json"
         self.slice.write_bytes(encode(slice_document()))
         self.binding = self.root / "binding.json"
@@ -223,6 +237,12 @@ class _Scenario:
         )
         self.clients = FakeClients(actor=actor, ecs_fake=self.ecs, ec2_fake=self.ec2)
         self.clock = FakeClock()
+
+    def preserve_locator(self, identity: str, document: dict[str, Any] | None = None) -> Path:
+        """Write the preserved locator for ``identity`` beside the ledger (default: the fixture)."""
+        path = Path(self.locators / launch.LOCATOR_FILE_TEMPLATE.format(identity=identity))
+        path.write_bytes(encode(locator_document(identity) if document is None else document))
+        return path
 
     def inputs_document(self) -> dict[str, Any]:
         """The launch-inputs record registering this scenario's three configuration files."""

@@ -118,6 +118,7 @@ EXIT_COLLECTION_NOT_COLLECTED: Final = 16
 EXIT_REFUSED_COLLECTION_RECORDS: Final = 17
 EXIT_REFUSED_CONTRADICTION_UNRESOLVED: Final = 18
 EXIT_REFUSED_RECEIPT_BINDING: Final = 19
+EXIT_REFUSED_INPUT_SIZE: Final = 20
 #: The hand-read completion's acknowledgement of one recorded contradiction, by the
 #: collection record's digest; repeatable; never accepted with a collection.
 ACKNOWLEDGE_FLAG: Final = "--acknowledge-collection-contradiction"
@@ -130,6 +131,10 @@ SENTENCES: Final[dict[str, str]] = {
     "refused_records": "launch refused: an owner record was not admitted",
     "refused_authorization": "launch refused: no authorization for this launch specification",
     "refused_equivalence": "launch refused: the verification configuration is not equivalent",
+    "refused_input_size": (
+        "launch refused: the materialized input exceeds the advanced-tier ceiling; nothing "
+        "was written and no client was constructed"
+    ),
     "refused_containment": "launch refused: the ledger and records must sit under the private root",
     "refused_dependency": "launch refused: a dependency could not be built",
     "refused_bootstrap": "launch refused: the human bootstrap did not prove an identity",
@@ -441,6 +446,36 @@ def _store(arguments: LaunchArguments, root: Path) -> Any:
     return store
 
 
+#: Where the owner's preserved run locators sit: beside the ledger, one file per run
+#: identity, exactly as the retrieval procedure preserved them (ADR-0055 §2.2).
+LOCATORS_DIRECTORY: Final = "locators"
+LOCATOR_FILE_TEMPLATE: Final = "run-locator-{identity}.json"
+
+
+def _preserved_locators(arguments: LaunchArguments, run_identities: list[str]) -> dict[str, bytes]:
+    """The preserved locator bytes for every named run, read from beside the ledger.
+
+    A missing, unreadable or oversized file is refused as a record defect; the bytes
+    are held to the ledger row by :func:`launch_records.bind_run_locators`, not here.
+    """
+    from kalpamani.data.production.sharadar.keys import RUN_ID_RE
+    from kalpamani.data.production.sharadar.locator import MAX_LOCATOR_BYTES
+
+    directory = arguments.ledger.parent / LOCATORS_DIRECTORY
+    locators: dict[str, bytes] = {}
+    for identity in run_identities:
+        if type(identity) is not str or not RUN_ID_RE.match(identity):
+            raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+        path = directory / LOCATOR_FILE_TEMPLATE.format(identity=identity)
+        try:
+            if path.stat().st_size > MAX_LOCATOR_BYTES:
+                raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS)
+            locators[identity] = path.read_bytes()
+        except OSError:
+            raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    return locators
+
+
 def prepare_launch(
     arguments: LaunchArguments,
     *,
@@ -449,7 +484,9 @@ def prepare_launch(
 ) -> PreparedLaunch:
     """Parse every record, build the specification, materialize the input, compile. **Offline.**
 
-    Raises :class:`LaunchRefusalError` with a closed key; never a value.
+    Raises :class:`LaunchRefusalError` with a closed key; never a value. A materialized
+    input over the advanced-tier ceiling is ``refused_input_size`` (ADR-0055 §2.4): a
+    closed refusal, before any file or store write and before any client exists.
     """
     from kalpamani.data.production.sharadar import launch_records as lr
     from kalpamani.data.production.sharadar.launch_store import StoreError
@@ -509,15 +546,35 @@ def prepare_launch(
             covered = parse_slice(slice_document)
             plan_digest = specification.workload["plan_digest"]
         else:
+            # ADR-0055: a production build binds every run to the SHA-256 of the locator
+            # the owner preserved beside the ledger, each held to its ledger row first; a
+            # verification launch names no run and needs no locator.
+            run_list = list(arguments.run_identities)
+            locator_digests = (
+                lr.bind_run_locators(
+                    ledger,
+                    run_identities=run_list,
+                    locators=_preserved_locators(arguments, run_list),
+                )
+                if run_list
+                else {}
+            )
             input_bytes = lr.materialize_build_input(
                 ledger,
                 identity=arguments.identity,
                 kind=kind,
-                run_identities=list(arguments.run_identities),
+                run_identities=run_list,
                 now=now,
+                locator_digests=locator_digests,
             )
         compiled, target = lr.compile_launch(inputs, actor=actor, kind=kind)
-    except (lr.LaunchRecordError, Exception):
+    except lr.LaunchRecordError as error:
+        if error.defect is lr.LaunchRecordDefect.INPUT_TOO_LARGE:
+            raise LaunchRefusalError("refused_input_size", EXIT_REFUSED_INPUT_SIZE) from None
+        raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
+    except LaunchRefusalError:
+        raise
+    except Exception:
         raise LaunchRefusalError("refused_records", EXIT_REFUSED_RECORDS) from None
 
     equivalence: str | None = None
@@ -540,7 +597,12 @@ def prepare_launch(
         if verdict is not lr.EquivalenceVerdict.EQUIVALENT:
             raise LaunchRefusalError("refused_equivalence", EXIT_REFUSED_EQUIVALENCE)
 
-    authorization = LaunchAuthorization(identity=arguments.identity, input_bytes=input_bytes)
+    try:
+        authorization = LaunchAuthorization(identity=arguments.identity, input_bytes=input_bytes)
+    except ValueError:
+        # Unreachable while the materializer enforces the ceiling; kept so a raw
+        # exception can never cross this boundary again (ADR-0055 §2.4).
+        raise LaunchRefusalError("refused_input_size", EXIT_REFUSED_INPUT_SIZE) from None
     return PreparedLaunch(
         actor=actor,
         kind=kind,

@@ -31,6 +31,7 @@ from fixtures.production_runtime import (
     binding_document,
     build_input_document,
     caller_identity,
+    compact_row_document,
     compiled_task,
     encode,
     ledger_row_document,
@@ -38,6 +39,7 @@ from fixtures.production_runtime import (
     revision_arn,
     task_identity_arn,
 )
+from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode
 from kalpamani.data.ingest.sharadar.credentials import SharadarCredential
 from kalpamani.data.production.sharadar import build_processing as bp
@@ -548,6 +550,31 @@ def ledger_row(
     )
 
 
+def locator_sha256_of(store: FakeS3Store, run_id: str) -> str:
+    """The SHA-256 of the run locator the real acquisition wrote to ``store`` for ``run_id``.
+
+    For a run the store does not hold, a synthetic digest: the build's read of that
+    locator fails before the digest is ever compared, which is what such a test asserts.
+    """
+    from fixtures.production_runtime import synthetic_locator_sha256
+    from kalpamani.data.production.sharadar.keys import run_locator_key_segments
+
+    key = "/".join(run_locator_key_segments(run_id))
+    if key not in store.objects:
+        return synthetic_locator_sha256(run_id)
+    return sha256_hex(store.objects[key])
+
+
+def compact_rows(
+    store: FakeS3Store, runs: tuple[tuple[str, int, datetime], ...]
+) -> list[dict[str, Any]]:
+    """The version-2 build input rows for ``runs``, bound to the locators in ``store``."""
+    return [
+        compact_row_document(run_id, locator_sha256=locator_sha256_of(store, run_id))
+        for run_id, _run, _at in runs
+    ]
+
+
 def populated_store(*, runs: tuple[int, ...] = (1, 2)) -> FakeS3Store:
     """A store holding the requested synthetic runs, written by the real acquisition."""
     store = FakeS3Store()
@@ -601,7 +628,10 @@ class BuildScenario:
         slices: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         constants = constants_for(BUILD)
-        rows = [ledger_row(run_id, run, at, (slices or {}).get(run_id)) for run_id, run, at in runs]
+        # ADR-0055: the compact input binds each run to the SHA-256 of the locator the
+        # (real, synthetic-fed) acquisition wrote; a slice override changes nothing here,
+        # because the locator itself carries the slice the task re-derives it from.
+        rows = compact_rows(store, runs)
         self.ssm = FakeSsm()
         self.ssm.values[constants.binding_parameter] = encode(binding_document(BUILD))
         self.input_bytes = encode(
@@ -693,9 +723,11 @@ __all__ = [
     "ShiftedClock",
     "acquire",
     "calendar",
+    "compact_rows",
     "configuration",
     "csv",
     "ledger_row",
+    "locator_sha256_of",
     "populated_store",
     "responses_for_run",
     "rule",

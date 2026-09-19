@@ -133,7 +133,9 @@ ACTORS: Final[dict[ProductionActor, ActorConstants]] = {
         binding_contract_id="kalpamani-research-build-runtime-binding/v1",
         binding_env_var="KALPAMANI_RESEARCH_BUILD_RUNTIME_BINDING_FILE",
         binding_parameter="/kalpamani/production/research-build/runtime-binding",
-        input_contract_id="kalpamani-research-build-input/v1",
+        # Version 2 (ADR-0055): compact locator-bound rows within the 8 KiB tier; v1 is
+        # readable as historical evidence only (inputs.HISTORICAL_BUILD_INPUT_CONTRACT_ID).
+        input_contract_id="kalpamani-research-build-input/v2",
         input_parameter="/kalpamani/production/research-build/input",
         release_parameter="/kalpamani/production/research-build/release",
         identity_field="build_identity",

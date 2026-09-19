@@ -8,10 +8,26 @@ that **before parsing** -- validated by a closed schema of its own:
 | | acquisition input | build input |
 |---|---|---|
 | identity | one single-use ``run_identity`` | one ``build_identity`` |
-| content | the slice and the plan digest | the ordered run identities, each with its ledger row |
-| integrity | ``plan_digest`` equals the compiled one | ``ledger_digest`` is the rows' SHA-256 |
+| content | the slice and the plan digest | the ordered run identities, each with the
+  SHA-256 of its admitted run locator |
+| integrity | ``plan_digest`` equals the compiled one | ``ledger_digest`` is the rows'
+  SHA-256; each locator's bytes must hash to its row |
 | validity | ``issued_at <= now < expires_at``, ``expires_at - issued_at <= 24 h`` | the same |
-| ceiling | -- | at most 32 run identities, each distinct |
+| ceiling | -- | at most 32 run identities, each distinct, within the 8 KiB tier |
+
+**The build input is compact (version 2, ADR-0055).** Version 1 carried the whole ledger
+row -- slice, plan digest, outcome and two instants -- beside each identity, and eighteen
+such rows serialized to 8,266 bytes: over the 8 KiB advanced-tier ceiling that every
+input parameter is held to, so the accepted 32-run ceiling was unreachable. Version 2
+carries, per run, the run identity and the SHA-256 of the run locator the owner
+admitted (``locator_sha256``). Every value version 1 repeated is re-derived at the task
+from the run identity (the locator key, through the one accepted key builder) or from
+the retrieved locator's own content **after** its bytes hash to the row's digest -- the
+slice, the plan digest, the acquisition mode and the run interval -- and then held to the
+accepted locator validator's every clause. A row's digest is the binding: an altered,
+substituted or re-published locator does not hash to it. **Version 1 is historical**:
+:func:`parse_historical_build_input_v1` reads a retained v1 document as evidence and is
+reachable from no task or launch path; :func:`parse_build_input` admits version 2 only.
 
 **The plan digest is verified against the compiled plan, not against a supplied
 number.** :func:`parse_acquisition_input` admits the slice's shape and the digest's
@@ -61,10 +77,19 @@ from kalpamani.data.production.sharadar.vocabulary import (
     constants_for,
 )
 
-#: The schema versions: the build input is at 1; the acquisition input moved to 2 when
-#: it began carrying the owner ledger's spent identities (ADR-0044 §3).
+#: The schema versions: the acquisition input moved to 2 when it began carrying the
+#: owner ledger's spent identities (ADR-0044 §3); the build input moved to 2 when its rows
+#: became compact locator bindings (ADR-0055). ``INPUT_SCHEMA_VERSION`` (1) is the
+#: historical build input version, readable as evidence only.
 INPUT_SCHEMA_VERSION: Final = 1
+HISTORICAL_BUILD_INPUT_SCHEMA_VERSION: Final = INPUT_SCHEMA_VERSION
+HISTORICAL_BUILD_INPUT_CONTRACT_ID: Final = "kalpamani-research-build-input/v1"
+BUILD_INPUT_SCHEMA_VERSION: Final = 2
 ACQUISITION_INPUT_SCHEMA_VERSION: Final = 2
+#: The most bytes a materialized build input may serialize to: the advanced-tier
+#: ceiling of the one parameter that carries it. The materializer refuses above it
+#: before any file or store write; the task refuses above it before parsing.
+MAX_BUILD_INPUT_DOCUMENT_BYTES: Final = MAX_ADVANCED_PARAMETER_BYTES
 #: The most spent identities one acquisition input may carry, within the 8 KiB tier.
 MAX_SPENT_IDENTITIES: Final = 128
 
@@ -134,6 +159,8 @@ SLICE_MODES: Final[frozenset[str]] = frozenset(
 _ROW_FIELDS: Final[frozenset[str]] = frozenset(
     {"run_identity", "slice", "plan_digest", "outcome", "launched_at", "completed_at"}
 )
+#: A version-2 build input row: the run identity and the SHA-256 of its admitted locator.
+_COMPACT_ROW_FIELDS: Final[frozenset[str]] = frozenset({"run_identity", "locator_sha256"})
 
 #: A named window: ``SNAPSHOT``, or ``YYYY-MM-DD/YYYY-MM-DD``. Shape only; the
 #: calendar semantics belong to the plan that produced the slice.
@@ -172,6 +199,7 @@ class InputDefect(StrEnum):
     ROW_MALFORMED = "ROW_MALFORMED"
     ROW_NOT_COMPLETED = "ROW_NOT_COMPLETED"
     LEDGER_DIGEST_MISMATCH = "LEDGER_DIGEST_MISMATCH"
+    LOCATOR_DIGEST_DUPLICATED = "LOCATOR_DIGEST_DUPLICATED"
 
 
 class InputError(Exception):
@@ -206,6 +234,25 @@ def input_digest(raw: bytes) -> str:
     if type(raw) is not bytes:
         raise _refuse(InputDefect.DOCUMENT_MALFORMED) from None
     return sha256_hex(raw)
+
+
+def check_input_size(raw: object) -> bytes:
+    """The bytes, or ``TOO_LARGE`` above the advanced-tier ceiling.
+
+    **The same ceiling the task applies.**
+
+    The materializer calls this on the canonical bytes it is about to hand to the
+    launch tool, before any file or store write (ADR-0055); the task's
+    :func:`decode_input` applies the identical ceiling before parsing, so the two
+    boundaries cannot disagree about one document.
+    """
+    if type(raw) is not bytes:
+        raise _refuse(InputDefect.DOCUMENT_MALFORMED) from None
+    if not raw:
+        raise _refuse(InputDefect.EMPTY) from None
+    if len(raw) > MAX_BUILD_INPUT_DOCUMENT_BYTES:
+        raise _refuse(InputDefect.TOO_LARGE) from None
+    return raw
 
 
 def decode_input(raw: object) -> dict[str, Any]:
@@ -514,11 +561,52 @@ def ledger_digest(rows: object) -> str:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class BuildInputRow:
+    """One version-2 build input row: a run identity and the SHA-256 of its admitted locator.
+
+    Everything version 1 carried beside the identity -- the slice, the plan digest, the
+    outcome, the launch and completion instants -- is re-derived at the task from the
+    locator whose bytes hash to ``locator_sha256`` and held to the accepted locator
+    validator (ADR-0055 §2). The row is an address and a binding, and nothing else.
+    """
+
+    run_identity: str
+    locator_sha256: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing."""
+        raise TypeError("BuildInputRow may not be subclassed")
+
+    def __repr__(self) -> str:
+        """Nothing. **Never the identity, and never the digest.**"""
+        return "BuildInputRow()"
+
+
+def _compact_row(raw: object) -> BuildInputRow:
+    if type(raw) is not dict or set(raw) != _COMPACT_ROW_FIELDS:
+        raise _refuse(InputDefect.ROW_MALFORMED) from None
+    try:
+        run_identity = _identity(raw["run_identity"])
+    except InputError:
+        raise _refuse(InputDefect.ROW_MALFORMED) from None
+    digest = hex_digest(raw["locator_sha256"])
+    if digest is None:
+        raise _refuse(InputDefect.ROW_MALFORMED) from None
+    return BuildInputRow(run_identity=run_identity, locator_sha256=digest)
+
+
+def compact_row_document(*, run_identity: str, locator_sha256: str) -> dict[str, Any]:
+    """The version-2 row for one run, validated the way the parser validates it."""
+    row = _compact_row({"run_identity": run_identity, "locator_sha256": locator_sha256})
+    return {"run_identity": row.run_identity, "locator_sha256": row.locator_sha256}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BuildInput:
-    """One validated build input: an identity and the ordered runs to build from."""
+    """One validated build input (version 2): an identity and the ordered, locator-bound runs."""
 
     build_identity: str
-    runs: tuple[LedgerRow, ...]
+    runs: tuple[BuildInputRow, ...]
     ledger_digest: str
     issued_at: datetime
     expires_at: datetime
@@ -531,7 +619,7 @@ class BuildInput:
         """The run count only. **Never an identity, and never a digest.**"""
         return f"BuildInput(runs={len(self.runs)})"
 
-    def row_for(self, run_identity: str) -> LedgerRow | None:
+    def row_for(self, run_identity: str) -> BuildInputRow | None:
         """The embedded row for one run identity, or ``None``."""
         for row in self.runs:
             if row.run_identity == run_identity:
@@ -539,10 +627,34 @@ class BuildInput:
         return None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HistoricalBuildInputV1:
+    """A retained version-1 build input, read as **evidence** (ADR-0055 §2.5).
+
+    A distinct type on purpose: nothing that admits a :class:`BuildInput` accepts one,
+    so a v1 document can be parsed for the historical record and can never enter a
+    task, a launch specification or a materialization.
+    """
+
+    build_identity: str
+    runs: tuple[LedgerRow, ...]
+    ledger_digest: str
+    issued_at: datetime
+    expires_at: datetime
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse subclassing."""
+        raise TypeError("HistoricalBuildInputV1 may not be subclassed")
+
+    def __repr__(self) -> str:
+        """The run count only. **Never an identity, and never a digest.**"""
+        return f"HistoricalBuildInputV1(runs={len(self.runs)})"
+
+
 def parse_build_input(
     document: object, *, now: datetime, verification_only: bool = False
 ) -> BuildInput:
-    """Validate an already-decoded build input. **Reads nothing.**
+    """Validate an already-decoded **version-2** build input. **Reads nothing.**
 
     ``verification_only`` (ADR-0045 s.11): a verification-only build launch -- the
     ``kalpamani-research-build-verify`` entry, which terminates at the release barrier
@@ -550,13 +662,22 @@ def parse_build_input(
     production build never may: ``NO_RUNS`` stays the refusal, so an input cut for a
     verification launch cannot enter the production processing path.
 
+    A version-1 document is refused here (``SCHEMA_VERSION_UNKNOWN`` /
+    ``CONTRACT_ID_UNKNOWN``): it is readable only through
+    :func:`parse_historical_build_input_v1`, as evidence.
+
     Raises:
         InputError: one closed :class:`InputDefect`; never a value.
     """
     if type(document) is not dict:
         raise _refuse(InputDefect.DOCUMENT_MALFORMED) from None
     constants = constants_for(ProductionActor.BUILD)
-    _envelope(document, fields=_BUILD_FIELDS, contract_id=constants.input_contract_id)
+    _envelope(
+        document,
+        fields=_BUILD_FIELDS,
+        contract_id=constants.input_contract_id,
+        schema_version=BUILD_INPUT_SCHEMA_VERSION,
+    )
     build_identity = _identity(document["build_identity"])
     raw_rows = document["runs"]
     if type(raw_rows) is not list:
@@ -565,10 +686,13 @@ def parse_build_input(
         raise _refuse(InputDefect.NO_RUNS) from None
     if len(raw_rows) > MAX_BUILD_RUNS:
         raise _refuse(InputDefect.TOO_MANY_RUNS) from None
-    rows = tuple(_row(raw) for raw in raw_rows)
+    rows = tuple(_compact_row(raw) for raw in raw_rows)
     identities = [row.run_identity for row in rows]
     if len(set(identities)) != len(identities):
         raise _refuse(InputDefect.IDENTITY_DUPLICATED) from None
+    digests = [row.locator_sha256 for row in rows]
+    if len(set(digests)) != len(digests):
+        raise _refuse(InputDefect.LOCATOR_DIGEST_DUPLICATED) from None
     declared = hex_digest(document["ledger_digest"])
     if declared is None:
         raise _refuse(InputDefect.FIELD_MALFORMED) from None
@@ -584,13 +708,65 @@ def parse_build_input(
     )
 
 
+def parse_historical_build_input_v1(document: object, *, now: datetime) -> HistoricalBuildInputV1:
+    """Read a retained **version-1** build input as historical evidence. **Reads nothing.**
+
+    The version-1 rules, exactly as they were accepted (ADR-0036 §2.6): the whole
+    ledger row per run, the ledger digest over the rows as delivered, at most 32 runs, a
+    production input naming at least one. The result is a :class:`HistoricalBuildInputV1`
+    that no task, launch specification or materialization accepts (ADR-0055 §2.5). The
+    validity window is checked at ``now`` like any other instant-bound document; a
+    reader of a retained document passes the instant it was issued at.
+
+    Raises:
+        InputError: one closed :class:`InputDefect`; never a value.
+    """
+    if type(document) is not dict:
+        raise _refuse(InputDefect.DOCUMENT_MALFORMED) from None
+    _envelope(
+        document,
+        fields=_BUILD_FIELDS,
+        contract_id=HISTORICAL_BUILD_INPUT_CONTRACT_ID,
+        schema_version=HISTORICAL_BUILD_INPUT_SCHEMA_VERSION,
+    )
+    build_identity = _identity(document["build_identity"])
+    raw_rows = document["runs"]
+    if type(raw_rows) is not list:
+        raise _refuse(InputDefect.FIELD_MALFORMED) from None
+    if not raw_rows:
+        raise _refuse(InputDefect.NO_RUNS) from None
+    if len(raw_rows) > MAX_BUILD_RUNS:
+        raise _refuse(InputDefect.TOO_MANY_RUNS) from None
+    rows = tuple(_row(raw) for raw in raw_rows)
+    identities = [row.run_identity for row in rows]
+    if len(set(identities)) != len(identities):
+        raise _refuse(InputDefect.IDENTITY_DUPLICATED) from None
+    declared = hex_digest(document["ledger_digest"])
+    if declared is None:
+        raise _refuse(InputDefect.FIELD_MALFORMED) from None
+    if declared != ledger_digest(raw_rows):
+        raise _refuse(InputDefect.LEDGER_DIGEST_MISMATCH) from None
+    issued_at, expires_at = _validity(document, now=now)
+    return HistoricalBuildInputV1(
+        build_identity=build_identity,
+        runs=rows,
+        ledger_digest=declared,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+
+
 __all__ = [
     "ACQUISITION_INPUT_SCHEMA_VERSION",
+    "BUILD_INPUT_SCHEMA_VERSION",
+    "HISTORICAL_BUILD_INPUT_CONTRACT_ID",
+    "HISTORICAL_BUILD_INPUT_SCHEMA_VERSION",
     "INPUT_SCHEMA_VERSION",
     "LEDGER_OUTCOMES",
     "LEDGER_OUTCOME_COMPLETED",
     "LEDGER_OUTCOME_PROBED",
     "LEDGER_OUTCOME_VERIFIED",
+    "MAX_BUILD_INPUT_DOCUMENT_BYTES",
     "MAX_BUILD_RUNS",
     "MAX_INPUT_VALIDITY",
     "MAX_RESPONSE_BYTES",
@@ -599,15 +775,20 @@ __all__ = [
     "SLICE_MODES",
     "AcquisitionInput",
     "BuildInput",
+    "BuildInputRow",
+    "HistoricalBuildInputV1",
     "InputDefect",
     "InputError",
     "LedgerRow",
     "Slice",
+    "check_input_size",
+    "compact_row_document",
     "decode_input",
     "input_digest",
     "ledger_digest",
     "parse_acquisition_input",
     "parse_build_input",
+    "parse_historical_build_input_v1",
     "parse_slice",
     "parse_spent_identities",
     "spent_digest",

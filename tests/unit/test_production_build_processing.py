@@ -42,7 +42,6 @@ from fixtures.production_build import (
     calendar,
     configuration,
     csv,
-    ledger_row,
     populated_store,
     responses_for_run,
     rule,
@@ -99,12 +98,13 @@ def memberships(report: bp.BuildReport) -> dict[tuple[str, str], dict[str, Any]]
     }
 
 
-def admitted_input(runs: tuple[tuple[str, int, datetime], ...]) -> BuildInput:
-    """A parsed build input over ``runs``, valid at ``AS_OF``."""
+def admitted_input(store: FakeS3Store, runs: tuple[tuple[str, int, datetime], ...]) -> BuildInput:
+    """A parsed version-2 build input over ``runs``, bound to the store, valid at ``AS_OF``."""
+    from fixtures.production_build import compact_rows
     from fixtures.production_runtime import build_input_document
     from kalpamani.data.production.sharadar.inputs import ledger_digest
 
-    rows = [ledger_row(run_id, run, at) for run_id, run, at in runs]
+    rows = compact_rows(store, runs)
     return parse_build_input(
         build_input_document(
             rows,
@@ -120,7 +120,7 @@ def normalized(store: FakeS3Store, runs: tuple[tuple[str, int, datetime], ...]) 
     """Verified inputs and Silver for ``runs``, through the real reader."""
     reader = ProductionLocatorReader(client=store, licensed_bucket=BUCKET)
     return sv.normalize(
-        bi.verify_build_inputs(admitted_input(runs), reader=reader), schemas=SCHEMAS
+        bi.verify_build_inputs(admitted_input(store, runs), reader=reader), schemas=SCHEMAS
     )
 
 
@@ -563,8 +563,8 @@ class TestVerifiedInputs:
     def test_the_acquisition_record_must_agree_with_the_locator_and_the_run(self) -> None:
         store = populated_store(runs=(1,))
         reader = ProductionLocatorReader(client=store, licensed_bucket=BUCKET)
-        row = admitted_input(((RUN_1, 1, RUN_1_AT),)).runs[0]
-        locator = reader.read_run_locator(run_id=RUN_1, ledger_row=row)
+        row = admitted_input(store, ((RUN_1, 1, RUN_1_AT),)).runs[0]
+        locator = reader.read_bound_run_locator(run_id=RUN_1, expected_sha256=row.locator_sha256)
         entry = locator.entries[0]
         document = json.loads(reader.read_exact(entry.record))
         record = document["retrieval"]
@@ -683,7 +683,7 @@ class TestNormalizationRefusals:
         good = _run_1_build(store)
         assert good.status is bp.BuildStatus.COMPLETED, good.defect
         inputs = bi.verify_build_inputs(
-            admitted_input(((RUN_1, 1, RUN_1_AT),)),
+            admitted_input(store, ((RUN_1, 1, RUN_1_AT),)),
             reader=ProductionLocatorReader(client=store, licensed_bucket=BUCKET),
         )
         page = inputs.runs[0].pages[0]

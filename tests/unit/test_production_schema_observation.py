@@ -137,7 +137,7 @@ class TestObservationBuild:
         # The observation contract itself: a page the parser refuses is counted, not parsed.
         from datetime import timedelta
 
-        from fixtures.production_build import AS_OF, ledger_row
+        from fixtures.production_build import AS_OF, compact_rows
         from fixtures.production_runtime import BUCKET, build_input_document
         from kalpamani.data.production.sharadar import build_inputs as bi
         from kalpamani.data.production.sharadar.inputs import ledger_digest, parse_build_input
@@ -145,7 +145,7 @@ class TestObservationBuild:
         from kalpamani.data.production.sharadar.silver import observe_schemas
 
         source = _acquired()
-        rows = [ledger_row(RUN_1, 1, RUN_1_AT)]
+        rows = compact_rows(source.store, ((RUN_1, 1, RUN_1_AT),))
         admitted = parse_build_input(
             build_input_document(
                 rows,

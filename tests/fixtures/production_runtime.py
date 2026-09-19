@@ -35,7 +35,9 @@ from kalpamani.data.production.sharadar.completion import (
 from kalpamani.data.production.sharadar.compute import CompiledLaunch
 from kalpamani.data.production.sharadar.inputs import (
     ACQUISITION_INPUT_SCHEMA_VERSION,
-    INPUT_SCHEMA_VERSION,
+    BUILD_INPUT_SCHEMA_VERSION,
+    HISTORICAL_BUILD_INPUT_CONTRACT_ID,
+    HISTORICAL_BUILD_INPUT_SCHEMA_VERSION,
     ledger_digest,
     parse_slice,
     spent_identities_block,
@@ -233,14 +235,54 @@ def ledger_row_document(run_identity: str = RUN_ID, **overrides: Any) -> dict[st
     return document
 
 
+def synthetic_locator_sha256(run_identity: str = RUN_ID) -> str:
+    """A deterministic synthetic locator digest for one run identity (never a real object's)."""
+    return sha256_hex(f"synthetic-locator:{run_identity}".encode())
+
+
+def compact_row_document(
+    run_identity: str = RUN_ID, locator_sha256: str | None = None, **overrides: Any
+) -> dict[str, Any]:
+    """A valid synthetic version-2 build input row (ADR-0055): identity + locator digest."""
+    document: dict[str, Any] = {
+        "run_identity": run_identity,
+        "locator_sha256": (
+            synthetic_locator_sha256(run_identity) if locator_sha256 is None else locator_sha256
+        ),
+    }
+    document.update(overrides)
+    return document
+
+
 def build_input_document(
     rows: list[dict[str, Any]] | None = None, **overrides: Any
 ) -> dict[str, Any]:
-    """A valid synthetic build input over ``rows`` (default: one row for ``RUN_ID``)."""
+    """A valid synthetic **version-2** build input over ``rows``.
+
+    Default: one row for ``RUN_ID``.
+    """
+    runs = [compact_row_document()] if rows is None else rows
+    document: dict[str, Any] = {
+        "schema_version": BUILD_INPUT_SCHEMA_VERSION,
+        "contract_id": constants_for(ProductionActor.BUILD).input_contract_id,
+        "build_identity": BUILD_ID,
+        "runs": runs,
+        "ledger_digest": ledger_digest(runs),
+        "issued_at": (NOW - timedelta(hours=1)).isoformat(),
+        "expires_at": (NOW + timedelta(hours=23)).isoformat(),
+    }
+    document.update(overrides)
+    return document
+
+
+def historical_build_input_v1_document(
+    rows: list[dict[str, Any]] | None = None, **overrides: Any
+) -> dict[str, Any]:
+    """A retained **version-1** build input over whole ledger rows (historical evidence only)."""
     runs = [ledger_row_document()] if rows is None else rows
     document: dict[str, Any] = {
-        "schema_version": INPUT_SCHEMA_VERSION,
-        "contract_id": constants_for(ProductionActor.BUILD).input_contract_id,
+        "schema_version": HISTORICAL_BUILD_INPUT_SCHEMA_VERSION,
+        "contract_id": HISTORICAL_BUILD_INPUT_CONTRACT_ID,
         "build_identity": BUILD_ID,
         "runs": runs,
         "ledger_digest": ledger_digest(runs),

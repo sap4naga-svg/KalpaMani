@@ -745,3 +745,32 @@ signatures reproduced as fail-before / pass-after fixtures without altering the 
 mutation controls that remove the bound, extend the deadline, suppress the stop, retry `RunTask`, read an
 exception as state, store the message or mask a cleanup failure, each caught.
 
+---
+
+## 16. Amendment (2026-09-19) — the build launch binds the preserved locators; a sized, closed refusal (ADR-0055)
+
+**PROPOSED — NOT IN FORCE while the pull request carrying this section is open; in force on the exact-head
+merge of that pull request, together with ADR-0055.** The accepted text above is not rewritten.
+
+**§6, the build-side preparation.** For a production build the launch tool now reads the owner's preserved
+run locators from beside the ledger (`<ledger dir>/locators/run-locator-<identity>.json`, one per named run,
+each at most the locator ceiling), holds each to its ledger row through the unchanged accepted validator
+(`bind_run_locators`: `LOCATOR_MISSING`, `LOCATOR_REFUSED`, `LOCATOR_DIGEST_DUPLICATE`), and materializes the
+**version-2** build input over the identities and the locator digests. A verification-only build launch
+names no run and reads no locator (§11 unchanged). The materializer applies the advanced-tier ceiling to the
+canonical bytes **before returning them** (`INPUT_TOO_LARGE`), and the launch tool reports that as one closed
+refusal — `refused_input_size`, exit code **20**, one allowlisted sentence, no traceback — before any
+specification, reservation, ledger row, consumed identity, file or client exists; the launcher's constructor
+boundary is wrapped so that even an oversized value reaching it is the same closed refusal, never a raw
+`ValueError`. The two defects the S10c preparation stop recorded on 2026-09-19 are those two, and they are
+what this section corrects.
+
+**§7 applies as written.** The build and build-verification actor families change commit under ADR-0055;
+both are rebuilt from the merge commit's exact tree and their R-1/R-2 cells re-run before a production build
+revision is launched; the acquisition families are unchanged and their images stay at their published commit.
+The runner derives what that makes of the current build-family cells — nothing here hand-marks a cell.
+
+**Unchanged:** the specification's workload (the ledger rows a build names; the locator binding lives in the
+input, never in the workload), the reservation, the one-identity-per-authorization rule, the release, the
+receipt, the ledger-row completion and every other exit code and sentence.
+

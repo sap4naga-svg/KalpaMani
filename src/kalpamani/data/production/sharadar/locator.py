@@ -45,12 +45,14 @@ than reinterpreted under v2, so historical run 1 stays evidence and never a buil
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
+from kalpamani.data.contracts.canonical import sha256_hex
 from kalpamani.data.contracts.vocabulary import AcquisitionMode, DataClassification
 from kalpamani.data.ingest.publication import BRONZE_NAMESPACE
 from kalpamani.data.ingest.sharadar.datasets import PROVIDER
@@ -71,7 +73,13 @@ from kalpamani.data.production.sharadar.documents import (
     hex_digest,
     instant,
 )
-from kalpamani.data.production.sharadar.inputs import LedgerRow, Slice, parse_slice
+from kalpamani.data.production.sharadar.inputs import (
+    LEDGER_OUTCOME_COMPLETED,
+    InputError,
+    LedgerRow,
+    Slice,
+    parse_slice,
+)
 from kalpamani.data.production.sharadar.keys import (
     ACQUISITIONS_SEGMENT,
     DIGEST_SEGMENT,
@@ -224,6 +232,7 @@ class RunLocatorDefect(StrEnum):
     PROBE_UNEXPECTED = "PROBE_UNEXPECTED"
     PROBE_COUNT_INCONSISTENT = "PROBE_COUNT_INCONSISTENT"
     PROVIDER_CALLS_OVER_CEILING = "PROVIDER_CALLS_OVER_CEILING"
+    LOCATOR_DIGEST_MISMATCH = "LOCATOR_DIGEST_MISMATCH"
 
 
 class RunLocatorError(Exception):
@@ -606,6 +615,78 @@ def validate_run_locator(
     )
 
 
+def ledger_row_of_locator(document: object, *, run_id: str) -> LedgerRow:
+    """The ledger-row view a **digest-bound** locator carries of itself (ADR-0055 §2.3).
+
+    A version-2 build input binds a run by its identity and the SHA-256 of the locator
+    the owner admitted; the slice, plan digest, mode and interval version 1 repeated
+    beside the identity are read here from the locator's own fields, so that
+    :func:`validate_run_locator` can hold the locator to every clause it holds a
+    ledger-bound locator to -- the plan recompiled from the slice and held to the digest,
+    every entry to the compiled request at its ordinal, the counts, completeness. Only
+    the outcome is fixed rather than read: a locator that was admitted is a completed
+    run's, and the validator's completeness clause re-establishes that.
+
+    Raises:
+        RunLocatorError: ``FIELD_MALFORMED`` for a document without the four fields in
+            the accepted shapes; the caller's identity check follows.
+    """
+    if type(run_id) is not str or not RUN_ID_RE.match(run_id):
+        raise _refuse(RunLocatorDefect.IDENTITY_MISMATCH) from None
+    if type(document) is not dict:
+        raise _refuse(RunLocatorDefect.DOCUMENT_MALFORMED) from None
+    plan_digest = hex_digest(document.get("plan_digest"))
+    started_at = instant(document.get("started_at"))
+    completed_at = instant(document.get("completed_at"))
+    try:
+        covered = parse_slice(document.get("slice"))
+    except InputError:
+        raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
+    if plan_digest is None or started_at is None or completed_at is None:
+        raise _refuse(RunLocatorDefect.FIELD_MALFORMED) from None
+    if completed_at < started_at:
+        raise _refuse(RunLocatorDefect.INSTANTS_INCONSISTENT) from None
+    return LedgerRow(
+        run_identity=run_id,
+        slice=covered,
+        plan_digest=plan_digest,
+        outcome=LEDGER_OUTCOME_COMPLETED,
+        launched_at=started_at,
+        completed_at=completed_at,
+    )
+
+
+def validate_bound_run_locator(
+    raw: object, *, run_id: str, expected_sha256: str
+) -> ValidatedRunLocator:
+    """The digest-bound read of one run locator (ADR-0055 §2.3). **Reads nothing.**
+
+    In this order, and nothing before the first passes: the bytes hash to
+    ``expected_sha256`` (``LOCATOR_DIGEST_MISMATCH`` otherwise -- the content is not
+    trusted, not even decoded, until it does); the document decodes under the locator
+    ceiling; its declared identity is ``run_id``; then every clause of
+    :func:`validate_run_locator` against the row the locator carries of itself.
+
+    Raises:
+        RunLocatorError: one closed :class:`RunLocatorDefect`; never a value.
+    """
+    if type(run_id) is not str or not RUN_ID_RE.match(run_id):
+        raise _refuse(RunLocatorDefect.IDENTITY_MISMATCH) from None
+    expected = hex_digest(expected_sha256)
+    if expected is None:
+        raise _refuse(RunLocatorDefect.LOCATOR_DIGEST_MISMATCH) from None
+    if type(raw) is not bytes or not raw or len(raw) > MAX_LOCATOR_BYTES:
+        raise _refuse(RunLocatorDefect.LOCATOR_DIGEST_MISMATCH) from None
+    if not hmac.compare_digest(sha256_hex(raw), expected):
+        raise _refuse(RunLocatorDefect.LOCATOR_DIGEST_MISMATCH) from None
+    document = decode_run_locator(raw)
+    if exact_str(document.get("run_id")) != run_id:
+        raise _refuse(RunLocatorDefect.IDENTITY_MISMATCH) from None
+    return validate_run_locator(
+        document, run_id=run_id, ledger_row=ledger_row_of_locator(document, run_id=run_id)
+    )
+
+
 # ---------------------------------------------------------------------------
 # The build actor's read surface: one by-name read, then exact reads only
 # ---------------------------------------------------------------------------
@@ -702,6 +783,16 @@ class ProductionLocatorReader:
         raw = self.read_run_locator_bytes(run_id)
         return validate_run_locator(decode_run_locator(raw), run_id=run_id, ledger_row=ledger_row)
 
+    def read_bound_run_locator(self, *, run_id: str, expected_sha256: str) -> ValidatedRunLocator:
+        """Retrieve one run locator by name and admit it only if its bytes hash to the binding.
+
+        The version-2 build input's read (ADR-0055 §2.3): the key from the identity through
+        the one accepted builder, the body bounded while reading, the digest compared
+        before the document is decoded, then :func:`validate_bound_run_locator`.
+        """
+        raw = self.read_run_locator_bytes(run_id)
+        return validate_bound_run_locator(raw, run_id=run_id, expected_sha256=expected_sha256)
+
     def read_exact(self, reference: ExactObjectReference) -> bytes:
         """The verified bytes of one referenced object -- the accepted reader's read."""
         return self._reader.read_exact(reference)
@@ -737,6 +828,8 @@ __all__ = [
     "RunLocatorError",
     "ValidatedRunLocator",
     "decode_run_locator",
+    "ledger_row_of_locator",
     "run_locator_logical_key",
+    "validate_bound_run_locator",
     "validate_run_locator",
 ]

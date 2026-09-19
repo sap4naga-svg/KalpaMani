@@ -1242,3 +1242,33 @@ over the revision-3 verification targets (acquisition over the run-1′ slice, b
 to its preserved 2026-09-17 binding. **Nothing launched**: every launch, receipt, verdict and the R-2 corroboration re-preparation
 remain separately gated on their own written authorizations (D-15 per launch), and the historical cells never become a current PASS.
 
+## 19. The S10c build-input cycle (2026-09-19) — ADR-0055 ACCEPTED on the exact-head merge of PR #138 (the compact, digest-bound build input v2); the eighteen-run v1 document preserved as the stop's evidence; nothing built, deployed or launched
+
+**What stopped the first production build.** The S10c preparation over the eighteen O-5 runs (855 coordinates, 2,601 writes) materialized
+the version-1 build input the accepted contract required — one whole owner-ledger row per run — at **8,266 bytes** against the advanced-tier
+ceiling of **8,192**; seventeen rows fit, eighteen did not, and the accepted 32-run ceiling was unreachable by the contract that stated it. The
+tool ended in a raw `ValueError` from the launcher's constructor rather than a closed refusal, and nothing had enforced the ceiling during
+materialization. Nothing was written; the 8,266-byte document and the stop are preserved as evidence, and the identity the stopped
+preparation allocated in memory was never consumed and is not reused.
+
+**The owner's decision (recorded verbatim in ADR-0055 §1; owner-input D-23).** Option A: a compact, lossless, strictly validated contract
+that removes only what the run identity, the locator key or the validated locator content determines, preserves cryptographic binding, fails
+closed on every mismatch, retains v1 as historical evidence only, and weakens no acquisition, build, point-in-time, schema, completion,
+write-order or audit requirement; the two refusal defects fixed. **ADR-0055 was PROPOSED and carried no authority while its pull request was
+open — true then, not rewritten; PR #138 merged at its exact reviewed head (merge commit, parents and tree recorded in the S10c evidence
+packet), so it is ACCEPTED / IN FORCE as that contract decision, the two corrections and their amendments (ADR-0036 §7, ADR-0045 §16)
+only.** The merged contract: each row `{run_identity, locator_sha256}`; the owner's launch tool holds every preserved locator to its true
+ledger row through the unchanged validator before recording its digest; the task holds the retrieved locator's full SHA-256 to the row's
+digest before decoding, the declared identity to the row's, and re-derives the ledger-row view from the locator's own content under the
+unchanged validator; the ceiling applied by the materializer before any write and by the task before parsing; an oversized input one closed
+launch-tool refusal (`refused_input_size`, exit 20). Thirty-two rows at their widest valid width are **5,717 bytes** (margin 2,475). Held by a
+dedicated test module and seven mutation controls (digest, identity, ceiling, duplicates, v1 execution, pre-write boundary, the launch-tool
+mapping), each caught and reverted.
+
+**Deployment consequences — stated, not performed.** The build and build-verification images are rebuilt from the merge tree; two new
+compiled configurations and digests; two task-definition replacements; the build launcher policy moved to the new revisions; two registration
+blocks re-issued; the current build-family R-1/R-2 cells left to the runner to derive under the moved registration; the acquisition images,
+task definitions and registration blocks unchanged. **Nothing of that is authorized by acceptance**, and the next authorization would at most
+generate the two S1 configurations, build and publish the two images, update the two tfvars digests, produce ONE saved plan and stop before
+apply. The post-merge offline materialization of ONE compact v2 document over the eighteen runs — no identity allocated or consumed, no
+specification, no client, no AWS call — is recorded in the S10c evidence packet, not here.

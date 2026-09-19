@@ -30,9 +30,9 @@ from fixtures.production_build import (
     acquire,
     actions_rows,
     calendar,
+    compact_rows,
     configuration,
     csv,
-    ledger_row,
     responses_for_run,
     slice_with_stocks_window,
     stocks_rows,
@@ -139,7 +139,8 @@ def resolved_layer(
     evidence: av.AvailabilityEvidence | None = None,
     now: datetime = AS_OF,
 ) -> av.ResolvedLayer:
-    rows = [ledger_row(run_id, run, at, (slices or {}).get(run_id)) for run_id, run, at in runs]
+    del slices  # ADR-0055: the compact input carries no slice; the locator carries its own
+    rows = compact_rows(store, runs)
     admitted = parse_build_input(
         build_input_document(
             rows,
